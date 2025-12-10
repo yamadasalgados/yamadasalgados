@@ -275,12 +275,28 @@ export default function ProductsCatalogPage() {
   return (
     <main className="space-y-8">
       {/* TOPO */}
-      <header className="flex justify-between">
+      <header className="flex justify-between gap-4">
+                <div className="space-y-1">
         <h1 className="text-xl font-bold">Catálogo de Produtos</h1>
+          </div>
 
-        <button onClick={() => signOut(auth)} className="text-red-600 text-sm underline">
-          Sair
-        </button>
+ <div className="flex items-center gap-2">
+            <button
+            type="button"
+            onClick={() => router.back()}
+            className="bg-white text-black text-xs px-4 py-2 rounded-full"
+          >
+            Voltar
+          </button>
+
+            <button
+            type="button"
+            onClick={() => signOut(auth)}
+            className="bg-red-500 text-white text-xs px-4 py-2 rounded-full"
+          >
+            Sair
+          </button>
+          </div>
       </header>
 
       {/* FORM */}

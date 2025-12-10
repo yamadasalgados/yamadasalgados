@@ -31,6 +31,25 @@ const CATEGORY_ORDER: CategoryType[] = [
   "Congelados",
 ];
 
+const openExternalLink = (url: string) => {
+  if (typeof window === "undefined") return;
+
+  // iOS Safari precisa usar location.href
+  const isIOS =
+    /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+
+  if (isIOS) {
+    window.location.href = url;
+  } else {
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
+};
+
+// 🔹 Listas para o “scroller” de horário
+const HOURS = Array.from({ length: 24 }, (_, i) => i); // 0–23
+const MINUTES = [0, 10, 20, 30, 40, 50];
+
 type EventData = {
   title: string;
   region: string;
@@ -42,6 +61,7 @@ type EventData = {
   pickupLink?: string;
   pickupNote?: string;
   messengerId?: string; // ID/username da página/conta Messenger
+  featuredProductNames?: string[]; // 🔹 destaques do carrossel (pode ser qualquer produto)
 };
 
 type ProductImageData = {
@@ -56,6 +76,10 @@ type Props = {
   params: Promise<{ id: string }>;
 };
 
+type DeliveryMode = "delivery" | "pickup" | "none";
+type DateOption = "event-date" | "other-date" | "no-preference";
+type TimeOption = "no-preference" | "custom";
+
 export default function EventPage({ params }: Props) {
   const { id } = use(params);
 
@@ -67,8 +91,26 @@ export default function EventPage({ params }: Props) {
   const [note, setNote] = useState("");
   const [quantities, setQuantities] = useState<Record<string, number>>({});
 
-  // 🔹 escolha de data de entrega (quando tiver mais de uma)
+  // 🔹 escolha de data de entrega
+  const [dateOption, setDateOption] = useState<DateOption>("event-date");
   const [selectedDate, setSelectedDate] = useState<string>("");
+  const [otherDate, setOtherDate] = useState<string>("");
+
+  // 🔹 modo de entrega (padrão: retirada no local)
+  const [deliveryMode, setDeliveryMode] = useState<DeliveryMode>("pickup");
+
+  // 🔹 horário (scroller)
+  const [timeOption, setTimeOption] = useState<TimeOption>("no-preference");
+  const [selectedHour, setSelectedHour] = useState<number | null>(null);
+  const [selectedMinute, setSelectedMinute] = useState<number | null>(null);
+  const [timePickerOpen, setTimePickerOpen] = useState(false);
+
+  // 🔹 localização do cliente (link Google Maps)
+  const [locationLink, setLocationLink] = useState<string>("");
+  const [gettingLocation, setGettingLocation] = useState(false);
+
+  // 🔹 URL atual para compartilhamento
+  const [currentUrl, setCurrentUrl] = useState("");
 
   // 👇 states para imagens / galeria
   const [productsData, setProductsData] = useState<
@@ -87,6 +129,69 @@ export default function EventPage({ params }: Props) {
         ].filter((u) => !!u) as string[])
       : [];
 
+  // 🔹 helper para copiar texto com fallback
+  const copyToClipboard = async (text: string) => {
+    try {
+      if (typeof navigator !== "undefined") {
+        const navAny = navigator as any;
+        if (navAny.clipboard?.writeText) {
+          await navAny.clipboard.writeText(text);
+          alert("Copiado! Agora é só colar na conversa.");
+          return;
+        }
+      }
+    } catch (err) {
+      console.error("Erro ao copiar para o clipboard:", err);
+    }
+
+    if (typeof window !== "undefined") {
+      window.prompt(
+        "Copie a mensagem abaixo (Ctrl+C ou segure para selecionar) e cole onde quiser:",
+        text
+      );
+    }
+  };
+  // 🔒 trava o scroll do fundo quando o modal de horário estiver aberto (iOS fix)
+useEffect(() => {
+  if (timePickerOpen) {
+    const scrollY = window.scrollY;
+
+    document.body.style.position = "fixed";
+    document.body.style.top = `-${scrollY}px`;
+    document.body.style.left = "0";
+    document.body.style.right = "0";
+    document.body.style.width = "100%";
+  } else {
+    const top = document.body.style.top;
+    document.body.style.position = "";
+    document.body.style.top = "";
+    document.body.style.left = "";
+    document.body.style.right = "";
+    document.body.style.width = "";
+
+    if (top) {
+      window.scrollTo(0, parseInt(top || "0") * -1);
+    }
+  }
+
+  return () => {
+    document.body.style.position = "";
+    document.body.style.top = "";
+    document.body.style.left = "";
+    document.body.style.right = "";
+    document.body.style.width = "";
+  };
+}, [timePickerOpen]);
+
+
+  // 🔹 pega URL atual
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      setCurrentUrl(window.location.href);
+    }
+  }, []);
+
+  // 🔹 Carrega dados do evento + produtos
   useEffect(() => {
     const loadEvent = async () => {
       try {
@@ -120,8 +225,18 @@ export default function EventPage({ params }: Props) {
           : [];
 
         const status: string = data.status || "active";
-        const messengerId: string =
-          data.messengerId || data.messenger || "";
+        const messengerId: string = data.messengerId || data.messenger || "";
+
+        const featured: string[] = Array.isArray(data.featuredProductNames)
+          ? data.featuredProductNames.filter(
+              (n: any) => typeof n === "string"
+            )
+          : [];
+
+        // 🔹 Nomes que podem ser pedidos: produtos do evento + destaques
+        const allOrderableNames = Array.from(
+          new Set([...products, ...featured])
+        );
 
         setEvent({
           title: data.title || "",
@@ -134,25 +249,29 @@ export default function EventPage({ params }: Props) {
           pickupLink: data.pickupLink || "",
           pickupNote: data.pickupNote || "",
           messengerId: messengerId || "",
+          featuredProductNames: featured,
         });
 
         // quantidades iniciais
         const initialQty: Record<string, number> = {};
-        products.forEach((p) => {
+        allOrderableNames.forEach((p) => {
           initialQty[p] = 0;
         });
         setQuantities(initialQty);
 
-        // data de entrega padrão (primeira)
+        // 📌 dia padrão: primeiro dia do evento (se existir)
         if (deliveryDates.length > 0) {
           setSelectedDate(deliveryDates[0]);
+          setDateOption("event-date");
+        } else {
+          setDateOption("no-preference");
         }
 
         // 🔍 Carrega imagens, preço e categoria dos produtos a partir da coleção "products"
         const imagesMap: Record<string, ProductImageData> = {};
 
         await Promise.all(
-          products.map(async (name) => {
+          allOrderableNames.map(async (name) => {
             try {
               const qProd = query(
                 collection(db, "products"),
@@ -199,15 +318,6 @@ export default function EventPage({ params }: Props) {
     }
   }, [id]);
 
-  const handleQuantityChange = (product: string, value: string) => {
-    const num = Number(value);
-    if (isNaN(num) || num < 0) return;
-    setQuantities((prev) => ({
-      ...prev,
-      [product]: num,
-    }));
-  };
-
   // 🔹 controles tipo carrinho: - 0 +
   const adjustQuantity = (product: string, delta: number) => {
     setQuantities((prev) => {
@@ -221,20 +331,97 @@ export default function EventPage({ params }: Props) {
     });
   };
 
+  // 🔹 Pega localização do cliente e monta link do Google Maps
+  const handleGetLocation = () => {
+    if (typeof navigator === "undefined" || !("geolocation" in navigator)) {
+      alert("Seu navegador não suporta geolocalização.");
+      return;
+    }
+
+    setGettingLocation(true);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const { latitude, longitude } = pos.coords;
+        const link = `https://www.google.com/maps?q=${latitude},${longitude}`;
+        setLocationLink(link);
+        setGettingLocation(false);
+      },
+      (err) => {
+        console.error("Erro ao obter localização:", err);
+        alert(
+          "Não foi possível obter sua localização. Verifique as permissões do navegador."
+        );
+        setGettingLocation(false);
+      }
+    );
+  };
+
+  // 🔹 Descobre qual data final vai ser usada
+  const getChosenDate = () => {
+    if (!event) return "";
+
+    if (dateOption === "event-date" && selectedDate) {
+      return selectedDate;
+    }
+    if (dateOption === "other-date" && otherDate) {
+      return otherDate;
+    }
+    if (dateOption === "no-preference") {
+      return "Sem preferência";
+    }
+    return event.deliveryDateLabel;
+  };
+
+  // 🔹 Descobre qual horário final vai ser usado
+  const getChosenTimeLabel = () => {
+    if (
+      timeOption === "no-preference" ||
+      selectedHour == null ||
+      selectedMinute == null
+    ) {
+      return "Sem preferência";
+    }
+    const h = String(selectedHour).padStart(2, "0");
+    const m = String(selectedMinute).padStart(2, "0");
+    return `${h}:${m}`;
+  };
+
+  // 🔹 Nomes de produtos que podem ser pedidos (evento + destaques)
+  const getOrderableProductNames = () => {
+    if (!event) return [] as string[];
+    return Array.from(
+      new Set([
+        ...event.productNames,
+        ...(event.featuredProductNames || []),
+      ])
+    );
+  };
+
   // 🔹 Monta o texto do pedido
   const buildOrderMessage = () => {
     if (!event) return "";
 
-    const selectedItems = event.productNames
+    const orderableNames = getOrderableProductNames();
+
+    const selectedItems = orderableNames
       .filter((p) => (quantities[p] || 0) > 0)
       .map((p) => `${p}: ${quantities[p]}`);
 
-    const chosenDate = selectedDate || event.deliveryDateLabel;
+    const chosenDate = getChosenDate();
+    const timeLabel = getChosenTimeLabel();
 
     const lines = [
       `Olá, gostaria de fazer um pedido para o evento: ${event.title}`,
       `Região: ${event.region}`,
+      `Modo de entrega: ${
+        deliveryMode === "delivery"
+          ? "Entrega"
+          : deliveryMode === "pickup"
+          ? "Retirada no local"
+          : "A combinar com a vendedora"
+      }`,
       `Data de entrega: ${chosenDate}`,
+      `Horário: ${timeLabel}`,
       "",
       `Nome: ${customerName || "(não informado)"}`,
       "",
@@ -242,8 +429,12 @@ export default function EventPage({ params }: Props) {
       ...selectedItems.map((l) => `- ${l}`),
     ];
 
+    if (deliveryMode === "delivery" && locationLink) {
+      lines.push("", `Localização do cliente (Google Maps): ${locationLink}`);
+    }
+
     if (event.pickupLink) {
-      lines.push("", `Endereço / retirada: ${event.pickupLink}`);
+      lines.push("", `Endereço / retirada da vendedora: ${event.pickupLink}`);
     }
     if (event.pickupNote) {
       lines.push("", `Instruções da vendedora: ${event.pickupNote}`);
@@ -254,7 +445,7 @@ export default function EventPage({ params }: Props) {
     }
 
     // total da compra
-    const totalAmount = event.productNames.reduce((sum, p) => {
+    const totalAmount = getOrderableProductNames().reduce((sum, p) => {
       const q = quantities[p] || 0;
       const price = productsData[p]?.price || 0;
       return sum + q * price;
@@ -270,14 +461,46 @@ export default function EventPage({ params }: Props) {
     return lines.join("\n");
   };
 
+  // 🔹 Limpa formulário depois de enviar
+  const resetForm = () => {
+    if (!event) return;
+
+    const resetQty: Record<string, number> = {};
+    getOrderableProductNames().forEach((p) => {
+      resetQty[p] = 0;
+    });
+
+    setQuantities(resetQty);
+    setCustomerName("");
+    setNote("");
+    setLocationLink("");
+
+    // padrões pós-envio
+    setDeliveryMode("pickup");
+    setTimeOption("no-preference");
+    setSelectedHour(null);
+    setSelectedMinute(null);
+    setOtherDate("");
+
+    if (event.deliveryDates.length > 0) {
+      setDateOption("event-date");
+      setSelectedDate(event.deliveryDates[0]);
+    } else {
+      setDateOption("no-preference");
+      setSelectedDate("");
+    }
+  };
+
   // 🔹 Registra o pedido no Firestore (WhatsApp / Messenger)
   const registerOrderInFirestore = async (
     channel: "whatsapp" | "messenger"
   ) => {
     if (!event) return;
 
+    const orderableNames = getOrderableProductNames();
+
     const quantitiesClean: Record<string, number> = {};
-    event.productNames.forEach((p) => {
+    orderableNames.forEach((p) => {
       const q = quantities[p] || 0;
       if (q > 0) quantitiesClean[p] = q;
     });
@@ -287,7 +510,8 @@ export default function EventPage({ params }: Props) {
       0
     );
 
-    const chosenDate = selectedDate || event.deliveryDateLabel;
+    const chosenDate = getChosenDate();
+    const timeLabel = getChosenTimeLabel();
 
     try {
       await addDoc(collection(db, "events", id, "orders"), {
@@ -298,6 +522,9 @@ export default function EventPage({ params }: Props) {
         status: "pending",
         channel,
         deliveryDate: chosenDate,
+        deliveryMode,
+        deliveryTimeSlot: timeLabel,
+        locationLink: deliveryMode === "delivery" ? locationLink || "" : "",
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
@@ -306,54 +533,105 @@ export default function EventPage({ params }: Props) {
     }
   };
 
-  const handleSendWhatsApp = async () => {
-    if (!event) return;
+const handleSendWhatsApp = async () => {
+  if (!event) return;
 
-    if (!event.whatsapp) {
-      alert("Nenhum número de WhatsApp configurado para este evento.");
-      return;
-    }
+  if (!event.whatsapp) {
+    alert("Nenhum número de WhatsApp configurado para este evento.");
+    return;
+  }
 
-    const selectedItems = event.productNames.filter(
-      (p) => (quantities[p] || 0) > 0
-    );
-    if (selectedItems.length === 0) {
-      alert("Selecione pelo menos 1 produto com quantidade.");
-      return;
-    }
+  const hasItems = getOrderableProductNames().some(
+    (p) => (quantities[p] || 0) > 0
+  );
+  if (!hasItems) {
+    alert("Selecione pelo menos 1 produto com quantidade.");
+    return;
+  }
 
-    const message = buildOrderMessage();
-    const encoded = encodeURIComponent(message);
-    const phone = event.whatsapp.replace(/\D/g, "");
-    const url = `https://wa.me/${phone}?text=${encoded}`;
+  const message = buildOrderMessage();
+  const encoded = encodeURIComponent(message);
+  const phone = event.whatsapp.replace(/\D/g, "");
+  const url = `https://wa.me/${phone}?text=${encoded}`;
 
-    await registerOrderInFirestore("whatsapp");
+  await registerOrderInFirestore("whatsapp");
+  resetForm();
+
+  openExternalLink(url);
+};
+
+
+const handleSendMessenger = async () => {
+  if (!event) return;
+
+  if (!event.messengerId) {
+    alert("Nenhum contato de Messenger configurado para este evento.");
+    return;
+  }
+
+  const hasItems = getOrderableProductNames().some(
+    (p) => (quantities[p] || 0) > 0
+  );
+  if (!hasItems) {
+    alert("Selecione pelo menos 1 produto com quantidade.");
+    return;
+  }
+
+  const message = buildOrderMessage();
+  const encoded = encodeURIComponent(message);
+  const url = `https://m.me/${event.messengerId}?text=${encoded}`;
+
+  await registerOrderInFirestore("messenger");
+  resetForm();
+  openExternalLink(url);
+};
+
+
+  // 🔹 Texto base para compartilhar evento
+  const buildShareText = () =>
+    event
+      ? `Dá uma olhada nesse evento de salgados: ${event.title}`
+      : "Veja este evento de salgados!";
+
+  const handleShareEventWhatsApp = () => {
+    if (!currentUrl) return;
+    const text = `${buildShareText()}\n${currentUrl}`;
+    const encoded = encodeURIComponent(text);
+    const url = `https://wa.me/?text=${encoded}`;
     window.open(url, "_blank");
   };
 
-  const handleSendMessenger = async () => {
-    if (!event) return;
-
-    if (!event.messengerId) {
-      alert("Nenhum contato de Messenger configurado para este evento.");
-      return;
-    }
-
-    const selectedItems = event.productNames.filter(
-      (p) => (quantities[p] || 0) > 0
-    );
-    if (selectedItems.length === 0) {
-      alert("Selecione pelo menos 1 produto com quantidade.");
-      return;
-    }
-
-    const message = buildOrderMessage();
-    const encoded = encodeURIComponent(message);
-
-    const url = `https://m.me/${event.messengerId}?text=${encoded}`;
-
-    await registerOrderInFirestore("messenger");
+  const handleShareEventLine = () => {
+    if (!currentUrl) return;
+    const encodedUrl = encodeURIComponent(currentUrl);
+    const url = `https://social-plugins.line.me/lineit/share?url=${encodedUrl}`;
     window.open(url, "_blank");
+  };
+
+const handleShareEventMessenger = async () => {
+  if (!currentUrl) return;
+
+  const text = `${buildShareText()}\n${currentUrl}`;
+  await copyToClipboard(text);
+
+  const encodedUrl = encodeURIComponent(currentUrl);
+  const deepLink = `fb-messenger://share?link=${encodedUrl}`;
+  const webFallback = `https://www.facebook.com/sharer/sharer.php?u=${encodedUrl}`;
+
+  // tenta app
+  openExternalLink(deepLink);
+
+  // fallback web
+  setTimeout(() => {
+    openExternalLink(webFallback);
+  }, 600);
+};
+
+
+  const handleCopyEventLink = async () => {
+    if (!currentUrl) return;
+    const text = `${buildShareText()}\n${currentUrl}`;
+    await copyToClipboard(text);
   };
 
   if (loading) {
@@ -394,7 +672,7 @@ export default function EventPage({ params }: Props) {
     );
   }
 
-  // 🔹 Garante ordem alfabética dos nomes
+  // 🔹 Garante ordem alfabética dos nomes (apenas produtos do evento, para o grid principal)
   const sortedProductNames = [...event.productNames].sort((a, b) =>
     a.localeCompare(b, "pt-BR")
   );
@@ -412,8 +690,11 @@ export default function EventPage({ params }: Props) {
     (name) => !productsData[name]?.category
   );
 
-  // total estimado no front
-  const totalAmount = event.productNames.reduce((sum, p) => {
+  // 🔹 Destaques (carrossel) – pode ter produtos fora do evento
+  const featuredProducts = event.featuredProductNames || [];
+
+  // total estimado no front (usando todos os produtos que podem ser pedidos)
+  const totalAmount = getOrderableProductNames().reduce((sum, p) => {
     const q = quantities[p] || 0;
     const price = productsData[p]?.price || 0;
     return sum + q * price;
@@ -452,26 +733,80 @@ export default function EventPage({ params }: Props) {
         </p>
       </header>
 
-      {/* ESCOLHA DE DATA (quando houver mais de uma) */}
-      {event.deliveryDates.length > 1 && (
-        <section className="space-y-2 border rounded-md p-3 bg-white">
-          <h2 className="text-sm font-semibold">Escolha o dia de entrega</h2>
-          <div className="flex flex-wrap gap-2">
-            {event.deliveryDates.map((d) => {
-              const isSelected = selectedDate === d;
+      {/* CARROSSEL DE DESTAQUES */}
+      {featuredProducts.length > 0 && (
+        <section className="space-y-2">
+          <h2 className="font-bold text-xl">🔥 Destaques do evento 🔥</h2>
+          <div className="flex gap-3 overflow-x-auto pb-2">
+            {featuredProducts.map((name) => {
+              const info = productsData[name];
+              const qty = quantities[name] ?? 0;
+
               return (
-                <button
-                  key={d}
-                  type="button"
-                  onClick={() => setSelectedDate(d)}
-                  className={`px-3 py-1 rounded-full text-xs border transition ${
-                    isSelected
-                      ? "bg-black text-white border-black"
-                      : "bg-neutral-100 text-neutral-800 border-neutral-300 hover:bg-neutral-200"
-                  }`}
+                <div
+                  key={name}
+                  className="min-w-[220px] max-w-[260px] border rounded-xl bg-white p-3 flex flex-col gap-2 text-sm shadow-sm"
                 >
-                  {d}
-                </button>
+                  {info?.imageUrl ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (info) {
+                          setGalleryProduct(info);
+                          setGalleryIndex(0);
+                        }
+                      }}
+                      className="w-full rounded-md overflow-hidden bg-neutral-100 aspect-[4/3] border border-neutral-200"
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={info.imageUrl}
+                        alt={name}
+                        className="h-full w-full object-cover"
+                      />
+                    </button>
+                  ) : (
+                    <div className="w-full rounded-md overflow-hidden bg-neutral-100 aspect-[4/3] border border-dashed border-neutral-200 flex items-center justify-center text-[11px] text-neutral-400">
+                      Sem imagem
+                    </div>
+                  )}
+
+                  <div className="space-y-0.5">
+                    <p className="text-xs font-semibold leading-snug truncate">
+                      {name}
+                    </p>
+                    {info?.price != null && !Number.isNaN(info.price) && (
+                      <p className="text-xs text-neutral-600">
+                        ¥{info.price.toLocaleString("ja-JP")}
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] text-neutral-600">
+                      Quantidade
+                    </span>
+                    <div className="inline-flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => adjustQuantity(name, -1)}
+                        className="h-7 w-7 rounded-full border border-neutral-300 text-sm flex items-center justify-center hover:bg-neutral-100"
+                      >
+                        -
+                      </button>
+                      <span className="min-w-[1.5rem] text-center text-sm">
+                        {qty}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => adjustQuantity(name, 1)}
+                        className="h-7 w-7 rounded-full border border-neutral-300 text-sm flex items-center justify-center hover:bg-neutral-100"
+                      >
+                        +
+                      </button>
+                    </div>
+                  </div>
+                </div>
               );
             })}
           </div>
@@ -504,13 +839,14 @@ export default function EventPage({ params }: Props) {
                           key={product}
                           className="border rounded-xl bg-white p-3 flex flex-col gap-2 text-sm"
                         >
-                          {/* Imagem / botão para abrir galeria */}
                           {info?.imageUrl ? (
                             <button
                               type="button"
                               onClick={() => {
-                                setGalleryProduct(info);
-                                setGalleryIndex(0);
+                                if (info) {
+                                  setGalleryProduct(info);
+                                  setGalleryIndex(0);
+                                }
                               }}
                               className="w-full rounded-md overflow-hidden bg-neutral-100 aspect-[4/3] border border-neutral-200"
                             >
@@ -527,7 +863,6 @@ export default function EventPage({ params }: Props) {
                             </div>
                           )}
 
-                          {/* Nome + preço (também abre galeria se tiver imagens) */}
                           <button
                             type="button"
                             className="text-left flex-1 space-y-0.5"
@@ -552,8 +887,7 @@ export default function EventPage({ params }: Props) {
                               )}
                           </button>
 
-                          {/* Controles tipo carrinho: - QTD + */}
-                          <div className="flex items-center justify-between gap-2">
+                          <div className="flex items_CENTER justify-between gap-2">
                             <span className="text-[11px] text-neutral-600">
                               Quantidade
                             </span>
@@ -571,7 +905,7 @@ export default function EventPage({ params }: Props) {
                               <button
                                 type="button"
                                 onClick={() => adjustQuantity(product, 1)}
-                                className="h-7 w-7 rounded-full border border-neutral-300 text-sm flex items-center justify-center hover:bg-neutral-100"
+                                className="h-7 w-7 rounded-full border border-neutral-300 text-sm flex items_CENTER justify-center hover:bg-neutral-100"
                               >
                                 +
                               </button>
@@ -585,7 +919,6 @@ export default function EventPage({ params }: Props) {
               )
             )}
 
-            {/* Produtos sem categoria (se existir algum) */}
             {uncategorized.length > 0 && (
               <div className="space-y-2">
                 <h3 className="text-sm font-semibold text-neutral-800">
@@ -605,8 +938,10 @@ export default function EventPage({ params }: Props) {
                           <button
                             type="button"
                             onClick={() => {
-                              setGalleryProduct(info);
-                              setGalleryIndex(0);
+                              if (info) {
+                                setGalleryProduct(info);
+                                setGalleryIndex(0);
+                              }
                             }}
                             className="w-full rounded-md overflow-hidden bg-neutral-100 aspect-[4/3] border border-neutral-200"
                           >
@@ -618,7 +953,7 @@ export default function EventPage({ params }: Props) {
                             />
                           </button>
                         ) : (
-                          <div className="w-full rounded-md overflow-hidden bg-neutral-100 aspect-[4/3] border border-dashed border-neutral-200 flex items-center justify-center text-[11px] text-neutral-400">
+                          <div className="w-full rounded-md overflow-hidden bg-neutral-100 aspect-[4/3] border border-dashed border-neutral-200 flex items_CENTER justify-center text-[11px] text-neutral-400">
                             Sem imagem
                           </div>
                         )}
@@ -634,7 +969,7 @@ export default function EventPage({ params }: Props) {
                             </span>
                           )}
 
-                        <div className="flex items-center justify-between gap-2">
+                        <div className="flex items_CENTER justify-between gap-2">
                           <span className="text-[11px] text-neutral-600">
                             Quantidade
                           </span>
@@ -642,7 +977,7 @@ export default function EventPage({ params }: Props) {
                             <button
                               type="button"
                               onClick={() => adjustQuantity(product, -1)}
-                              className="h-7 w-7 rounded-full border border-neutral-300 text-sm flex items-center justify-center hover:bg-neutral-100"
+                              className="h-7 w-7 rounded-full border border-neutral-300 text-sm flex items_CENTER justify-center hover:bg-neutral-100"
                             >
                               -
                             </button>
@@ -652,7 +987,7 @@ export default function EventPage({ params }: Props) {
                             <button
                               type="button"
                               onClick={() => adjustQuantity(product, 1)}
-                              className="h-7 w-7 rounded-full border border-neutral-300 text-sm flex items-center justify-center hover:bg-neutral-100"
+                              className="h-7 w-7 rounded-full border border-neutral-300 text-sm flex items_CENTER justify-center hover:bg-neutral-100"
                             >
                               +
                             </button>
@@ -668,12 +1003,13 @@ export default function EventPage({ params }: Props) {
         )}
       </section>
 
-      {/* DADOS DO CLIENTE */}
+      {/* DADOS DO CLIENTE + ENTREGA */}
       <section className="space-y-3 border rounded-md p-4 bg-white">
         <h2 className="font-semibold text-sm">Seus dados</h2>
-        <div className="space-y-2">
+        <div className="space-y-3">
+          {/* Nome */}
           <div className="space-y-1">
-            <label className="text-xs block">Seu nome (opcional)</label>
+            <label className="text-xs block">Seu nome</label>
             <input
               className="w-full border rounded-md px-3 py-2 text-sm"
               value={customerName}
@@ -681,16 +1017,243 @@ export default function EventPage({ params }: Props) {
               placeholder="Ex: João"
             />
           </div>
-          <div className="space-y-1">
-            <label className="text-xs block">
-              Observação (endereço, horário, etc.) – opcional
-            </label>
-            <textarea
-              className="w-full border rounded-md px-3 py-2 text-sm min-h-[80px]"
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              placeholder="Ex: Entregar na fábrica X, portaria principal, intervalo das 15h."
-            />
+
+          {/* Escolha de data + horário */}
+          <div className="space-y-2 border rounded-md p-3 bg-neutral-50">
+            <h3 className="text-xs font-semibold">
+              Escolha o dia de entrega:
+            </h3>
+
+            {/* Datas do evento */}
+            {event.deliveryDates.length > 0 && (
+              <div className="flex flex-wrap gap-2">
+                {event.deliveryDates.map((d) => {
+                  const isSelected =
+                    dateOption === "event-date" && selectedDate === d;
+                  return (
+                    <button
+                      key={d}
+                      type="button"
+                      onClick={() => {
+                        setDateOption("event-date");
+                        setSelectedDate(d);
+                      }}
+                      className={`px-3 py-1 rounded-full text-xs border transition ${
+                        isSelected
+                          ? "bg-black text-white border-black"
+                          : "bg-white text-neutral-800 border-neutral-300 hover:bg-neutral-100"
+                      }`}
+                    >
+                      {d}
+                    </button>
+                  );
+                })}
+                <button
+                  type="button"
+                  onClick={() => setDateOption("other-date")}
+                  className={`px-3 py-1 rounded-full text-xs border transition ${
+                    dateOption === "other-date"
+                      ? "bg-black text-white border-black"
+                      : "bg-white text-neutral-800 border-neutral-300 hover:bg-neutral-100"
+                  }`}
+                >
+                  Outro dia
+                </button>
+
+                {dateOption === "other-date" && (
+                  <input
+                    type="date"
+                    className="border rounded-md px-2 py-1 text-xs"
+                    value={otherDate}
+                    onChange={(e) => setOtherDate(e.target.value)}
+                  />
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDateOption("no-preference");
+                    setOtherDate("");
+                  }}
+                  className={`px-3 py-1 rounded-full text-xs border transition ${
+                    dateOption === "no-preference"
+                      ? "bg-black text-white border-black"
+                      : "bg-white text-neutral-800 border-neutral-300 hover:bg-neutral-100"
+                  }`}
+                >
+                  Sem preferência
+                </button>
+              </div>
+            )}
+
+            {/* Picker de horário */}
+            <div className="space-y-2 pt-3 border-t border-neutral-200">
+              <h4 className="text-xs font-semibold">Horário de entrega</h4>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTimeOption("no-preference");
+                    setSelectedHour(null);
+                    setSelectedMinute(null);
+                  }}
+                  className={`px-3 py-1 rounded-full text-xs border transition ${
+                    timeOption === "no-preference"
+                      ? "bg-black text-white border-black"
+                      : "bg-white text-neutral-800 border-neutral-300 hover:bg-neutral-100"
+                  }`}
+                >
+                  Sem preferência
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTimeOption("custom");
+                    if (selectedHour == null) setSelectedHour(10);
+                    if (selectedMinute == null) setSelectedMinute(0);
+                    setTimePickerOpen(true);
+                  }}
+                  className={`px-3 py-1 rounded-full text-xs border transition ${
+                    timeOption === "custom"
+                      ? "bg-black text-white border-black"
+                      : "bg-white text-neutral-800 border-neutral-300 hover:bg-neutral-100"
+                  }`}
+                >
+                  Escolher horário
+                </button>
+
+                {/* Horário escolhido */}
+                <span className="px-3 py-1 rounded-full text-xs bg-neutral-100 border border-neutral-200 text-neutral-800">
+                  {getChosenTimeLabel()}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Modo de entrega */}
+          <div className="space-y-2 border rounded-md p-3 bg-neutral-50">
+            <h3 className="text-xs font-semibold">Modo de entrega:</h3>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => setDeliveryMode("delivery")}
+                className={`px-3 py-1 rounded-full text-xs border transition ${
+                  deliveryMode === "delivery"
+                    ? "bg-green-600 text-white border-green-600"
+                    : "bg-white text-neutral-800 border-neutral-300 hover:bg-neutral-100"
+                }`}
+              >
+                Entrega
+              </button>
+              <button
+                type="button"
+                onClick={() => setDeliveryMode("pickup")}
+                className={`px-3 py-1 rounded-full text-xs border transition ${
+                  deliveryMode === "pickup"
+                    ? "bg-blue-600 text-white border-blue-600"
+                    : "bg-white text-neutral-800 border-neutral-300 hover:bg-neutral-100"
+                }`}
+              >
+                Retirada no local
+              </button>
+              <button
+                type="button"
+                onClick={() => setDeliveryMode("none")}
+                className={`px-3 py-1 rounded-full text-xs border transition ${
+                  deliveryMode === "none"
+                    ? "bg-black text-white border-black"
+                    : "bg-white text-neutral-800 border-neutral-300 hover:bg-neutral-100"
+                }`}
+              >
+                A combinar
+              </button>
+            </div>
+
+            {/* Entrega: localização + observação */}
+            {deliveryMode === "delivery" && (
+              <div className="space-y-3 pt-2 border-t border-neutral-200">
+                <div className="space-y-1">
+                  <p className="text-[11px] text-neutral-600">
+                    Você pode enviar sua localização atual para a vendedora.
+                  </p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleGetLocation}
+                      disabled={gettingLocation}
+                      className="px-3 py-1 rounded-full text-xs border bg-white hover:bg-neutral-100 disabled:opacity-60"
+                    >
+                      {gettingLocation
+                        ? "Obtendo localização..."
+                        : "Usar minha localização"}
+                    </button>
+                    {locationLink && (
+                      <a
+                        href={locationLink}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-[11px] text-blue-600 underline break-all"
+                      >
+                        Ver localização no mapa
+                      </a>
+                    )}
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs block">
+                    Observação (endereço, detalhes, etc.) – opcional
+                  </label>
+                  <textarea
+                    className="w-full border rounded-md px-3 py-2 text-sm min-h-[80px]"
+                    value={note}
+                    onChange={(e) => setNote(e.target.value)}
+                    placeholder="Ex: Entregar na fábrica X, portaria principal, intervalo das 15h."
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Retirada: mostrar apenas link do mapa da vendedora */}
+            {deliveryMode === "pickup" && (
+              <div className="space-y-1 pt-2 border-t border-neutral-200">
+                <p className="text-[11px] text-neutral-600">
+                  Retirada será feita no local definido pela vendedora:
+                </p>
+                {event.pickupLink ? (
+                  <a
+                    href={event.pickupLink}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-[11px] text-blue-600 underline break-all"
+                  >
+                    Abrir mapa da retirada
+                  </a>
+                ) : (
+                  <p className="text-[11px] text-neutral-500">
+                    A vendedora ainda não definiu o link de retirada. Confirme
+                    diretamente com ela.
+                  </p>
+                )}
+              </div>
+            )}
+
+            {/* A combinar: apenas observação */}
+            {deliveryMode === "none" && (
+              <div className="space-y-1 pt-2 border-t border-neutral-200">
+                <label className="text-xs block">
+                  Observação (como combinar a entrega) – opcional
+                </label>
+                <textarea
+                  className="w-full border rounded-md px-3 py-2 text-sm min-h-[80px]"
+                  value={note}
+                  onChange={(e) => setNote(e.target.value)}
+                  placeholder="Ex: Podemos combinar o local e horário pelo WhatsApp."
+                />
+              </div>
+            )}
           </div>
         </div>
       </section>
@@ -726,16 +1289,163 @@ export default function EventPage({ params }: Props) {
           Ao clicar, abriremos o aplicativo escolhido com seu pedido já
           preenchido para a vendedora deste evento.
         </p>
+
+        {/* COMPARTILHAR EVENTO – sempre visível */}
+        <div className="mt-4 border rounded-lg p-3 bg-neutral-50 space-y-2">
+          <p className="text-xs text-neutral-700">
+            Compartilhe este evento com seus amigos:
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={handleShareEventWhatsApp}
+              className="px-3 py-1.5 rounded-full text-xs font-semibold bg-green-600 text-white hover:bg-green-700"
+            >
+              WhatsApp
+            </button>
+            <button
+              type="button"
+              onClick={handleShareEventMessenger}
+              className="px-3 py-1.5 rounded-full text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700"
+            >
+              Messenger
+            </button>
+            <button
+              type="button"
+              onClick={handleShareEventLine}
+              className="px-3 py-1.5 rounded-full text-xs font-semibold bg-green-500 text-white hover:bg-green-600"
+            >
+              LINE
+            </button>
+            <button
+              type="button"
+              onClick={handleCopyEventLink}
+              className="px-3 py-1.5 rounded-full text-xs font-semibold bg-black text-white hover:bg-neutral-900"
+            >
+              Copiar link
+            </button>
+          </div>
+          <p className="text-[11px] text-neutral-500">
+            Em alguns aparelhos o texto será apenas copiado. É só abrir a
+            conversa e colar.
+          </p>
+        </div>
       </section>
+
+      {/* MODAL DO HORÁRIO */}
+      {timePickerOpen && (
+<div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 px-4 overscroll-contain">
+          <div className="w-full max-w-xs rounded-xl bg-white p-4 space-y-4 shadow-lg">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold">Escolher horário</h3>
+              <button
+                type="button"
+                onClick={() => setTimePickerOpen(false)}
+                className="text-[11px] text-neutral-500"
+              >
+                Fechar
+              </button>
+            </div>
+
+            {/* Scroller suave de horas/minutos */}
+            <div className="flex justify-center">
+              <div className="relative flex items-center gap-4 rounded-lg bg-neutral-50 px-4 py-3 border border-neutral-200">
+                {/* COLUNA DE HORAS */}
+                <div className="flex flex-col items-center">
+                  <span className="text-[10px] text-neutral-500 mb-1">
+                    Hora
+                  </span>
+                  <div className="relative h-24 w-12 overflow-y-auto">
+                    {HOURS.map((h) => {
+                      const isSel = selectedHour === h;
+                      return (
+                        <button
+                          key={h}
+                          type="button"
+                          onClick={() => setSelectedHour(h)}
+                          className={`w-full h-6 my-[2px] text-xs flex items-center justify-center rounded transition-colors ${
+                            isSel
+                              ? "bg-blue-500 text-white font-semibold"
+                              : "text-neutral-700 hover:bg-neutral-100"
+                          }`}
+                        >
+                          {String(h).padStart(2, "0")}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* DOIS PONTOS */}
+                <span className="text-lg font-semibold text-neutral-800">
+                  :
+                </span>
+
+                {/* COLUNA DE MINUTOS */}
+                <div className="flex flex-col items-center">
+                  <span className="text-[10px] text-neutral-500 mb-1">
+                    Min
+                  </span>
+                  <div className="relative h-24 w-12 overflow-y-auto">
+                    {MINUTES.map((m) => {
+                      const isSel = selectedMinute === m;
+                      return (
+                        <button
+                          key={m}
+                          type="button"
+                          onClick={() => setSelectedMinute(m)}
+                          className={`w-full h-6 my-[2px] text-xs flex items-center justify-center rounded transition-colors ${
+                            isSel
+                              ? "bg-blue-500 text-white font-semibold"
+                              : "text-neutral-700 hover:bg-neutral-100"
+                          }`}
+                        >
+                          {String(m).padStart(2, "0")}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Botões OK / Cancelar */}
+            <div className="flex justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setTimeOption("no-preference");
+                  setSelectedHour(null);
+                  setSelectedMinute(null);
+                  setTimePickerOpen(false);
+                }}
+                className="px-3 py-1.5 rounded-full text-xs border border-neutral-300 text-neutral-700 hover:bg-neutral-100"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (selectedHour == null) setSelectedHour(10);
+                  if (selectedMinute == null) setSelectedMinute(0);
+                  setTimeOption("custom");
+                  setTimePickerOpen(false);
+                }}
+                className="px-3 py-1.5 rounded-full text-xs font-semibold bg-black text-white hover:bg-neutral-900"
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* MODAL DE GALERIA DE IMAGENS */}
       {galleryProduct && galleryImages.length > 0 && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/50 px-4">
           <div className="max-w-sm w-full bg-white rounded-xl p-4 space-y-3">
             <div className="flex items-center justify-between gap-2">
-              <h3 className="text-sm font-semibold">
-                {galleryProduct.name}
-              </h3>
+              <h3 className="text-sm font-semibold">{galleryProduct.name}</h3>
               <button
                 type="button"
                 onClick={() => setGalleryProduct(null)}
@@ -745,7 +1455,6 @@ export default function EventPage({ params }: Props) {
               </button>
             </div>
 
-            {/* imagem principal */}
             <div className="w-full rounded-lg overflow-hidden bg-neutral-100 aspect-[4/3]">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
@@ -755,7 +1464,6 @@ export default function EventPage({ params }: Props) {
               />
             </div>
 
-            {/* miniaturas */}
             {galleryImages.length > 1 && (
               <div className="flex gap-2 overflow-x-auto pt-1">
                 {galleryImages.map((img, idx) => (

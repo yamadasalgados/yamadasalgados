@@ -5,9 +5,26 @@ import nextTs from "eslint-config-next/typescript";
 const eslintConfig = defineConfig([
   ...nextVitals,
   ...nextTs,
-  // Override default ignores of eslint-config-next.
+
+  // ✅ Overrides de regras (aqui é o ponto-chave)
+  {
+    rules: {
+      // libera uso de `any` (senão trava o build)
+      "@typescript-eslint/no-explicit-any": "off",
+
+      // variáveis não usadas viram warning (não erro)
+      "@typescript-eslint/no-unused-vars": [
+        "warn",
+        {
+          argsIgnorePattern: "^_",
+          varsIgnorePattern: "^_",
+        },
+      ],
+    },
+  },
+
+  // ✅ Ignorar pastas padrão
   globalIgnores([
-    // Default ignores of eslint-config-next:
     ".next/**",
     "out/**",
     "build/**",

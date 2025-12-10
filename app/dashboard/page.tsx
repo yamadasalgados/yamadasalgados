@@ -406,29 +406,9 @@ export default function DashboardPage() {
     }
   };
 
-  const handleEditEvent = (ev: EventDoc) => {
-    setEventId(ev.id);
-    setTitle(ev.title);
-    setRegion(ev.region || "");
-    setSellerName(ev.sellerName || sellerName);
-    setDeliveryDates(
-      ev.deliveryDates && ev.deliveryDates.length > 0
-        ? ev.deliveryDates
-        : ev.deliveryDateLabel
-        ? [ev.deliveryDateLabel]
-        : [""]
-    );
-    setWhatsapp(ev.whatsapp || "+819060703785");
-    setPickupUrl(ev.pickupUrl || "");
-    setPickupNote(ev.pickupNote || "");
-    setMessengerId(ev.messengerId || "");
-    setEditingEventProductNames(ev.productNames || []);
-    setStep(1);
-    setError(null);
-    setSuccessMessage(null);
-
-    scrollToRef(formRef);
-  };
+const handleEditEvent = (ev: EventDoc) => {
+  router.push(`/dashboard/events/${ev.id}`);
+};
 
   const handleCancelEvent = async (id: string) => {
     const confirmCancel = window.confirm(
@@ -575,14 +555,18 @@ export default function DashboardPage() {
   return (
     <main className="space-y-6">
       {/* topo */}
-      <div className="flex items-center gap-3">
+        
+              <header className="border-b pb-4 flex items-center justify-between gap-4">
+
         <button
           type="button"
           onClick={() => router.push("/products")}
-          className="text-[11px] text-neutral-700 underline decoration-dotted"
+            className="bg-black text-white text-xs px-4 py-2 rounded-full"
         >
           Catálogo de produtos
         </button>
+
+      <div className="flex items-center gap-3">
         <div className="text-right">
           <p className="text-xs font-medium">
             {sellerName || user?.email || "Vendedor"}
@@ -591,11 +575,12 @@ export default function DashboardPage() {
         </div>
         <button
           onClick={handleLogout}
-          className="text-[11px] text-red-600 underline decoration-dotted"
+            className="bg-red-500 text-white text-xs px-4 py-2 rounded-full"
         >
           Sair
         </button>
       </div>
+          </header>
 
       {/* passos + formulário */}
       <section
