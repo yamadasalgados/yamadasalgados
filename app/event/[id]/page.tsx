@@ -1,5 +1,4 @@
 "use client";
-
 import { use, useEffect, useState } from "react";
 import { db } from "@/lib/firebase";
 import {
@@ -22,6 +21,8 @@ type CategoryType =
   | "Festa"
   | "Congelados";
 
+type ProductStatus = "active" | "inactive";
+
 const CATEGORY_ORDER: CategoryType[] = [
   "Comida",
   "Lanchonete",
@@ -33,7 +34,6 @@ const CATEGORY_ORDER: CategoryType[] = [
 
 const openExternalLink = (url: string) => {
   if (typeof window === "undefined") return;
-
   // iOS Safari precisa usar location.href
   const isIOS =
     /iPad|iPhone|iPod/.test(navigator.userAgent) ||
@@ -46,7 +46,7 @@ const openExternalLink = (url: string) => {
   }
 };
 
-// 🔹 Listas para o “scroller” de horário
+// 🔹 Listas para o “scroller” de horário (não usamos mais, mas manter não atrapalha)
 const HOURS = Array.from({ length: 24 }, (_, i) => i); // 0–23
 const MINUTES = [0, 10, 20, 30, 40, 50];
 
@@ -70,6 +70,10 @@ type ProductImageData = {
   extraImageUrls: string[];
   price?: number;
   category?: CategoryType;
+  // 🔹 campos de estoque, adaptando ao novo controle
+  stockQty?: number;
+  lowStockThreshold?: number;
+  status?: ProductStatus;
 };
 
 type Props = {
@@ -99,7 +103,7 @@ export default function EventPage({ params }: Props) {
   // 🔹 modo de entrega (padrão: retirada no local)
   const [deliveryMode, setDeliveryMode] = useState<DeliveryMode>("pickup");
 
-  // 🔹 horário (scroller)
+  // 🔹 horário (agora com input numérico)
   const [timeOption, setTimeOption] = useState<TimeOption>("no-preference");
   const [selectedHour, setSelectedHour] = useState<number | null>(null);
   const [selectedMinute, setSelectedMinute] = useState<number | null>(null);
@@ -116,6 +120,7 @@ export default function EventPage({ params }: Props) {
   const [productsData, setProductsData] = useState<
     Record<string, ProductImageData>
   >({});
+
   const [galleryProduct, setGalleryProduct] =
     useState<ProductImageData | null>(null);
   const [galleryIndex, setGalleryIndex] = useState(0);
@@ -151,38 +156,9 @@ export default function EventPage({ params }: Props) {
       );
     }
   };
-  // 🔒 trava o scroll do fundo quando o modal de horário estiver aberto (iOS fix)
-useEffect(() => {
-  if (timePickerOpen) {
-    const scrollY = window.scrollY;
 
-    document.body.style.position = "fixed";
-    document.body.style.top = `-${scrollY}px`;
-    document.body.style.left = "0";
-    document.body.style.right = "0";
-    document.body.style.width = "100%";
-  } else {
-    const top = document.body.style.top;
-    document.body.style.position = "";
-    document.body.style.top = "";
-    document.body.style.left = "";
-    document.body.style.right = "";
-    document.body.style.width = "";
-
-    if (top) {
-      window.scrollTo(0, parseInt(top || "0") * -1);
-    }
-  }
-
-  return () => {
-    document.body.style.position = "";
-    document.body.style.top = "";
-    document.body.style.left = "";
-    document.body.style.right = "";
-    document.body.style.width = "";
-  };
-}, [timePickerOpen]);
-
+  // ❌ REMOVIDO: efeito que travava scroll do body e causava pulo pro topo
+  // useEffect(() => { ... }, [timePickerOpen])
 
   // 🔹 pega URL atual
   useEffect(() => {
@@ -201,6 +177,7 @@ useEffect(() => {
           setNotFound(true);
           return;
         }
+
         const data = snap.data() as any;
 
         let deliveryDates: string[] = Array.isArray(data.deliveryDates)
@@ -216,6 +193,7 @@ useEffect(() => {
             deliveryDateLabel = "Data a definir";
           }
         }
+
         if (deliveryDates.length === 0 && data.deliveryDate) {
           deliveryDates = [data.deliveryDate];
         }
@@ -223,14 +201,10 @@ useEffect(() => {
         const products: string[] = Array.isArray(data.productNames)
           ? data.productNames
           : [];
-
         const status: string = data.status || "active";
         const messengerId: string = data.messengerId || data.messenger || "";
-
         const featured: string[] = Array.isArray(data.featuredProductNames)
-          ? data.featuredProductNames.filter(
-              (n: any) => typeof n === "string"
-            )
+          ? data.featuredProductNames.filter((n: any) => typeof n === "string")
           : [];
 
         // 🔹 Nomes que podem ser pedidos: produtos do evento + destaques
@@ -267,7 +241,7 @@ useEffect(() => {
           setDateOption("no-preference");
         }
 
-        // 🔍 Carrega imagens, preço e categoria dos produtos a partir da coleção "products"
+        // 🔍 Carrega imagens, preço, categoria e estoque dos produtos a partir da coleção "products"
         const imagesMap: Record<string, ProductImageData> = {};
 
         await Promise.all(
@@ -280,12 +254,32 @@ useEffect(() => {
               const snapProducts = await getDocs(qProd);
               if (!snapProducts.empty) {
                 const docData = snapProducts.docs[0].data() as any;
+
                 const extras = Array.isArray(docData.extraImageUrls)
                   ? (docData.extraImageUrls as unknown[])
                       .filter((u) => typeof u === "string")
                       .map((u) => (u as string).trim())
                       .filter((u) => u.length > 0)
                   : [];
+
+                const stockRaw =
+                  typeof docData.stockQty === "number"
+                    ? docData.stockQty
+                    : null;
+                const lowStockRaw =
+                  typeof docData.lowStockThreshold === "number"
+                    ? docData.lowStockThreshold
+                    : null;
+
+                const isOutOfStock =
+                  stockRaw !== null && Number.isFinite(stockRaw)
+                    ? stockRaw <= 0
+                    : false;
+
+                const rawStatus = (docData.status as ProductStatus) || "active";
+                const statusFinal: ProductStatus = isOutOfStock
+                  ? "inactive"
+                  : rawStatus;
 
                 imagesMap[name] = {
                   name,
@@ -296,6 +290,9 @@ useEffect(() => {
                       ? docData.price
                       : Number(docData.price || 0),
                   category: (docData.category as CategoryType) || "Comida",
+                  stockQty: stockRaw ?? undefined,
+                  lowStockThreshold: lowStockRaw ?? undefined,
+                  status: statusFinal,
                 };
               }
             } catch (e) {
@@ -324,6 +321,18 @@ useEffect(() => {
       const current = prev[product] || 0;
       const next = current + delta;
       if (next < 0) return prev;
+
+      // opcional: respeitar estoque máximo se existir
+      const stock = productsData[product]?.stockQty;
+      if (typeof stock === "number" && Number.isFinite(stock)) {
+        if (next > stock) {
+          return {
+            ...prev,
+            [product]: stock,
+          };
+        }
+      }
+
       return {
         ...prev,
         [product]: next,
@@ -337,7 +346,6 @@ useEffect(() => {
       alert("Seu navegador não suporta geolocalização.");
       return;
     }
-
     setGettingLocation(true);
     navigator.geolocation.getCurrentPosition(
       (pos) => {
@@ -359,7 +367,6 @@ useEffect(() => {
   // 🔹 Descobre qual data final vai ser usada
   const getChosenDate = () => {
     if (!event) return "";
-
     if (dateOption === "event-date" && selectedDate) {
       return selectedDate;
     }
@@ -436,6 +443,7 @@ useEffect(() => {
     if (event.pickupLink) {
       lines.push("", `Endereço / retirada da vendedora: ${event.pickupLink}`);
     }
+
     if (event.pickupNote) {
       lines.push("", `Instruções da vendedora: ${event.pickupNote}`);
     }
@@ -469,7 +477,6 @@ useEffect(() => {
     getOrderableProductNames().forEach((p) => {
       resetQty[p] = 0;
     });
-
     setQuantities(resetQty);
     setCustomerName("");
     setNote("");
@@ -498,8 +505,8 @@ useEffect(() => {
     if (!event) return;
 
     const orderableNames = getOrderableProductNames();
-
     const quantitiesClean: Record<string, number> = {};
+
     orderableNames.forEach((p) => {
       const q = quantities[p] || 0;
       if (q > 0) quantitiesClean[p] = q;
@@ -533,59 +540,56 @@ useEffect(() => {
     }
   };
 
-const handleSendWhatsApp = async () => {
-  if (!event) return;
+  const handleSendWhatsApp = async () => {
+    if (!event) return;
 
-  if (!event.whatsapp) {
-    alert("Nenhum número de WhatsApp configurado para este evento.");
-    return;
-  }
+    if (!event.whatsapp) {
+      alert("Nenhum número de WhatsApp configurado para este evento.");
+      return;
+    }
 
-  const hasItems = getOrderableProductNames().some(
-    (p) => (quantities[p] || 0) > 0
-  );
-  if (!hasItems) {
-    alert("Selecione pelo menos 1 produto com quantidade.");
-    return;
-  }
+    const hasItems = getOrderableProductNames().some(
+      (p) => (quantities[p] || 0) > 0
+    );
+    if (!hasItems) {
+      alert("Selecione pelo menos 1 produto com quantidade.");
+      return;
+    }
 
-  const message = buildOrderMessage();
-  const encoded = encodeURIComponent(message);
-  const phone = event.whatsapp.replace(/\D/g, "");
-  const url = `https://wa.me/${phone}?text=${encoded}`;
+    const message = buildOrderMessage();
+    const encoded = encodeURIComponent(message);
+    const phone = event.whatsapp.replace(/\D/g, "");
+    const url = `https://wa.me/${phone}?text=${encoded}`;
 
-  await registerOrderInFirestore("whatsapp");
-  resetForm();
+    await registerOrderInFirestore("whatsapp");
+    resetForm();
+    openExternalLink(url);
+  };
 
-  openExternalLink(url);
-};
+  const handleSendMessenger = async () => {
+    if (!event) return;
 
+    if (!event.messengerId) {
+      alert("Nenhum contato de Messenger configurado para este evento.");
+      return;
+    }
 
-const handleSendMessenger = async () => {
-  if (!event) return;
+    const hasItems = getOrderableProductNames().some(
+      (p) => (quantities[p] || 0) > 0
+    );
+    if (!hasItems) {
+      alert("Selecione pelo menos 1 produto com quantidade.");
+      return;
+    }
 
-  if (!event.messengerId) {
-    alert("Nenhum contato de Messenger configurado para este evento.");
-    return;
-  }
+    const message = buildOrderMessage();
+    const encoded = encodeURIComponent(message);
+    const url = `https://m.me/${event.messengerId}?text=${encoded}`;
 
-  const hasItems = getOrderableProductNames().some(
-    (p) => (quantities[p] || 0) > 0
-  );
-  if (!hasItems) {
-    alert("Selecione pelo menos 1 produto com quantidade.");
-    return;
-  }
-
-  const message = buildOrderMessage();
-  const encoded = encodeURIComponent(message);
-  const url = `https://m.me/${event.messengerId}?text=${encoded}`;
-
-  await registerOrderInFirestore("messenger");
-  resetForm();
-  openExternalLink(url);
-};
-
+    await registerOrderInFirestore("messenger");
+    resetForm();
+    openExternalLink(url);
+  };
 
   // 🔹 Texto base para compartilhar evento
   const buildShareText = () =>
@@ -608,25 +612,22 @@ const handleSendMessenger = async () => {
     window.open(url, "_blank");
   };
 
-const handleShareEventMessenger = async () => {
-  if (!currentUrl) return;
+  const handleShareEventMessenger = async () => {
+    if (!currentUrl) return;
+    const text = `${buildShareText()}\n${currentUrl}`;
+    await copyToClipboard(text);
 
-  const text = `${buildShareText()}\n${currentUrl}`;
-  await copyToClipboard(text);
+    const encodedUrl = encodeURIComponent(currentUrl);
+    const deepLink = `fb-messenger://share?link=${encodedUrl}`;
+    const webFallback = `https://www.facebook.com/sharer/sharer.php?u=${encodedUrl}`;
 
-  const encodedUrl = encodeURIComponent(currentUrl);
-  const deepLink = `fb-messenger://share?link=${encodedUrl}`;
-  const webFallback = `https://www.facebook.com/sharer/sharer.php?u=${encodedUrl}`;
-
-  // tenta app
-  openExternalLink(deepLink);
-
-  // fallback web
-  setTimeout(() => {
-    openExternalLink(webFallback);
-  }, 600);
-};
-
+    // tenta app
+    openExternalLink(deepLink);
+    // fallback web
+    setTimeout(() => {
+      openExternalLink(webFallback);
+    }, 600);
+  };
 
   const handleCopyEventLink = async () => {
     if (!currentUrl) return;
@@ -665,8 +666,8 @@ const handleShareEventMessenger = async () => {
           </p>
         </header>
         <p className="text-sm text-red-600">
-          Este evento foi cancelado. Entre em contato com a vendedora para
-          mais informações.
+          Este evento foi cancelado. Entre em contato com a vendedora para mais
+          informações.
         </p>
       </main>
     );
@@ -710,6 +711,7 @@ const handleShareEventMessenger = async () => {
           <br />
           Data(s) de entrega: {event.deliveryDateLabel}
         </p>
+
         {event.pickupLink && (
           <p className="text-xs text-blue-700">
             Local de retirada:{" "}
@@ -723,11 +725,13 @@ const handleShareEventMessenger = async () => {
             </a>
           </p>
         )}
+
         {event.pickupNote && (
           <p className="text-xs text-neutral-600">
             Instruções da vendedora: {event.pickupNote}
           </p>
         )}
+
         <p className="text-xs text-neutral-500">
           Este link é exclusivo deste evento e desta vendedora.
         </p>
@@ -741,6 +745,11 @@ const handleShareEventMessenger = async () => {
             {featuredProducts.map((name) => {
               const info = productsData[name];
               const qty = quantities[name] ?? 0;
+
+              const stock =
+                typeof info?.stockQty === "number" ? info.stockQty : null;
+              const isOutOfStock =
+                stock !== null && Number.isFinite(stock) && stock <= 0;
 
               return (
                 <div
@@ -780,6 +789,18 @@ const handleShareEventMessenger = async () => {
                         ¥{info.price.toLocaleString("ja-JP")}
                       </p>
                     )}
+
+                    {stock !== null && (
+                      <p className="text-[11px] text-neutral-600">
+                        {stock <= 0 ? (
+                          <span className="text-red-600 font-semibold">
+                            Esgotado
+                          </span>
+                        ) : (
+                          <>Estoque: {stock}</>
+                        )}
+                      </p>
+                    )}
                   </div>
 
                   <div className="flex items-center justify-between gap-2">
@@ -799,8 +820,15 @@ const handleShareEventMessenger = async () => {
                       </span>
                       <button
                         type="button"
-                        onClick={() => adjustQuantity(name, 1)}
-                        className="h-7 w-7 rounded-full border border-neutral-300 text-sm flex items-center justify-center hover:bg-neutral-100"
+                        disabled={isOutOfStock}
+                        onClick={() => {
+                          if (!isOutOfStock) adjustQuantity(name, 1);
+                        }}
+                        className={`h-7 w-7 rounded-full border text-sm flex items-center justify-center ${
+                          isOutOfStock
+                            ? "border-neutral-200 text-neutral-300 cursor-not-allowed"
+                            : "border-neutral-300 hover:bg-neutral-100"
+                        }`}
                       >
                         +
                       </button>
@@ -816,7 +844,6 @@ const handleShareEventMessenger = async () => {
       {/* PRODUTOS EM GRID, AGRUPADOS POR CATEGORIA */}
       <section className="space-y-4">
         <h2 className="font-semibold text-lg">Produtos disponíveis</h2>
-
         {sortedProductNames.length === 0 ? (
           <p className="text-sm text-neutral-600">
             Nenhum produto configurado para este evento.
@@ -833,6 +860,15 @@ const handleShareEventMessenger = async () => {
                     {items.map((product) => {
                       const info = productsData[product];
                       const qty = quantities[product] ?? 0;
+
+                      const stock =
+                        typeof info?.stockQty === "number"
+                          ? info.stockQty
+                          : null;
+                      const isOutOfStock =
+                        stock !== null &&
+                        Number.isFinite(stock) &&
+                        stock <= 0;
 
                       return (
                         <div
@@ -885,6 +921,18 @@ const handleShareEventMessenger = async () => {
                                   ¥{info.price.toLocaleString("ja-JP")}
                                 </span>
                               )}
+
+                            {stock !== null && (
+                              <span className="block text-[11px] text-neutral-600">
+                                {stock <= 0 ? (
+                                  <span className="text-red-600 font-semibold">
+                                    Esgotado
+                                  </span>
+                                ) : (
+                                  <>Estoque: {stock}</>
+                                )}
+                              </span>
+                            )}
                           </button>
 
                           <div className="flex items_CENTER justify-between gap-2">
@@ -904,8 +952,16 @@ const handleShareEventMessenger = async () => {
                               </span>
                               <button
                                 type="button"
-                                onClick={() => adjustQuantity(product, 1)}
-                                className="h-7 w-7 rounded-full border border-neutral-300 text-sm flex items_CENTER justify-center hover:bg-neutral-100"
+                                disabled={isOutOfStock}
+                                onClick={() => {
+                                  if (!isOutOfStock)
+                                    adjustQuantity(product, 1);
+                                }}
+                                className={`h-7 w-7 rounded-full border text-sm flex items_CENTER justify-center ${
+                                  isOutOfStock
+                                    ? "border-neutral-200 text-neutral-300 cursor-not-allowed"
+                                    : "border-neutral-300 hover:bg-neutral-100"
+                                }`}
                               >
                                 +
                               </button>
@@ -928,6 +984,15 @@ const handleShareEventMessenger = async () => {
                   {uncategorized.map((product) => {
                     const info = productsData[product];
                     const qty = quantities[product] ?? 0;
+
+                    const stock =
+                      typeof info?.stockQty === "number"
+                        ? info.stockQty
+                        : null;
+                    const isOutOfStock =
+                      stock !== null &&
+                      Number.isFinite(stock) &&
+                      stock <= 0;
 
                     return (
                       <div
@@ -957,18 +1022,25 @@ const handleShareEventMessenger = async () => {
                             Sem imagem
                           </div>
                         )}
-
                         <span className="block text-xs font-semibold leading-snug">
                           {product}
                         </span>
-
-                        {info?.price != null &&
-                          !Number.isNaN(info.price) && (
-                            <span className="block text-xs text-neutral-600">
-                              ¥{info.price.toLocaleString("ja-JP")}
-                            </span>
-                          )}
-
+                        {info?.price != null && !Number.isNaN(info.price) && (
+                          <span className="block text-xs text-neutral-600">
+                            ¥{info.price.toLocaleString("ja-JP")}
+                          </span>
+                        )}
+                        {stock !== null && (
+                          <span className="block text-[11px] text-neutral-600">
+                            {stock <= 0 ? (
+                              <span className="text-red-600 font-semibold">
+                                Esgotado
+                              </span>
+                            ) : (
+                              <>Estoque: {stock}</>
+                            )}
+                          </span>
+                        )}
                         <div className="flex items_CENTER justify-between gap-2">
                           <span className="text-[11px] text-neutral-600">
                             Quantidade
@@ -986,8 +1058,16 @@ const handleShareEventMessenger = async () => {
                             </span>
                             <button
                               type="button"
-                              onClick={() => adjustQuantity(product, 1)}
-                              className="h-7 w-7 rounded-full border border-neutral-300 text-sm flex items_CENTER justify-center hover:bg-neutral-100"
+                              disabled={isOutOfStock}
+                              onClick={() => {
+                                if (!isOutOfStock)
+                                  adjustQuantity(product, 1);
+                              }}
+                              className={`h-7 w-7 rounded-full border text-sm flex items_CENTER justify-center ${
+                                isOutOfStock
+                                  ? "border-neutral-200 text-neutral-300 cursor-not-allowed"
+                                  : "border-neutral-300 hover:bg-neutral-100"
+                              }`}
                             >
                               +
                             </button>
@@ -1020,9 +1100,7 @@ const handleShareEventMessenger = async () => {
 
           {/* Escolha de data + horário */}
           <div className="space-y-2 border rounded-md p-3 bg-neutral-50">
-            <h3 className="text-xs font-semibold">
-              Escolha o dia de entrega:
-            </h3>
+            <h3 className="text-xs font-semibold">Escolha o dia de entrega:</h3>
 
             {/* Datas do evento */}
             {event.deliveryDates.length > 0 && (
@@ -1048,6 +1126,7 @@ const handleShareEventMessenger = async () => {
                     </button>
                   );
                 })}
+
                 <button
                   type="button"
                   onClick={() => setDateOption("other-date")}
@@ -1089,7 +1168,6 @@ const handleShareEventMessenger = async () => {
             {/* Picker de horário */}
             <div className="space-y-2 pt-3 border-t border-neutral-200">
               <h4 className="text-xs font-semibold">Horário de entrega</h4>
-
               <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
@@ -1106,7 +1184,6 @@ const handleShareEventMessenger = async () => {
                 >
                   Sem preferência
                 </button>
-
                 <button
                   type="button"
                   onClick={() => {
@@ -1123,7 +1200,6 @@ const handleShareEventMessenger = async () => {
                 >
                   Escolher horário
                 </button>
-
                 {/* Horário escolhido */}
                 <span className="px-3 py-1 rounded-full text-xs bg-neutral-100 border border-neutral-200 text-neutral-800">
                   {getChosenTimeLabel()}
@@ -1332,9 +1408,9 @@ const handleShareEventMessenger = async () => {
         </div>
       </section>
 
-      {/* MODAL DO HORÁRIO */}
+      {/* MODAL DO HORÁRIO – agora com input numérico */}
       {timePickerOpen && (
-<div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 px-4 overscroll-contain">
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 px-4">
           <div className="w-full max-w-xs rounded-xl bg-white p-4 space-y-4 shadow-lg">
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-semibold">Escolher horário</h3>
@@ -1347,69 +1423,64 @@ const handleShareEventMessenger = async () => {
               </button>
             </div>
 
-            {/* Scroller suave de horas/minutos */}
-            <div className="flex justify-center">
-              <div className="relative flex items-center gap-4 rounded-lg bg-neutral-50 px-4 py-3 border border-neutral-200">
-                {/* COLUNA DE HORAS */}
-                <div className="flex flex-col items-center">
-                  <span className="text-[10px] text-neutral-500 mb-1">
-                    Hora
-                  </span>
-                  <div className="relative h-24 w-12 overflow-y-auto">
-                    {HOURS.map((h) => {
-                      const isSel = selectedHour === h;
-                      return (
-                        <button
-                          key={h}
-                          type="button"
-                          onClick={() => setSelectedHour(h)}
-                          className={`w-full h-6 my-[2px] text-xs flex items-center justify-center rounded transition-colors ${
-                            isSel
-                              ? "bg-blue-500 text-white font-semibold"
-                              : "text-neutral-700 hover:bg-neutral-100"
-                          }`}
-                        >
-                          {String(h).padStart(2, "0")}
-                        </button>
-                      );
-                    })}
-                  </div>
+            <div className="space-y-3">
+              <div className="flex gap-3">
+                <div className="flex-1 space-y-1">
+                  <label className="text-[11px] text-neutral-600">
+                    Hora (0–23)
+                  </label>
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    pattern="\d*"
+                    min={0}
+                    max={23}
+                    className="w-full border rounded-md px-2 py-1 text-sm"
+                    value={selectedHour ?? ""}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (val === "") {
+                        setSelectedHour(null);
+                        return;
+                      }
+                      const n = Number(val);
+                      if (Number.isNaN(n)) return;
+                      if (n < 0 || n > 23) return;
+                      setSelectedHour(n);
+                    }}
+                  />
                 </div>
-
-                {/* DOIS PONTOS */}
-                <span className="text-lg font-semibold text-neutral-800">
-                  :
-                </span>
-
-                {/* COLUNA DE MINUTOS */}
-                <div className="flex flex-col items-center">
-                  <span className="text-[10px] text-neutral-500 mb-1">
-                    Min
-                  </span>
-                  <div className="relative h-24 w-12 overflow-y-auto">
-                    {MINUTES.map((m) => {
-                      const isSel = selectedMinute === m;
-                      return (
-                        <button
-                          key={m}
-                          type="button"
-                          onClick={() => setSelectedMinute(m)}
-                          className={`w-full h-6 my-[2px] text-xs flex items-center justify-center rounded transition-colors ${
-                            isSel
-                              ? "bg-blue-500 text-white font-semibold"
-                              : "text-neutral-700 hover:bg-neutral-100"
-                          }`}
-                        >
-                          {String(m).padStart(2, "0")}
-                        </button>
-                      );
-                    })}
-                  </div>
+                <div className="flex-1 space-y-1">
+                  <label className="text-[11px] text-neutral-600">
+                    Minutos (0–59)
+                  </label>
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    pattern="\d*"
+                    min={0}
+                    max={59}
+                    className="w-full border rounded-md px-2 py-1 text-sm"
+                    value={selectedMinute ?? ""}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (val === "") {
+                        setSelectedMinute(null);
+                        return;
+                      }
+                      const n = Number(val);
+                      if (Number.isNaN(n)) return;
+                      if (n < 0 || n > 59) return;
+                      setSelectedMinute(n);
+                    }}
+                  />
                 </div>
               </div>
+              <p className="text-[11px] text-neutral-500">
+                Exemplo: 10:00, 15:30, 19:45
+              </p>
             </div>
 
-            {/* Botões OK / Cancelar */}
             <div className="flex justify-end gap-2 pt-1">
               <button
                 type="button"
@@ -1426,6 +1497,7 @@ const handleShareEventMessenger = async () => {
               <button
                 type="button"
                 onClick={() => {
+                  // se usuário não preencheu, define um padrão
                   if (selectedHour == null) setSelectedHour(10);
                   if (selectedMinute == null) setSelectedMinute(0);
                   setTimeOption("custom");
@@ -1454,7 +1526,6 @@ const handleShareEventMessenger = async () => {
                 Fechar
               </button>
             </div>
-
             <div className="w-full rounded-lg overflow-hidden bg-neutral-100 aspect-[4/3]">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
@@ -1463,7 +1534,6 @@ const handleShareEventMessenger = async () => {
                 className="h-full w-full object-cover"
               />
             </div>
-
             {galleryImages.length > 1 && (
               <div className="flex gap-2 overflow-x-auto pt-1">
                 {galleryImages.map((img, idx) => (
