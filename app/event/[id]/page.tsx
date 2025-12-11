@@ -1570,13 +1570,13 @@ export default function EventPage({ params }: Props) {
                   <label className="text-[11px] text-neutral-600">
                     Hora (0–23)
                   </label>
-                  <input
+                 <input
                     type="number"
                     inputMode="numeric"
                     pattern="\d*"
                     min={0}
                     max={23}
-                    className="w-full border rounded-md px-2 py-1 text-sm"
+                    className="w-full border rounded-md px-2 py-1 text-sm ios-anti-zoom-input"
                     value={selectedHour ?? ""}
                     onChange={(e) => {
                       const val = e.target.value;
@@ -1601,7 +1601,7 @@ export default function EventPage({ params }: Props) {
                     pattern="\d*"
                     min={0}
                     max={59}
-                    className="w-full border rounded-md px-2 py-1 text-sm"
+                    className="w-full border rounded-md px-2 py-1 text-sm ios-anti-zoom-input"
                     value={selectedMinute ?? ""}
                     onChange={(e) => {
                       const val = e.target.value;

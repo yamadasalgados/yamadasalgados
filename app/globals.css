@@ -8,3 +8,9 @@ body {
   overflow-x: hidden;
   -webkit-text-size-adjust: 100%;
 }
+/* Evita zoom automático do Safari em inputs com fonte < 16px */
+@supports (-webkit-touch-callout: none) {
+  .ios-anti-zoom-input {
+    font-size: 16px !important;
+  }
+}
