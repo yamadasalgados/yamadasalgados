@@ -101,6 +101,65 @@ interface OrderItemEdit {
   qty: string;
 }
 
+/* ---------- HELPERS GERAIS (COMPATIBILIDADE iOS) ---------- */
+
+const formatPrice = (value: number | null | undefined): string => {
+  const num = typeof value === "number" ? value : 0;
+  try {
+    return num.toLocaleString("ja-JP");
+  } catch (e) {
+    // Fallback caso o ambiente não suporte locale
+    try {
+      return num.toLocaleString();
+    } catch {
+      return String(num);
+    }
+  }
+};
+
+const formatTimestamp = (ts?: Timestamp | null): string => {
+  if (!ts) return "-";
+
+  let date: Date;
+  try {
+    // Caso seja um Timestamp do Firestore
+    if (ts instanceof Timestamp) {
+      date = ts.toDate();
+    } else if (typeof (ts as any).toDate === "function") {
+      date = (ts as any).toDate();
+    } else {
+      date = new Date(ts as any);
+    }
+  } catch {
+    return "-";
+  }
+
+  // Tenta com locale "pt-BR"
+  try {
+    return date.toLocaleString("pt-BR", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    // Fallback sem locale
+    try {
+      return date.toLocaleString();
+    } catch {
+      // Fallback manual, só pra não quebrar em ambiente bizarro
+      const pad = (n: number) => (n < 10 ? `0${n}` : String(n));
+      const y = date.getFullYear();
+      const m = pad(date.getMonth() + 1);
+      const d = pad(date.getDate());
+      const h = pad(date.getHours());
+      const min = pad(date.getMinutes());
+      return `${d}/${m}/${y} ${h}:${min}`;
+    }
+  }
+};
+
 /* --------- COMPONENTE --------- */
 
 export default function DashboardPage() {
@@ -286,66 +345,77 @@ export default function DashboardPage() {
 
       await Promise.all(
         eventsToUse.map(async (ev) => {
-          try {
-            const ordersRef = collection(db, "events", ev.id, "orders");
-            const q = query(ordersRef, orderBy("createdAt", "desc"));
-            const snap = await getDocs(q);
+          const ordersRef = collection(db, "events", ev.id, "orders");
+          const q = query(ordersRef, orderBy("createdAt", "desc"));
+          const snap = await getDocs(q);
 
-            const fromThisEvent: OrderWithMeta[] = snap.docs.map((docSnap) => {
-              const data = docSnap.data() as any;
+          const fromThisEvent: OrderWithMeta[] = snap.docs.map((docSnap) => {
+            const data = docSnap.data() as FirestoreOrder;
 
-              // Garantir que createdAt/updatedAt sejam Timestamp ou null
-              const createdAt =
-                data.createdAt instanceof Timestamp ? data.createdAt : null;
-              const updatedAt =
-                data.updatedAt instanceof Timestamp ? data.updatedAt : null;
+            const safeQuantities: Record<string, number> =
+              data && typeof data.quantities === "object"
+                ? Object.entries(data.quantities).reduce(
+                    (acc, [key, val]) => {
+                      const num = Number(val);
+                      if (!Number.isNaN(num) && num > 0) {
+                        acc[key] = num;
+                      }
+                      return acc;
+                    },
+                    {} as Record<string, number>
+                  )
+                : {};
 
-              const orderData: FirestoreOrder = {
-                customerName: data.customerName,
-                note: data.note ?? null,
-                quantities: data.quantities ?? {},
-                totalItems: data.totalItems ?? 0,
-                status: data.status ?? "pending",
-                channel: data.channel ?? "whatsapp",
-                deliveryDate: data.deliveryDate ?? null,
-                deliveryMode: data.deliveryMode ?? "pickup",
-                deliveryTimeSlot: data.deliveryTimeSlot ?? null,
-                locationLink: data.locationLink ?? null,
-                createdAt,
-                updatedAt,
-              };
+            const totalItems =
+              typeof data.totalItems === "number" && data.totalItems >= 0
+                ? data.totalItems
+                : Object.values(safeQuantities).reduce(
+                    (sum, n) => sum + n,
+                    0
+                  );
 
-              return {
-                id: docSnap.id,
-                eventId: ev.id,
-                eventTitle: ev.title,
-                ...orderData,
-              };
-            });
+            return {
+              id: docSnap.id,
+              eventId: ev.id,
+              eventTitle: ev.title,
+              customerName: data.customerName,
+              note: data.note ?? null,
+              quantities: safeQuantities,
+              totalItems,
+              status: data.status ?? "pending",
+              channel: data.channel ?? "whatsapp",
+              deliveryDate: data.deliveryDate ?? null,
+              deliveryMode: data.deliveryMode ?? "pickup",
+              deliveryTimeSlot: data.deliveryTimeSlot ?? null,
+              locationLink: data.locationLink ?? null,
+              createdAt: data.createdAt ?? null,
+              updatedAt: data.updatedAt ?? null,
+            };
+          });
 
-            allOrders.push(...fromThisEvent);
-          } catch (innerError) {
-            console.error(
-              "Erro ao carregar pedidos do evento:",
-              ev.id,
-              innerError
-            );
-          }
+          allOrders.push(...fromThisEvent);
         })
       );
 
-      // Ordenação defensiva (evita erro de toMillis em ambientes mais chatos)
       allOrders.sort((a, b) => {
         const aTime =
-          a.createdAt instanceof Timestamp ? a.createdAt.toMillis() : 0;
+          a.createdAt instanceof Timestamp
+            ? a.createdAt.toMillis()
+            : (a.createdAt as any)?.toDate
+            ? (a.createdAt as any).toDate().getTime()
+            : 0;
         const bTime =
-          b.createdAt instanceof Timestamp ? b.createdAt.toMillis() : 0;
+          b.createdAt instanceof Timestamp
+            ? b.createdAt.toMillis()
+            : (b.createdAt as any)?.toDate
+            ? (b.createdAt as any).toDate().getTime()
+            : 0;
         return bTime - aTime;
       });
 
       setOrders(allOrders);
     } catch (error) {
-      console.error(error);
+      console.error("Erro ao carregar pedidos:", error);
       setErrorMessage("Erro ao carregar pedidos.");
     } finally {
       setLoadingOrders(false);
@@ -436,11 +506,9 @@ export default function DashboardPage() {
       imageUrl: productImageUrl.trim() || undefined,
       status: finalStatus,
       updatedAt: serverTimestamp() as unknown as Timestamp,
-      // createdAt só na criação
       ...(editingProductId
         ? {}
         : { createdAt: serverTimestamp() as unknown as Timestamp }),
-      // Campos de estoque só são enviados se tiver número válido
       ...(stockNumber !== null ? { stockQty: stockNumber } : {}),
       ...(lowThresholdNumber !== null
         ? { lowStockThreshold: lowThresholdNumber }
@@ -770,7 +838,7 @@ export default function DashboardPage() {
         updatedAt: serverTimestamp() as unknown as Timestamp,
       };
 
-      await updateDoc(ref, payload as DocumentData);
+      await updateDoc(ref, payload);
       await loadOrders();
       resetOrderEditForm();
     } catch (error) {
@@ -782,18 +850,6 @@ export default function DashboardPage() {
   };
 
   /* ---------- HELPERS DE VISUAL ---------- */
-
-  const formatTimestamp = (ts?: Timestamp | null) => {
-    if (!ts || !(ts instanceof Timestamp)) return "-";
-    const date = ts.toDate();
-    return date.toLocaleString("pt-BR", {
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  };
 
   const resumoPedidos = {
     total: orders.length,
@@ -841,7 +897,10 @@ export default function DashboardPage() {
     const map = new Map<string, number>();
     filteredOrders.forEach((order) => {
       Object.entries(order.quantities || {}).forEach(([name, qty]) => {
-        map.set(name, (map.get(name) ?? 0) + qty);
+        const num = Number(qty);
+        if (!Number.isNaN(num) && num > 0) {
+          map.set(name, (map.get(name) ?? 0) + num);
+        }
       });
     });
     return Array.from(map.entries())
@@ -1287,21 +1346,6 @@ export default function DashboardPage() {
                 onChange={(e) => setProductImageUrl(e.target.value)}
                 placeholder="https://..."
               />
-              {/* PREVIEW DA IMAGEM NO FORM */}
-              {productImageUrl.trim() !== "" && (
-                <div className="mt-2 flex items-center gap-2">
-                  <div className="h-20 w-20 overflow-hidden rounded-md border bg-neutral-100">
-                    <img
-                      src={productImageUrl}
-                      alt={productName || "Pré-visualização do produto"}
-                      className="h-full w-full object-cover"
-                    />
-                  </div>
-                  <p className="text-[11px] text-neutral-500">
-                    Pré-visualização da imagem do produto.
-                  </p>
-                </div>
-              )}
             </div>
 
             <div className="flex justify-end gap-2 pt-2">
@@ -1353,17 +1397,6 @@ export default function DashboardPage() {
                           : "bg-white"
                       }`}
                     >
-                      {/* IMAGEM DO PRODUTO NO GRID */}
-                      {p.imageUrl && (
-                        <div className="mb-2 h-28 w-full overflow-hidden rounded-md border bg-neutral-100">
-                          <img
-                            src={p.imageUrl}
-                            alt={p.name}
-                            className="h-full w-full object-cover"
-                          />
-                        </div>
-                      )}
-
                       <div className="space-y-1">
                         <div className="flex items-start justify-between gap-2">
                           <div>
@@ -1373,7 +1406,7 @@ export default function DashboardPage() {
                             </p>
                           </div>
                           <p className="text-sm font-semibold">
-                            ¥{(p.price ?? 0).toLocaleString("ja-JP")}
+                            ¥{formatPrice(p.price)}
                           </p>
                         </div>
 
