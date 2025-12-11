@@ -500,105 +500,123 @@ export default function EventPage({ params }: Props) {
     }
   };
 
-  // 🔹 Registra o pedido no Firestore (WhatsApp / Messenger) E ABATE ESTOQUE
-  const registerOrderInFirestore = async (
-    channel: "whatsapp" | "messenger"
-  ) => {
-    if (!event) throw new Error("Evento não carregado.");
+ // 🔹 Registra o pedido no Firestore (WhatsApp / Messenger) E ABATE ESTOQUE
+const registerOrderInFirestore = async (
+  channel: "whatsapp" | "messenger"
+) => {
+  if (!event) throw new Error("Evento não carregado.");
 
-    const orderableNames = getOrderableProductNames();
-    const quantitiesClean: Record<string, number> = {};
+  const orderableNames = getOrderableProductNames();
+  const quantitiesClean: Record<string, number> = {};
 
-    orderableNames.forEach((p) => {
-      const q = quantities[p] || 0;
-      if (q > 0) quantitiesClean[p] = q;
-    });
+  orderableNames.forEach((p) => {
+    const q = quantities[p] || 0;
+    if (q > 0) quantitiesClean[p] = q;
+  });
 
-    const totalItems = Object.values(quantitiesClean).reduce(
-      (sum, q) => sum + Number(q || 0),
-      0
-    );
+  const totalItems = Object.values(quantitiesClean).reduce(
+    (sum, q) => sum + Number(q || 0),
+    0
+  );
 
-    if (totalItems === 0) {
-      throw new Error("Selecione pelo menos 1 produto com quantidade.");
-    }
+  if (totalItems === 0) {
+    throw new Error("Selecione pelo menos 1 produto com quantidade.");
+  }
 
-    const chosenDate = getChosenDate();
-    const timeLabel = getChosenTimeLabel();
+  const chosenDate = getChosenDate();
+  const timeLabel = getChosenTimeLabel();
 
-    const updatedStocks: Record<string, number> = {};
+  // vamos preencher isso dentro da transaction
+  const updatedStocks: Record<string, number> = {};
 
-    await runTransaction(db, async (transaction) => {
-      // 1) Abater estoque dos produtos
-      for (const [productName, q] of Object.entries(quantitiesClean)) {
-        const info = productsData[productName];
-        if (!info?.productDocId) continue;
+  await runTransaction(db, async (transaction) => {
+    // 1) FAZER TODAS AS LEITURAS PRIMEIRO
+    const stockPlan: {
+      productName: string;
+      newStock: number;
+      prodRefPath: string;
+    }[] = [];
 
-        const prodRef = doc(db, "products", info.productDocId);
-        const prodSnap = await transaction.get(prodRef);
+    for (const [productName, q] of Object.entries(quantitiesClean)) {
+      const info = productsData[productName];
+      if (!info?.productDocId) continue;
 
-        if (!prodSnap.exists()) {
-          throw new Error(`Produto "${productName}" não encontrado.`);
-        }
+      const prodRef = doc(db, "products", info.productDocId);
+      const prodSnap = await transaction.get(prodRef);
 
-        const data = prodSnap.data() as any;
-        const currentStock =
-          typeof data.stockQty === "number" ? data.stockQty : null;
-
-        // se não tiver controle de estoque numérico, não trava nem abate
-        if (currentStock === null) {
-          continue;
-        }
-
-        if (currentStock < q) {
-          throw new Error(
-            `Estoque insuficiente para "${productName}". Restam ${currentStock} unidade(s).`
-          );
-        }
-
-        const newStock = currentStock - q;
-        updatedStocks[productName] = newStock;
-
-        transaction.update(prodRef, {
-          stockQty: newStock,
-        });
+      if (!prodSnap.exists()) {
+        throw new Error(`Produto "${productName}" não encontrado.`);
       }
 
-      // 2) Registrar pedido na subcoleção orders do evento
-      const orderRef = doc(collection(db, "events", id, "orders"));
-      transaction.set(orderRef, {
-        customerName: customerName || "",
-        note: note || "",
-        quantities: quantitiesClean,
-        totalItems,
-        status: "pending",
-        channel,
-        deliveryDate: chosenDate,
-        deliveryMode,
-        deliveryTimeSlot: timeLabel,
-        locationLink: deliveryMode === "delivery" ? locationLink || "" : "",
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
-    });
+      const data = prodSnap.data() as any;
+      const currentStock =
+        typeof data.stockQty === "number" ? data.stockQty : null;
 
-    // 3) Atualiza o estado local com os novos estoques
-    if (Object.keys(updatedStocks).length > 0) {
-      setProductsData((prev) => {
-        const next = { ...prev };
-        for (const [name, newStock] of Object.entries(updatedStocks)) {
-          const info = next[name];
-          if (!info) continue;
-          next[name] = {
-            ...info,
-            stockQty: newStock,
-            status: newStock <= 0 ? "inactive" : info.status,
-          };
-        }
-        return next;
+      // Se não tiver controle de estoque numérico, não travamos nem abatemos
+      if (currentStock === null) {
+        continue;
+      }
+
+      if (currentStock < q) {
+        throw new Error(
+          `Estoque insuficiente para "${productName}". Restam ${currentStock} unidade(s).`
+        );
+      }
+
+      const newStock = currentStock - q;
+
+      stockPlan.push({
+        productName,
+        newStock,
+        prodRefPath: prodRef.path,
       });
     }
-  };
+
+    // 2) TODAS AS ESCRITAS (agora não podemos mais fazer gets)
+    for (const item of stockPlan) {
+      const prodRef = doc(db, item.prodRefPath);
+      updatedStocks[item.productName] = item.newStock;
+      transaction.update(prodRef, {
+        stockQty: item.newStock,
+      });
+    }
+
+    // 3) Registrar pedido na subcoleção orders do evento
+    const orderRef = doc(collection(db, "events", id, "orders"));
+    transaction.set(orderRef, {
+      customerName: customerName || "",
+      note: note || "",
+      quantities: quantitiesClean,
+      totalItems,
+      status: "pending",
+      channel,
+      deliveryDate: chosenDate,
+      deliveryMode,
+      deliveryTimeSlot: timeLabel,
+      locationLink: deliveryMode === "delivery" ? locationLink || "" : "",
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  });
+
+  // 4) Atualiza o estado local com os novos estoques
+  if (Object.keys(updatedStocks).length > 0) {
+    setProductsData((prev) => {
+      const next = { ...prev };
+      for (const [name, newStock] of Object.entries(updatedStocks)) {
+        const info = next[name];
+        if (!info) continue;
+        next[name] = {
+          ...info,
+          stockQty: newStock,
+          status: newStock <= 0 ? "inactive" : info.status,
+        };
+      }
+      return next;
+    });
+  }
+};
+
 
   const handleSendWhatsApp = async () => {
     if (!event) return;
