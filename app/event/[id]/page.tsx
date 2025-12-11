@@ -10,6 +10,7 @@ import {
   getDocs,
   query,
   where,
+  runTransaction,
 } from "firebase/firestore";
 
 // 🔹 Mesmas categorias usadas no catálogo
@@ -18,6 +19,7 @@ type CategoryType =
   | "Lanchonete"
   | "Assados"
   | "Sobremesa"
+  | "Frutas-verduras"
   | "Festa"
   | "Congelados";
 
@@ -28,6 +30,7 @@ const CATEGORY_ORDER: CategoryType[] = [
   "Lanchonete",
   "Assados",
   "Sobremesa",
+  "Frutas-verduras",
   "Festa",
   "Congelados",
 ];
@@ -74,6 +77,7 @@ type ProductImageData = {
   stockQty?: number;
   lowStockThreshold?: number;
   status?: ProductStatus;
+  productDocId?: string; // 🔹 id do documento em "products" para abater estoque
 };
 
 type Props = {
@@ -156,9 +160,6 @@ export default function EventPage({ params }: Props) {
       );
     }
   };
-
-  // ❌ REMOVIDO: efeito que travava scroll do body e causava pulo pro topo
-  // useEffect(() => { ... }, [timePickerOpen])
 
   // 🔹 pega URL atual
   useEffect(() => {
@@ -253,7 +254,8 @@ export default function EventPage({ params }: Props) {
               );
               const snapProducts = await getDocs(qProd);
               if (!snapProducts.empty) {
-                const docData = snapProducts.docs[0].data() as any;
+                const firstDoc = snapProducts.docs[0];
+                const docData = firstDoc.data() as any;
 
                 const extras = Array.isArray(docData.extraImageUrls)
                   ? (docData.extraImageUrls as unknown[])
@@ -293,6 +295,7 @@ export default function EventPage({ params }: Props) {
                   stockQty: stockRaw ?? undefined,
                   lowStockThreshold: lowStockRaw ?? undefined,
                   status: statusFinal,
+                  productDocId: firstDoc.id,
                 };
               }
             } catch (e) {
@@ -315,14 +318,13 @@ export default function EventPage({ params }: Props) {
     }
   }, [id]);
 
-  // 🔹 controles tipo carrinho: - 0 +
+  // 🔹 controles tipo carrinho: - 0 + (respeitando estoque, se existir)
   const adjustQuantity = (product: string, delta: number) => {
     setQuantities((prev) => {
       const current = prev[product] || 0;
       const next = current + delta;
       if (next < 0) return prev;
 
-      // opcional: respeitar estoque máximo se existir
       const stock = productsData[product]?.stockQty;
       if (typeof stock === "number" && Number.isFinite(stock)) {
         if (next > stock) {
@@ -498,11 +500,11 @@ export default function EventPage({ params }: Props) {
     }
   };
 
-  // 🔹 Registra o pedido no Firestore (WhatsApp / Messenger)
+  // 🔹 Registra o pedido no Firestore (WhatsApp / Messenger) E ABATE ESTOQUE
   const registerOrderInFirestore = async (
     channel: "whatsapp" | "messenger"
   ) => {
-    if (!event) return;
+    if (!event) throw new Error("Evento não carregado.");
 
     const orderableNames = getOrderableProductNames();
     const quantitiesClean: Record<string, number> = {};
@@ -517,11 +519,54 @@ export default function EventPage({ params }: Props) {
       0
     );
 
+    if (totalItems === 0) {
+      throw new Error("Selecione pelo menos 1 produto com quantidade.");
+    }
+
     const chosenDate = getChosenDate();
     const timeLabel = getChosenTimeLabel();
 
-    try {
-      await addDoc(collection(db, "events", id, "orders"), {
+    const updatedStocks: Record<string, number> = {};
+
+    await runTransaction(db, async (transaction) => {
+      // 1) Abater estoque dos produtos
+      for (const [productName, q] of Object.entries(quantitiesClean)) {
+        const info = productsData[productName];
+        if (!info?.productDocId) continue;
+
+        const prodRef = doc(db, "products", info.productDocId);
+        const prodSnap = await transaction.get(prodRef);
+
+        if (!prodSnap.exists()) {
+          throw new Error(`Produto "${productName}" não encontrado.`);
+        }
+
+        const data = prodSnap.data() as any;
+        const currentStock =
+          typeof data.stockQty === "number" ? data.stockQty : null;
+
+        // se não tiver controle de estoque numérico, não trava nem abate
+        if (currentStock === null) {
+          continue;
+        }
+
+        if (currentStock < q) {
+          throw new Error(
+            `Estoque insuficiente para "${productName}". Restam ${currentStock} unidade(s).`
+          );
+        }
+
+        const newStock = currentStock - q;
+        updatedStocks[productName] = newStock;
+
+        transaction.update(prodRef, {
+          stockQty: newStock,
+        });
+      }
+
+      // 2) Registrar pedido na subcoleção orders do evento
+      const orderRef = doc(collection(db, "events", id, "orders"));
+      transaction.set(orderRef, {
         customerName: customerName || "",
         note: note || "",
         quantities: quantitiesClean,
@@ -535,8 +580,23 @@ export default function EventPage({ params }: Props) {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
-    } catch (err) {
-      console.error("Erro ao registrar pedido no painel:", err);
+    });
+
+    // 3) Atualiza o estado local com os novos estoques
+    if (Object.keys(updatedStocks).length > 0) {
+      setProductsData((prev) => {
+        const next = { ...prev };
+        for (const [name, newStock] of Object.entries(updatedStocks)) {
+          const info = next[name];
+          if (!info) continue;
+          next[name] = {
+            ...info,
+            stockQty: newStock,
+            status: newStock <= 0 ? "inactive" : info.status,
+          };
+        }
+        return next;
+      });
     }
   };
 
@@ -561,9 +621,14 @@ export default function EventPage({ params }: Props) {
     const phone = event.whatsapp.replace(/\D/g, "");
     const url = `https://wa.me/${phone}?text=${encoded}`;
 
-    await registerOrderInFirestore("whatsapp");
-    resetForm();
-    openExternalLink(url);
+    try {
+      await registerOrderInFirestore("whatsapp");
+      resetForm();
+      openExternalLink(url);
+    } catch (err: any) {
+      console.error("Erro ao registrar pedido:", err);
+      alert(err?.message || "Erro ao registrar pedido. Tente novamente.");
+    }
   };
 
   const handleSendMessenger = async () => {
@@ -586,9 +651,14 @@ export default function EventPage({ params }: Props) {
     const encoded = encodeURIComponent(message);
     const url = `https://m.me/${event.messengerId}?text=${encoded}`;
 
-    await registerOrderInFirestore("messenger");
-    resetForm();
-    openExternalLink(url);
+    try {
+      await registerOrderInFirestore("messenger");
+      resetForm();
+      openExternalLink(url);
+    } catch (err: any) {
+      console.error("Erro ao registrar pedido:", err);
+      alert(err?.message || "Erro ao registrar pedido. Tente novamente.");
+    }
   };
 
   // 🔹 Texto base para compartilhar evento
@@ -751,6 +821,17 @@ export default function EventPage({ params }: Props) {
               const isOutOfStock =
                 stock !== null && Number.isFinite(stock) && stock <= 0;
 
+              const lowStockThreshold =
+                typeof info?.lowStockThreshold === "number"
+                  ? info.lowStockThreshold
+                  : 3;
+
+              const showFewLeft =
+                stock !== null &&
+                Number.isFinite(stock) &&
+                stock > 0 &&
+                stock <= lowStockThreshold;
+
               return (
                 <div
                   key={name}
@@ -797,8 +878,20 @@ export default function EventPage({ params }: Props) {
                             Esgotado
                           </span>
                         ) : (
-                          <>Estoque: {stock}</>
+                          <>
+                            Disponível:{" "}
+                            <span className="font-semibold">
+                              {stock} unidade
+                              {stock > 1 ? "s" : ""}
+                            </span>
+                          </>
                         )}
+                      </p>
+                    )}
+
+                    {showFewLeft && !isOutOfStock && (
+                      <p className="text-[11px] text-orange-600 font-semibold">
+                        🔥 Poucas unidades restantes!
                       </p>
                     )}
                   </div>
@@ -870,6 +963,17 @@ export default function EventPage({ params }: Props) {
                         Number.isFinite(stock) &&
                         stock <= 0;
 
+                      const lowStockThreshold =
+                        typeof info?.lowStockThreshold === "number"
+                          ? info.lowStockThreshold
+                          : 3;
+
+                      const showFewLeft =
+                        stock !== null &&
+                        Number.isFinite(stock) &&
+                        stock > 0 &&
+                        stock <= lowStockThreshold;
+
                       return (
                         <div
                           key={product}
@@ -923,19 +1027,32 @@ export default function EventPage({ params }: Props) {
                               )}
 
                             {stock !== null && (
-                              <span className="block text-[11px] text-neutral-600">
-                                {stock <= 0 ? (
-                                  <span className="text-red-600 font-semibold">
-                                    Esgotado
+                              <>
+                                <span className="block text-[11px] text-neutral-600">
+                                  {stock <= 0 ? (
+                                    <span className="text-red-600 font-semibold">
+                                      Esgotado
+                                    </span>
+                                  ) : (
+                                    <>
+                                      Disponível:{" "}
+                                      <span className="font-semibold">
+                                        {stock} unidade
+                                        {stock > 1 ? "s" : ""}
+                                      </span>
+                                    </>
+                                  )}
+                                </span>
+                                {showFewLeft && !isOutOfStock && (
+                                  <span className="block text-[11px] text-orange-600 font-semibold">
+                                    🔥 Poucas unidades restantes!
                                   </span>
-                                ) : (
-                                  <>Estoque: {stock}</>
                                 )}
-                              </span>
+                              </>
                             )}
                           </button>
 
-                          <div className="flex items_CENTER justify-between gap-2">
+                          <div className="flex items-center justify-between gap-2">
                             <span className="text-[11px] text-neutral-600">
                               Quantidade
                             </span>
@@ -957,7 +1074,7 @@ export default function EventPage({ params }: Props) {
                                   if (!isOutOfStock)
                                     adjustQuantity(product, 1);
                                 }}
-                                className={`h-7 w-7 rounded-full border text-sm flex items_CENTER justify-center ${
+                                className={`h-7 w-7 rounded-full border text-sm flex items-center justify-center ${
                                   isOutOfStock
                                     ? "border-neutral-200 text-neutral-300 cursor-not-allowed"
                                     : "border-neutral-300 hover:bg-neutral-100"
@@ -994,6 +1111,17 @@ export default function EventPage({ params }: Props) {
                       Number.isFinite(stock) &&
                       stock <= 0;
 
+                    const lowStockThreshold =
+                      typeof info?.lowStockThreshold === "number"
+                        ? info.lowStockThreshold
+                        : 3;
+
+                    const showFewLeft =
+                      stock !== null &&
+                      Number.isFinite(stock) &&
+                      stock > 0 &&
+                      stock <= lowStockThreshold;
+
                     return (
                       <div
                         key={product}
@@ -1018,7 +1146,7 @@ export default function EventPage({ params }: Props) {
                             />
                           </button>
                         ) : (
-                          <div className="w-full rounded-md overflow-hidden bg-neutral-100 aspect-[4/3] border border-dashed border-neutral-200 flex items_CENTER justify-center text-[11px] text-neutral-400">
+                          <div className="w-full rounded-md overflow-hidden bg-neutral-100 aspect-[4/3] border border-dashed border-neutral-200 flex items-center justify-center text-[11px] text-neutral-400">
                             Sem imagem
                           </div>
                         )}
@@ -1031,17 +1159,30 @@ export default function EventPage({ params }: Props) {
                           </span>
                         )}
                         {stock !== null && (
-                          <span className="block text-[11px] text-neutral-600">
-                            {stock <= 0 ? (
-                              <span className="text-red-600 font-semibold">
-                                Esgotado
+                          <>
+                            <span className="block text-[11px] text-neutral-600">
+                              {stock <= 0 ? (
+                                <span className="text-red-600 font-semibold">
+                                  Esgotado
+                                </span>
+                              ) : (
+                                <>
+                                  Disponível:{" "}
+                                  <span className="font-semibold">
+                                    {stock} unidade
+                                    {stock > 1 ? "s" : ""}
+                                  </span>
+                                </>
+                              )}
+                            </span>
+                            {showFewLeft && !isOutOfStock && (
+                              <span className="block text-[11px] text-orange-600 font-semibold">
+                                🔥 Poucas unidades restantes!
                               </span>
-                            ) : (
-                              <>Estoque: {stock}</>
                             )}
-                          </span>
+                          </>
                         )}
-                        <div className="flex items_CENTER justify-between gap-2">
+                        <div className="flex items-center justify-between gap-2">
                           <span className="text-[11px] text-neutral-600">
                             Quantidade
                           </span>
@@ -1049,7 +1190,7 @@ export default function EventPage({ params }: Props) {
                             <button
                               type="button"
                               onClick={() => adjustQuantity(product, -1)}
-                              className="h-7 w-7 rounded-full border border-neutral-300 text-sm flex items_CENTER justify-center hover:bg-neutral-100"
+                              className="h-7 w-7 rounded-full border border-neutral-300 text-sm flex items-center justify-center hover:bg-neutral-100"
                             >
                               -
                             </button>
@@ -1063,7 +1204,7 @@ export default function EventPage({ params }: Props) {
                                 if (!isOutOfStock)
                                   adjustQuantity(product, 1);
                               }}
-                              className={`h-7 w-7 rounded-full border text-sm flex items_CENTER justify-center ${
+                              className={`h-7 w-7 rounded-full border text-sm flex items-center justify-center ${
                                 isOutOfStock
                                   ? "border-neutral-200 text-neutral-300 cursor-not-allowed"
                                   : "border-neutral-300 hover:bg-neutral-100"
@@ -1339,9 +1480,9 @@ export default function EventPage({ params }: Props) {
         {totalAmount > 0 && (
           <p className="text-sm font-semibold text-neutral-800">
             Total estimado do pedido:{" "}
-            <span className="text-green-700">
-              ¥{totalAmount.toLocaleString("ja-JP")}
-            </span>
+              <span className="text-green-700">
+                ¥{totalAmount.toLocaleString("ja-JP")}
+              </span>
           </p>
         )}
 

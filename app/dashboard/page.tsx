@@ -14,7 +14,7 @@ import {
   serverTimestamp,
   Timestamp,
   updateDoc,
-   DocumentData,
+  DocumentData,
 } from "firebase/firestore";
 
 // Mesmas categorias do app
@@ -100,6 +100,65 @@ interface OrderItemEdit {
   name: string;
   qty: string;
 }
+
+/* ---------- HELPERS GERAIS (COMPATIBILIDADE iOS) ---------- */
+
+const formatPrice = (value: number | null | undefined): string => {
+  const num = typeof value === "number" ? value : 0;
+  try {
+    return num.toLocaleString("ja-JP");
+  } catch (e) {
+    // Fallback caso o ambiente não suporte locale
+    try {
+      return num.toLocaleString();
+    } catch {
+      return String(num);
+    }
+  }
+};
+
+const formatTimestamp = (ts?: Timestamp | null): string => {
+  if (!ts) return "-";
+
+  let date: Date;
+  try {
+    // Caso seja um Timestamp do Firestore
+    if (ts instanceof Timestamp) {
+      date = ts.toDate();
+    } else if (typeof (ts as any).toDate === "function") {
+      date = (ts as any).toDate();
+    } else {
+      date = new Date(ts as any);
+    }
+  } catch {
+    return "-";
+  }
+
+  // Tenta com locale "pt-BR"
+  try {
+    return date.toLocaleString("pt-BR", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    // Fallback sem locale
+    try {
+      return date.toLocaleString();
+    } catch {
+      // Fallback manual, só pra não quebrar em ambiente bizarro
+      const pad = (n: number) => (n < 10 ? `0${n}` : String(n));
+      const y = date.getFullYear();
+      const m = pad(date.getMonth() + 1);
+      const d = pad(date.getDate());
+      const h = pad(date.getHours());
+      const min = pad(date.getMinutes());
+      return `${d}/${m}/${y} ${h}:${min}`;
+    }
+  }
+};
 
 /* --------- COMPONENTE --------- */
 
@@ -292,14 +351,37 @@ export default function DashboardPage() {
 
           const fromThisEvent: OrderWithMeta[] = snap.docs.map((docSnap) => {
             const data = docSnap.data() as FirestoreOrder;
+
+            const safeQuantities: Record<string, number> =
+              data && typeof data.quantities === "object"
+                ? Object.entries(data.quantities).reduce(
+                    (acc, [key, val]) => {
+                      const num = Number(val);
+                      if (!Number.isNaN(num) && num > 0) {
+                        acc[key] = num;
+                      }
+                      return acc;
+                    },
+                    {} as Record<string, number>
+                  )
+                : {};
+
+            const totalItems =
+              typeof data.totalItems === "number" && data.totalItems >= 0
+                ? data.totalItems
+                : Object.values(safeQuantities).reduce(
+                    (sum, n) => sum + n,
+                    0
+                  );
+
             return {
               id: docSnap.id,
               eventId: ev.id,
               eventTitle: ev.title,
               customerName: data.customerName,
               note: data.note ?? null,
-              quantities: data.quantities ?? {},
-              totalItems: data.totalItems ?? 0,
+              quantities: safeQuantities,
+              totalItems,
               status: data.status ?? "pending",
               channel: data.channel ?? "whatsapp",
               deliveryDate: data.deliveryDate ?? null,
@@ -316,14 +398,24 @@ export default function DashboardPage() {
       );
 
       allOrders.sort((a, b) => {
-        const aTime = a.createdAt?.toMillis() ?? 0;
-        const bTime = b.createdAt?.toMillis() ?? 0;
+        const aTime =
+          a.createdAt instanceof Timestamp
+            ? a.createdAt.toMillis()
+            : (a.createdAt as any)?.toDate
+            ? (a.createdAt as any).toDate().getTime()
+            : 0;
+        const bTime =
+          b.createdAt instanceof Timestamp
+            ? b.createdAt.toMillis()
+            : (b.createdAt as any)?.toDate
+            ? (b.createdAt as any).toDate().getTime()
+            : 0;
         return bTime - aTime;
       });
 
       setOrders(allOrders);
     } catch (error) {
-      console.error(error);
+      console.error("Erro ao carregar pedidos:", error);
       setErrorMessage("Erro ao carregar pedidos.");
     } finally {
       setLoadingOrders(false);
@@ -414,11 +506,9 @@ export default function DashboardPage() {
       imageUrl: productImageUrl.trim() || undefined,
       status: finalStatus,
       updatedAt: serverTimestamp() as unknown as Timestamp,
-      // createdAt só na criação
       ...(editingProductId
         ? {}
         : { createdAt: serverTimestamp() as unknown as Timestamp }),
-      // Campos de estoque só são enviados se tiver número válido
       ...(stockNumber !== null ? { stockQty: stockNumber } : {}),
       ...(lowThresholdNumber !== null
         ? { lowStockThreshold: lowThresholdNumber }
@@ -426,13 +516,13 @@ export default function DashboardPage() {
     };
 
     try {
-if (editingProductId) {
-  const ref = doc(db, "products", editingProductId);
-  await updateDoc(ref, payload as DocumentData);
-} else {
-  const ref = collection(db, "products");
-  await addDoc(ref, payload as DocumentData);
-}
+      if (editingProductId) {
+        const ref = doc(db, "products", editingProductId);
+        await updateDoc(ref, payload as DocumentData);
+      } else {
+        const ref = collection(db, "products");
+        await addDoc(ref, payload as DocumentData);
+      }
 
       await loadProducts();
       resetProductForm();
@@ -526,10 +616,10 @@ if (editingProductId) {
     try {
       if (editingEventId) {
         const ref = doc(db, "events", editingEventId);
-await updateDoc(ref, payload as any);
+        await updateDoc(ref, payload as any);
       } else {
         const ref = collection(db, "events");
-await addDoc(ref, payload as any);
+        await addDoc(ref, payload as any);
       }
 
       await loadEvents();
@@ -761,18 +851,6 @@ await addDoc(ref, payload as any);
 
   /* ---------- HELPERS DE VISUAL ---------- */
 
-  const formatTimestamp = (ts?: Timestamp | null) => {
-    if (!ts) return "-";
-    const date = ts.toDate();
-    return date.toLocaleString("pt-BR", {
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  };
-
   const resumoPedidos = {
     total: orders.length,
     pendentes: orders.filter((o) => o.status === "pending").length,
@@ -819,7 +897,10 @@ await addDoc(ref, payload as any);
     const map = new Map<string, number>();
     filteredOrders.forEach((order) => {
       Object.entries(order.quantities || {}).forEach(([name, qty]) => {
-        map.set(name, (map.get(name) ?? 0) + qty);
+        const num = Number(qty);
+        if (!Number.isNaN(num) && num > 0) {
+          map.set(name, (map.get(name) ?? 0) + num);
+        }
       });
     });
     return Array.from(map.entries())
@@ -1325,7 +1406,7 @@ await addDoc(ref, payload as any);
                             </p>
                           </div>
                           <p className="text-sm font-semibold">
-                            ¥{(p.price ?? 0).toLocaleString("ja-JP")}
+                            ¥{formatPrice(p.price)}
                           </p>
                         </div>
 
