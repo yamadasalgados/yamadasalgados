@@ -575,6 +575,7 @@ const registerOrderInFirestore = async (channel: "whatsapp" | "messenger") => {
   }
 };
 
+
   const handleSendWhatsApp = async () => {
     if (!event) return;
 
