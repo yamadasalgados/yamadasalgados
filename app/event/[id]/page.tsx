@@ -1,19 +1,18 @@
 "use client";
-import { use, useEffect, useState } from "react";
+
+import { use, useEffect, useMemo, useState } from "react";
 import { db } from "@/lib/firebase";
 import {
+  collection,
   doc,
   getDoc,
-  addDoc,
-  collection,
-  serverTimestamp,
   getDocs,
   query,
   where,
-  runTransaction,
 } from "firebase/firestore";
 
-// 🔹 Mesmas categorias usadas no catálogo
+/* ------------------ TIPOS ------------------ */
+
 type CategoryType =
   | "Comida"
   | "Lanchonete"
@@ -25,34 +24,6 @@ type CategoryType =
 
 type ProductStatus = "active" | "inactive";
 
-const CATEGORY_ORDER: CategoryType[] = [
-  "Comida",
-  "Lanchonete",
-  "Assados",
-  "Sobremesa",
-  "Frutas-verduras",
-  "Festa",
-  "Congelados",
-];
-
-const openExternalLink = (url: string) => {
-  if (typeof window === "undefined") return;
-  // iOS Safari precisa usar location.href
-  const isIOS =
-    /iPad|iPhone|iPod/.test(navigator.userAgent) ||
-    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
-
-  if (isIOS) {
-    window.location.href = url;
-  } else {
-    window.open(url, "_blank", "noopener,noreferrer");
-  }
-};
-
-// 🔹 Listas para o “scroller” de horário (não usamos mais, mas manter não atrapalha)
-const HOURS = Array.from({ length: 24 }, (_, i) => i); // 0–23
-const MINUTES = [0, 10, 20, 30, 40, 50];
-
 type EventData = {
   title: string;
   region: string;
@@ -63,8 +34,8 @@ type EventData = {
   status: string;
   pickupLink?: string;
   pickupNote?: string;
-  messengerId?: string; // ID/username da página/conta Messenger
-  featuredProductNames?: string[]; // 🔹 destaques do carrossel (pode ser qualquer produto)
+  messengerId?: string;
+  featuredProductNames?: string[];
 };
 
 type ProductImageData = {
@@ -73,11 +44,10 @@ type ProductImageData = {
   extraImageUrls: string[];
   price?: number;
   category?: CategoryType;
-  // 🔹 campos de estoque, adaptando ao novo controle
   stockQty?: number;
   lowStockThreshold?: number;
   status?: ProductStatus;
-  productDocId?: string; // 🔹 id do documento em "products" para abater estoque
+  productDocId?: string;
 };
 
 type Props = {
@@ -87,6 +57,73 @@ type Props = {
 type DeliveryMode = "delivery" | "pickup" | "none";
 type DateOption = "event-date" | "other-date" | "no-preference";
 type TimeOption = "no-preference" | "custom";
+
+/* ------------------ CONSTANTES ------------------ */
+
+const CATEGORY_ORDER: CategoryType[] = [
+  "Comida",
+  "Lanchonete",
+  "Assados",
+  "Sobremesa",
+  "Frutas-verduras",
+  "Festa",
+  "Congelados",
+];
+
+const DEFAULT_LOW_STOCK = 3;
+
+/* ------------------ HELPERS ------------------ */
+
+const isIOS = () => {
+  if (typeof navigator === "undefined") return false;
+  return (
+    /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === "MacIntel" && (navigator as any).maxTouchPoints > 1)
+  );
+};
+
+const isInAppBrowser = () => {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent || "";
+  // Facebook / Instagram in-app browser
+  return /FBAN|FBAV|Instagram|Line\/|Twitter/.test(ua);
+};
+
+const openExternalLink = (url: string) => {
+  if (typeof window === "undefined") return;
+  if (isIOS()) window.location.href = url;
+  else window.open(url, "_blank", "noopener,noreferrer");
+};
+
+const chunk = <T,>(arr: T[], size: number) => {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+};
+
+const safeJson = async (resp: Response) => {
+  try {
+    return await resp.json();
+  } catch {
+    return null;
+  }
+};
+
+const fetchWithTimeout = async (
+  input: RequestInfo | URL,
+  init: RequestInit & { timeoutMs?: number } = {}
+) => {
+  const { timeoutMs = 12000, ...rest } = init;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, { ...rest, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
+/* ------------------ PAGE ------------------ */
 
 export default function EventPage({ params }: Props) {
   const { id } = use(params);
@@ -99,28 +136,22 @@ export default function EventPage({ params }: Props) {
   const [note, setNote] = useState("");
   const [quantities, setQuantities] = useState<Record<string, number>>({});
 
-  // 🔹 escolha de data de entrega
   const [dateOption, setDateOption] = useState<DateOption>("event-date");
   const [selectedDate, setSelectedDate] = useState<string>("");
   const [otherDate, setOtherDate] = useState<string>("");
 
-  // 🔹 modo de entrega (padrão: retirada no local)
   const [deliveryMode, setDeliveryMode] = useState<DeliveryMode>("pickup");
 
-  // 🔹 horário (agora com input numérico)
   const [timeOption, setTimeOption] = useState<TimeOption>("no-preference");
   const [selectedHour, setSelectedHour] = useState<number | null>(null);
   const [selectedMinute, setSelectedMinute] = useState<number | null>(null);
   const [timePickerOpen, setTimePickerOpen] = useState(false);
 
-  // 🔹 localização do cliente (link Google Maps)
   const [locationLink, setLocationLink] = useState<string>("");
   const [gettingLocation, setGettingLocation] = useState(false);
 
-  // 🔹 URL atual para compartilhamento
   const [currentUrl, setCurrentUrl] = useState("");
 
-  // 👇 states para imagens / galeria
   const [productsData, setProductsData] = useState<
     Record<string, ProductImageData>
   >({});
@@ -129,16 +160,46 @@ export default function EventPage({ params }: Props) {
     useState<ProductImageData | null>(null);
   const [galleryIndex, setGalleryIndex] = useState(0);
 
-  // lista de imagens da galeria atual
-  const galleryImages =
-    galleryProduct != null
-      ? ([
-          galleryProduct.imageUrl,
-          ...(galleryProduct.extraImageUrls || []),
-        ].filter((u) => !!u) as string[])
-      : [];
+  const galleryImages = useMemo(() => {
+    if (!galleryProduct) return [];
+    return [galleryProduct.imageUrl, ...(galleryProduct.extraImageUrls || [])]
+      .map((u) => (u || "").trim())
+      .filter(Boolean);
+  }, [galleryProduct]);
 
-  // 🔹 helper para copiar texto com fallback
+  const orderableNames = useMemo(() => {
+    if (!event) return [];
+    return Array.from(
+      new Set([...(event.productNames || []), ...(event.featuredProductNames || [])])
+    );
+  }, [event]);
+
+  const sortedEventProductNames = useMemo(() => {
+    if (!event) return [];
+    return [...(event.productNames || [])].sort((a, b) => a.localeCompare(b, "pt-BR"));
+  }, [event]);
+
+  const groupedByCategory = useMemo(() => {
+    return CATEGORY_ORDER.map((cat) => ({
+      cat,
+      items: sortedEventProductNames.filter((name) => productsData[name]?.category === cat),
+    }));
+  }, [sortedEventProductNames, productsData]);
+
+  const uncategorized = useMemo(() => {
+    return sortedEventProductNames.filter((name) => !productsData[name]?.category);
+  }, [sortedEventProductNames, productsData]);
+
+  const totalAmount = useMemo(() => {
+    return orderableNames.reduce((sum, p) => {
+      const q = quantities[p] || 0;
+      const price = productsData[p]?.price || 0;
+      return sum + q * price;
+    }, 0);
+  }, [orderableNames, quantities, productsData]);
+
+  /* ------------------ Clipboard ------------------ */
+
   const copyToClipboard = async (text: string) => {
     try {
       if (typeof navigator !== "undefined") {
@@ -150,32 +211,35 @@ export default function EventPage({ params }: Props) {
         }
       }
     } catch (err) {
-      console.error("Erro ao copiar para o clipboard:", err);
+      console.error("Erro ao copiar:", err);
     }
-
     if (typeof window !== "undefined") {
-      window.prompt(
-        "Copie a mensagem abaixo (Ctrl+C ou segure para selecionar) e cole onde quiser:",
-        text
-      );
+      window.prompt("Copie a mensagem abaixo e cole onde quiser:", text);
     }
   };
 
-  // 🔹 pega URL atual
+  /* ------------------ URL atual ------------------ */
+
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      setCurrentUrl(window.location.href);
-    }
+    if (typeof window !== "undefined") setCurrentUrl(window.location.href);
   }, []);
 
-  // 🔹 Carrega dados do evento + produtos
+  /* ------------------ Load event + products (OTIMIZADO) ------------------ */
+
   useEffect(() => {
-    const loadEvent = async () => {
+    let cancelled = false;
+
+    const load = async () => {
+      setLoading(true);
+      setNotFound(false);
+
       try {
+        // 1) Evento
         const ref = doc(db, "events", id);
         const snap = await getDoc(ref);
+
         if (!snap.exists()) {
-          setNotFound(true);
+          if (!cancelled) setNotFound(true);
           return;
         }
 
@@ -184,57 +248,50 @@ export default function EventPage({ params }: Props) {
         let deliveryDates: string[] = Array.isArray(data.deliveryDates)
           ? data.deliveryDates
           : [];
+
         let deliveryDateLabel: string =
           data.deliveryDateLabel || data.deliveryDate || "";
 
         if (!deliveryDateLabel) {
-          if (deliveryDates.length > 0) {
-            deliveryDateLabel = deliveryDates.join(" • ");
-          } else {
-            deliveryDateLabel = "Data a definir";
-          }
+          deliveryDateLabel =
+            deliveryDates.length > 0 ? deliveryDates.join(" • ") : "Data a definir";
         }
 
         if (deliveryDates.length === 0 && data.deliveryDate) {
           deliveryDates = [data.deliveryDate];
         }
 
-        const products: string[] = Array.isArray(data.productNames)
-          ? data.productNames
-          : [];
-        const status: string = data.status || "active";
-        const messengerId: string = data.messengerId || data.messenger || "";
+        const products: string[] = Array.isArray(data.productNames) ? data.productNames : [];
         const featured: string[] = Array.isArray(data.featuredProductNames)
           ? data.featuredProductNames.filter((n: any) => typeof n === "string")
           : [];
 
-        // 🔹 Nomes que podem ser pedidos: produtos do evento + destaques
-        const allOrderableNames = Array.from(
-          new Set([...products, ...featured])
-        );
+        const mergedNames = Array.from(new Set([...products, ...featured]));
 
-        setEvent({
+        const nextEvent: EventData = {
           title: data.title || "",
           region: data.region || "",
           deliveryDates,
           deliveryDateLabel,
           productNames: products,
           whatsapp: data.whatsapp || "",
-          status,
+          status: data.status || "active",
           pickupLink: data.pickupLink || "",
           pickupNote: data.pickupNote || "",
-          messengerId: messengerId || "",
+          messengerId: data.messengerId || data.messenger || "",
           featuredProductNames: featured,
-        });
+        };
 
-        // quantidades iniciais
+        if (cancelled) return;
+
+        setEvent(nextEvent);
+
+        // 2) Quantidades iniciais
         const initialQty: Record<string, number> = {};
-        allOrderableNames.forEach((p) => {
-          initialQty[p] = 0;
-        });
+        mergedNames.forEach((p) => (initialQty[p] = 0));
         setQuantities(initialQty);
 
-        // 📌 dia padrão: primeiro dia do evento (se existir)
+        // 3) Data default
         if (deliveryDates.length > 0) {
           setSelectedDate(deliveryDates[0]);
           setDateOption("event-date");
@@ -242,83 +299,76 @@ export default function EventPage({ params }: Props) {
           setDateOption("no-preference");
         }
 
-        // 🔍 Carrega imagens, preço, categoria e estoque dos produtos a partir da coleção "products"
+        // 4) Produtos em lote (chunks de 10 por limite do Firestore "in")
         const imagesMap: Record<string, ProductImageData> = {};
+        const chunks = chunk(mergedNames, 10);
 
-        await Promise.all(
-          allOrderableNames.map(async (name) => {
-            try {
-              const qProd = query(
-                collection(db, "products"),
-                where("name", "==", name)
-              );
-              const snapProducts = await getDocs(qProd);
-              if (!snapProducts.empty) {
-                const firstDoc = snapProducts.docs[0];
-                const docData = firstDoc.data() as any;
+        for (const part of chunks) {
+          const qProd = query(
+            collection(db, "products"),
+            where("name", "in", part)
+          );
+          const snapProducts = await getDocs(qProd);
 
-                const extras = Array.isArray(docData.extraImageUrls)
-                  ? (docData.extraImageUrls as unknown[])
-                      .filter((u) => typeof u === "string")
-                      .map((u) => (u as string).trim())
-                      .filter((u) => u.length > 0)
-                  : [];
+          snapProducts.forEach((d) => {
+            const docData = d.data() as any;
+            const name = String(docData.name || "").trim();
+            if (!name) return;
 
-                const stockRaw =
-                  typeof docData.stockQty === "number"
-                    ? docData.stockQty
-                    : null;
-                const lowStockRaw =
-                  typeof docData.lowStockThreshold === "number"
-                    ? docData.lowStockThreshold
-                    : null;
+            const extras = Array.isArray(docData.extraImageUrls)
+              ? (docData.extraImageUrls as unknown[])
+                  .filter((u) => typeof u === "string")
+                  .map((u) => (u as string).trim())
+                  .filter(Boolean)
+              : [];
 
-                const isOutOfStock =
-                  stockRaw !== null && Number.isFinite(stockRaw)
-                    ? stockRaw <= 0
-                    : false;
+            const stockRaw =
+              typeof docData.stockQty === "number" ? docData.stockQty : undefined;
+            const lowStockRaw =
+              typeof docData.lowStockThreshold === "number"
+                ? docData.lowStockThreshold
+                : undefined;
 
-                const rawStatus = (docData.status as ProductStatus) || "active";
-                const statusFinal: ProductStatus = isOutOfStock
-                  ? "inactive"
-                  : rawStatus;
+            const isOutOfStock =
+              typeof stockRaw === "number" && Number.isFinite(stockRaw) ? stockRaw <= 0 : false;
 
-                imagesMap[name] = {
-                  name,
-                  imageUrl: docData.imageUrl || "",
-                  extraImageUrls: extras,
-                  price:
-                    typeof docData.price === "number"
-                      ? docData.price
-                      : Number(docData.price || 0),
-                  category: (docData.category as CategoryType) || "Comida",
-                  stockQty: stockRaw ?? undefined,
-                  lowStockThreshold: lowStockRaw ?? undefined,
-                  status: statusFinal,
-                  productDocId: firstDoc.id,
-                };
-              }
-            } catch (e) {
-              console.error("Erro ao carregar imagens do produto:", name, e);
-            }
-          })
-        );
+            const rawStatus: ProductStatus = (docData.status as ProductStatus) || "active";
+            const statusFinal: ProductStatus = isOutOfStock ? "inactive" : rawStatus;
 
-        setProductsData(imagesMap);
+            imagesMap[name] = {
+              name,
+              imageUrl: String(docData.imageUrl || "").trim(),
+              extraImageUrls: extras,
+              price:
+                typeof docData.price === "number"
+                  ? docData.price
+                  : Number(docData.price || 0),
+              category: (docData.category as CategoryType) || "Comida",
+              stockQty: stockRaw,
+              lowStockThreshold: lowStockRaw,
+              status: statusFinal,
+              productDocId: d.id,
+            };
+          });
+        }
+
+        if (!cancelled) setProductsData(imagesMap);
       } catch (err) {
         console.error(err);
-        setNotFound(true);
+        if (!cancelled) setNotFound(true);
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     };
 
-    if (id) {
-      loadEvent();
-    }
+    if (id) load();
+    return () => {
+      cancelled = true;
+    };
   }, [id]);
 
-  // 🔹 controles tipo carrinho: - 0 + (respeitando estoque, se existir)
+  /* ------------------ Carrinho ------------------ */
+
   const adjustQuantity = (product: string, delta: number) => {
     setQuantities((prev) => {
       const current = prev[product] || 0;
@@ -327,22 +377,14 @@ export default function EventPage({ params }: Props) {
 
       const stock = productsData[product]?.stockQty;
       if (typeof stock === "number" && Number.isFinite(stock)) {
-        if (next > stock) {
-          return {
-            ...prev,
-            [product]: stock,
-          };
-        }
+        if (next > stock) return { ...prev, [product]: stock };
       }
-
-      return {
-        ...prev,
-        [product]: next,
-      };
+      return { ...prev, [product]: next };
     });
   };
 
-  // 🔹 Pega localização do cliente e monta link do Google Maps
+  /* ------------------ Location ------------------ */
+
   const handleGetLocation = () => {
     if (typeof navigator === "undefined" || !("geolocation" in navigator)) {
       alert("Seu navegador não suporta geolocalização.");
@@ -352,42 +394,29 @@ export default function EventPage({ params }: Props) {
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         const { latitude, longitude } = pos.coords;
-        const link = `https://www.google.com/maps?q=${latitude},${longitude}`;
-        setLocationLink(link);
+        setLocationLink(`https://www.google.com/maps?q=${latitude},${longitude}`);
         setGettingLocation(false);
       },
       (err) => {
         console.error("Erro ao obter localização:", err);
-        alert(
-          "Não foi possível obter sua localização. Verifique as permissões do navegador."
-        );
+        alert("Não foi possível obter sua localização. Verifique as permissões do navegador.");
         setGettingLocation(false);
       }
     );
   };
 
-  // 🔹 Descobre qual data final vai ser usada
+  /* ------------------ Data/Hora escolhidas ------------------ */
+
   const getChosenDate = () => {
     if (!event) return "";
-    if (dateOption === "event-date" && selectedDate) {
-      return selectedDate;
-    }
-    if (dateOption === "other-date" && otherDate) {
-      return otherDate;
-    }
-    if (dateOption === "no-preference") {
-      return "Sem preferência";
-    }
+    if (dateOption === "event-date" && selectedDate) return selectedDate;
+    if (dateOption === "other-date" && otherDate) return otherDate;
+    if (dateOption === "no-preference") return "Sem preferência";
     return event.deliveryDateLabel;
   };
 
-  // 🔹 Descobre qual horário final vai ser usado
   const getChosenTimeLabel = () => {
-    if (
-      timeOption === "no-preference" ||
-      selectedHour == null ||
-      selectedMinute == null
-    ) {
+    if (timeOption === "no-preference" || selectedHour == null || selectedMinute == null) {
       return "Sem preferência";
     }
     const h = String(selectedHour).padStart(2, "0");
@@ -395,22 +424,10 @@ export default function EventPage({ params }: Props) {
     return `${h}:${m}`;
   };
 
-  // 🔹 Nomes de produtos que podem ser pedidos (evento + destaques)
-  const getOrderableProductNames = () => {
-    if (!event) return [] as string[];
-    return Array.from(
-      new Set([
-        ...event.productNames,
-        ...(event.featuredProductNames || []),
-      ])
-    );
-  };
+  /* ------------------ Mensagem do pedido ------------------ */
 
-  // 🔹 Monta o texto do pedido
   const buildOrderMessage = () => {
     if (!event) return "";
-
-    const orderableNames = getOrderableProductNames();
 
     const selectedItems = orderableNames
       .filter((p) => (quantities[p] || 0) > 0)
@@ -441,50 +458,30 @@ export default function EventPage({ params }: Props) {
     if (deliveryMode === "delivery" && locationLink) {
       lines.push("", `Localização do cliente (Google Maps): ${locationLink}`);
     }
-
-    if (event.pickupLink) {
-      lines.push("", `Endereço / retirada da vendedora: ${event.pickupLink}`);
-    }
-
-    if (event.pickupNote) {
-      lines.push("", `Instruções da vendedora: ${event.pickupNote}`);
-    }
-
-    if (note.trim()) {
-      lines.push("", "Obs. do cliente:", note.trim());
-    }
-
-    // total da compra
-    const totalAmount = getOrderableProductNames().reduce((sum, p) => {
-      const q = quantities[p] || 0;
-      const price = productsData[p]?.price || 0;
-      return sum + q * price;
-    }, 0);
+    if (event.pickupLink) lines.push("", `Endereço / retirada da vendedora: ${event.pickupLink}`);
+    if (event.pickupNote) lines.push("", `Instruções da vendedora: ${event.pickupNote}`);
+    if (note.trim()) lines.push("", "Obs. do cliente:", note.trim());
 
     if (totalAmount > 0) {
-      lines.push(
-        "",
-        `Total estimado: ¥${totalAmount.toLocaleString("ja-JP")}`
-      );
+      lines.push("", `Total estimado: ¥${totalAmount.toLocaleString("ja-JP")}`);
     }
 
     return lines.join("\n");
   };
 
-  // 🔹 Limpa formulário depois de enviar
+  /* ------------------ Reset ------------------ */
+
   const resetForm = () => {
     if (!event) return;
 
     const resetQty: Record<string, number> = {};
-    getOrderableProductNames().forEach((p) => {
-      resetQty[p] = 0;
-    });
+    orderableNames.forEach((p) => (resetQty[p] = 0));
+
     setQuantities(resetQty);
     setCustomerName("");
     setNote("");
     setLocationLink("");
 
-    // padrões pós-envio
     setDeliveryMode("pickup");
     setTimeOption("no-preference");
     setSelectedHour(null);
@@ -500,80 +497,89 @@ export default function EventPage({ params }: Props) {
     }
   };
 
- // 🔹 Registra o pedido no Firestore (WhatsApp / Messenger) E ABATE ESTOQUE
-const registerOrderInFirestore = async (channel: "whatsapp" | "messenger") => {
-  if (!event) throw new Error("Evento não carregado.");
+  /* ------------------ Criar pedido (SÓ CLOUD FUNCTION) ------------------ */
 
-  const orderableNames = getOrderableProductNames();
-  const quantitiesClean: Record<string, number> = {};
+  const registerOrder = async (channel: "whatsapp" | "messenger") => {
+    if (!event) throw new Error("Evento não carregado.");
 
-  orderableNames.forEach((p) => {
-    const q = quantities[p] || 0;
-    if (q > 0) quantitiesClean[p] = q;
-  });
+    const quantitiesClean: Record<string, number> = {};
+    orderableNames.forEach((p) => {
+      const q = quantities[p] || 0;
+      if (q > 0) quantitiesClean[p] = q;
+    });
 
-  const totalItems = Object.values(quantitiesClean).reduce(
-    (sum, q) => sum + Number(q || 0),
-    0
-  );
+    const totalItems = Object.values(quantitiesClean).reduce((sum, q) => sum + Number(q || 0), 0);
+    if (totalItems === 0) throw new Error("Selecione pelo menos 1 produto com quantidade.");
 
-  if (totalItems === 0) {
-    throw new Error("Selecione pelo menos 1 produto com quantidade.");
-  }
+    const FUNCTION_URL = process.env.NEXT_PUBLIC_CREATE_ORDER_URL || "";
+    if (!FUNCTION_URL) {
+      throw new Error(
+        "Configuração ausente. Abra o link no Chrome/Safari (fora do Facebook/Instagram) ou avise a vendedora."
+      );
+    }
 
-  const FUNCTION_URL = process.env.NEXT_PUBLIC_CREATE_ORDER_URL || "";
-
-  // 🔥 Importante: se não tiver URL, NÃO tenta Firestore (evita “permissions”)
-  if (!FUNCTION_URL) {
-    throw new Error(
-      "Configuração ausente. Abra o link no navegador (Chrome/Safari) ou avise a vendedora."
-    );
-  }
-
-  const chosenDate = getChosenDate();
-  const timeLabel = getChosenTimeLabel();
-
-  const resp = await fetch(FUNCTION_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+    const payload = {
       eventId: id,
       channel,
-      customerName,
-      note,
+      customerName: customerName || "",
+      note: note || "",
       deliveryMode,
-      deliveryDate: chosenDate,
-      deliveryTimeSlot: timeLabel,
+      deliveryDate: getChosenDate(),
+      deliveryTimeSlot: getChosenTimeLabel(),
       locationLink: deliveryMode === "delivery" ? locationLink || "" : "",
       quantities: quantitiesClean,
-    }),
-  });
+    };
 
-  const data = await resp.json().catch(() => null);
-
-  if (!resp.ok || !data?.ok) {
-    const msg = data?.error || "Erro ao registrar pedido.";
-    throw new Error(msg);
-  }
-
-  // Atualiza estoques se vierem
-  const updatedStocks: Record<string, number> = data?.updatedStocks || {};
-  if (Object.keys(updatedStocks).length > 0) {
-    setProductsData((prev) => {
-      const next = { ...prev };
-      for (const [name, newStock] of Object.entries(updatedStocks)) {
-        const info = next[name];
-        if (!info) continue;
-        next[name] = {
-          ...info,
-          stockQty: newStock,
-          status: newStock <= 0 ? "inactive" : info.status,
-        };
+    let resp: Response;
+    try {
+      resp = await fetchWithTimeout(FUNCTION_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        timeoutMs: 12000,
+      });
+    } catch (err: any) {
+      // In-app browser costuma falhar/abortar fetch
+      if (isInAppBrowser()) {
+        throw new Error(
+          "O navegador do Facebook/Instagram pode bloquear o envio. Abra o link no Chrome/Safari e tente novamente."
+        );
       }
-      return next;
-    });
-  }
-};
+      throw new Error(err?.message || "Falha de rede ao registrar pedido.");
+    }
+
+    const data = await safeJson(resp);
+
+    if (!resp.ok || !data?.ok) {
+      const msg = data?.error || "Erro ao registrar pedido.";
+      // Mensagem especial p/ in-app browser
+      if (isInAppBrowser() && /permission|insufficient|missing/i.test(msg)) {
+        throw new Error(
+          "O navegador do Facebook/Instagram bloqueou permissões. Abra este link no Chrome/Safari e tente novamente."
+        );
+      }
+      throw new Error(msg);
+    }
+
+    const updatedStocks: Record<string, number> = data?.updatedStocks || {};
+    if (Object.keys(updatedStocks).length > 0) {
+      setProductsData((prev) => {
+        const next = { ...prev };
+        for (const [name, newStock] of Object.entries(updatedStocks)) {
+          const info = next[name];
+          if (!info) continue;
+          next[name] = {
+            ...info,
+            stockQty: newStock,
+            status: newStock <= 0 ? "inactive" : info.status,
+          };
+        }
+        return next;
+      });
+    }
+  };
+
+  /* ------------------ Enviar WhatsApp/Messenger ------------------ */
 
   const handleSendWhatsApp = async () => {
     if (!event) return;
@@ -583,9 +589,7 @@ const registerOrderInFirestore = async (channel: "whatsapp" | "messenger") => {
       return;
     }
 
-    const hasItems = getOrderableProductNames().some(
-      (p) => (quantities[p] || 0) > 0
-    );
+    const hasItems = orderableNames.some((p) => (quantities[p] || 0) > 0);
     if (!hasItems) {
       alert("Selecione pelo menos 1 produto com quantidade.");
       return;
@@ -597,11 +601,11 @@ const registerOrderInFirestore = async (channel: "whatsapp" | "messenger") => {
     const url = `https://wa.me/${phone}?text=${encoded}`;
 
     try {
-      await registerOrderInFirestore("whatsapp");
+      await registerOrder("whatsapp");
       resetForm();
       openExternalLink(url);
     } catch (err: any) {
-      console.error("Erro ao registrar pedido:", err);
+      console.error(err);
       alert(err?.message || "Erro ao registrar pedido. Tente novamente.");
     }
   };
@@ -614,9 +618,7 @@ const registerOrderInFirestore = async (channel: "whatsapp" | "messenger") => {
       return;
     }
 
-    const hasItems = getOrderableProductNames().some(
-      (p) => (quantities[p] || 0) > 0
-    );
+    const hasItems = orderableNames.some((p) => (quantities[p] || 0) > 0);
     if (!hasItems) {
       alert("Selecione pelo menos 1 produto com quantidade.");
       return;
@@ -627,34 +629,31 @@ const registerOrderInFirestore = async (channel: "whatsapp" | "messenger") => {
     const url = `https://m.me/${event.messengerId}?text=${encoded}`;
 
     try {
-      await registerOrderInFirestore("messenger");
+      await registerOrder("messenger");
       resetForm();
       openExternalLink(url);
     } catch (err: any) {
-      console.error("Erro ao registrar pedido:", err);
+      console.error(err);
       alert(err?.message || "Erro ao registrar pedido. Tente novamente.");
     }
   };
 
-  // 🔹 Texto base para compartilhar evento
+  /* ------------------ Compartilhar ------------------ */
+
   const buildShareText = () =>
-    event
-      ? `Dá uma olhada nesse evento de salgados: ${event.title}`
-      : "Veja este evento de salgados!";
+    event ? `Dá uma olhada nesse evento de salgados: ${event.title}` : "Veja este evento de salgados!";
 
   const handleShareEventWhatsApp = () => {
     if (!currentUrl) return;
     const text = `${buildShareText()}\n${currentUrl}`;
-    const encoded = encodeURIComponent(text);
-    const url = `https://wa.me/?text=${encoded}`;
-    window.open(url, "_blank");
+    openExternalLink(`https://wa.me/?text=${encodeURIComponent(text)}`);
   };
 
   const handleShareEventLine = () => {
     if (!currentUrl) return;
-    const encodedUrl = encodeURIComponent(currentUrl);
-    const url = `https://social-plugins.line.me/lineit/share?url=${encodedUrl}`;
-    window.open(url, "_blank");
+    openExternalLink(
+      `https://social-plugins.line.me/lineit/share?url=${encodeURIComponent(currentUrl)}`
+    );
   };
 
   const handleShareEventMessenger = async () => {
@@ -666,12 +665,8 @@ const registerOrderInFirestore = async (channel: "whatsapp" | "messenger") => {
     const deepLink = `fb-messenger://share?link=${encodedUrl}`;
     const webFallback = `https://www.facebook.com/sharer/sharer.php?u=${encodedUrl}`;
 
-    // tenta app
     openExternalLink(deepLink);
-    // fallback web
-    setTimeout(() => {
-      openExternalLink(webFallback);
-    }, 600);
+    setTimeout(() => openExternalLink(webFallback), 600);
   };
 
   const handleCopyEventLink = async () => {
@@ -679,6 +674,8 @@ const registerOrderInFirestore = async (channel: "whatsapp" | "messenger") => {
     const text = `${buildShareText()}\n${currentUrl}`;
     await copyToClipboard(text);
   };
+
+  /* ------------------ UI States ------------------ */
 
   if (loading) {
     return (
@@ -711,40 +708,15 @@ const registerOrderInFirestore = async (channel: "whatsapp" | "messenger") => {
           </p>
         </header>
         <p className="text-sm text-red-600">
-          Este evento foi cancelado. Entre em contato com a vendedora para mais
-          informações.
+          Este evento foi cancelado. Entre em contato com a vendedora para mais informações.
         </p>
       </main>
     );
   }
 
-  // 🔹 Garante ordem alfabética dos nomes (apenas produtos do evento, para o grid principal)
-  const sortedProductNames = [...event.productNames].sort((a, b) =>
-    a.localeCompare(b, "pt-BR")
-  );
-
-  // 🔹 Agrupa por categoria usando os dados de productsData
-  const groupedByCategory = CATEGORY_ORDER.map((cat) => ({
-    cat,
-    items: sortedProductNames.filter(
-      (name) => productsData[name]?.category === cat
-    ),
-  }));
-
-  // produtos que não têm categoria (fallback)
-  const uncategorized = sortedProductNames.filter(
-    (name) => !productsData[name]?.category
-  );
-
-  // 🔹 Destaques (carrossel) – pode ter produtos fora do evento
   const featuredProducts = event.featuredProductNames || [];
 
-  // total estimado no front (usando todos os produtos que podem ser pedidos)
-  const totalAmount = getOrderableProductNames().reduce((sum, p) => {
-    const q = quantities[p] || 0;
-    const price = productsData[p]?.price || 0;
-    return sum + q * price;
-  }, 0);
+  /* ------------------ RENDER ------------------ */
 
   return (
     <main className="space-y-6">
@@ -760,29 +732,30 @@ const registerOrderInFirestore = async (channel: "whatsapp" | "messenger") => {
         {event.pickupLink && (
           <p className="text-xs text-blue-700">
             Local de retirada:{" "}
-            <a
-              href={event.pickupLink}
-              target="_blank"
-              rel="noreferrer"
-              className="underline"
-            >
+            <a href={event.pickupLink} target="_blank" rel="noreferrer" className="underline">
               ver mapa
             </a>
           </p>
         )}
 
         {event.pickupNote && (
-          <p className="text-xs text-neutral-600">
-            Instruções da vendedora: {event.pickupNote}
-          </p>
+          <p className="text-xs text-neutral-600">Instruções da vendedora: {event.pickupNote}</p>
         )}
 
-        <p className="text-xs text-neutral-500">
-          Este link é exclusivo deste evento e desta vendedora.
-        </p>
+        <p className="text-xs text-neutral-500">Este link é exclusivo deste evento e desta vendedora.</p>
+
+        {isInAppBrowser() && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+            <p className="font-semibold">⚠️ Atenção</p>
+            <p>
+              Você está abrindo no navegador do Facebook/Instagram. Se der erro ao enviar, abra este link no
+              Chrome/Safari.
+            </p>
+          </div>
+        )}
       </header>
 
-      {/* CARROSSEL DE DESTAQUES */}
+      {/* DESTAQUES */}
       {featuredProducts.length > 0 && (
         <section className="space-y-2">
           <h2 className="font-bold text-xl">🔥 Destaques do evento 🔥</h2>
@@ -791,21 +764,14 @@ const registerOrderInFirestore = async (channel: "whatsapp" | "messenger") => {
               const info = productsData[name];
               const qty = quantities[name] ?? 0;
 
-              const stock =
-                typeof info?.stockQty === "number" ? info.stockQty : null;
-              const isOutOfStock =
-                stock !== null && Number.isFinite(stock) && stock <= 0;
+              const stock = typeof info?.stockQty === "number" ? info.stockQty : null;
+              const isOutOfStock = stock !== null && Number.isFinite(stock) && stock <= 0;
 
               const lowStockThreshold =
-                typeof info?.lowStockThreshold === "number"
-                  ? info.lowStockThreshold
-                  : 3;
+                typeof info?.lowStockThreshold === "number" ? info.lowStockThreshold : DEFAULT_LOW_STOCK;
 
               const showFewLeft =
-                stock !== null &&
-                Number.isFinite(stock) &&
-                stock > 0 &&
-                stock <= lowStockThreshold;
+                stock !== null && Number.isFinite(stock) && stock > 0 && stock <= lowStockThreshold;
 
               return (
                 <div
@@ -816,48 +782,35 @@ const registerOrderInFirestore = async (channel: "whatsapp" | "messenger") => {
                     <button
                       type="button"
                       onClick={() => {
-                        if (info) {
-                          setGalleryProduct(info);
-                          setGalleryIndex(0);
-                        }
+                        setGalleryProduct(info);
+                        setGalleryIndex(0);
                       }}
                       className="w-full rounded-md overflow-hidden bg-neutral-100 aspect-[4/3] border border-neutral-200"
                     >
                       {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={info.imageUrl}
-                        alt={name}
-                        className="h-full w-full object-cover"
-                      />
+                      <img src={info.imageUrl} alt={name} className="h-full w-full object-cover" />
                     </button>
                   ) : (
-                    <div className="w-full rounded-md overflow-hidden bg-neutral-100 aspect-[4/3] border border-dashed border-neutral-200 flex items-center justify-center text-[11px] text-neutral-400">
+                    <div className="w-full rounded-md bg-neutral-100 aspect-[4/3] border border-dashed border-neutral-200 flex items-center justify-center text-[11px] text-neutral-400">
                       Sem imagem
                     </div>
                   )}
 
                   <div className="space-y-0.5">
-                    <p className="text-xs font-semibold leading-snug truncate">
-                      {name}
-                    </p>
+                    <p className="text-xs font-semibold leading-snug truncate">{name}</p>
                     {info?.price != null && !Number.isNaN(info.price) && (
-                      <p className="text-xs text-neutral-600">
-                        ¥{info.price.toLocaleString("ja-JP")}
-                      </p>
+                      <p className="text-xs text-neutral-600">¥{info.price.toLocaleString("ja-JP")}</p>
                     )}
 
                     {stock !== null && (
                       <p className="text-[11px] text-neutral-600">
                         {stock <= 0 ? (
-                          <span className="text-red-600 font-semibold">
-                            Esgotado
-                          </span>
+                          <span className="text-red-600 font-semibold">Esgotado</span>
                         ) : (
                           <>
                             Disponível:{" "}
                             <span className="font-semibold">
-                              {stock} unidade
-                              {stock > 1 ? "s" : ""}
+                              {stock} unidade{stock > 1 ? "s" : ""}
                             </span>
                           </>
                         )}
@@ -872,9 +825,7 @@ const registerOrderInFirestore = async (channel: "whatsapp" | "messenger") => {
                   </div>
 
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-[11px] text-neutral-600">
-                      Quantidade
-                    </span>
+                    <span className="text-[11px] text-neutral-600">Quantidade</span>
                     <div className="inline-flex items-center gap-2">
                       <button
                         type="button"
@@ -883,15 +834,11 @@ const registerOrderInFirestore = async (channel: "whatsapp" | "messenger") => {
                       >
                         -
                       </button>
-                      <span className="min-w-[1.5rem] text-center text-sm">
-                        {qty}
-                      </span>
+                      <span className="min-w-[1.5rem] text-center text-sm">{qty}</span>
                       <button
                         type="button"
                         disabled={isOutOfStock}
-                        onClick={() => {
-                          if (!isOutOfStock) adjustQuantity(name, 1);
-                        }}
+                        onClick={() => !isOutOfStock && adjustQuantity(name, 1)}
                         className={`h-7 w-7 rounded-full border text-sm flex items-center justify-center ${
                           isOutOfStock
                             ? "border-neutral-200 text-neutral-300 cursor-not-allowed"
@@ -909,71 +856,50 @@ const registerOrderInFirestore = async (channel: "whatsapp" | "messenger") => {
         </section>
       )}
 
-      {/* PRODUTOS EM GRID, AGRUPADOS POR CATEGORIA */}
+      {/* PRODUTOS */}
       <section className="space-y-4">
         <h2 className="font-semibold text-lg">Produtos disponíveis</h2>
-        {sortedProductNames.length === 0 ? (
-          <p className="text-sm text-neutral-600">
-            Nenhum produto configurado para este evento.
-          </p>
+
+        {sortedEventProductNames.length === 0 ? (
+          <p className="text-sm text-neutral-600">Nenhum produto configurado para este evento.</p>
         ) : (
           <>
             {groupedByCategory.map(({ cat, items }) =>
               items.length === 0 ? null : (
                 <div key={cat} className="space-y-2">
-                  <h3 className="text-sm font-semibold text-neutral-800">
-                    {cat}
-                  </h3>
+                  <h3 className="text-sm font-semibold text-neutral-800">{cat}</h3>
                   <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
                     {items.map((product) => {
                       const info = productsData[product];
                       const qty = quantities[product] ?? 0;
 
-                      const stock =
-                        typeof info?.stockQty === "number"
-                          ? info.stockQty
-                          : null;
-                      const isOutOfStock =
-                        stock !== null &&
-                        Number.isFinite(stock) &&
-                        stock <= 0;
+                      const stock = typeof info?.stockQty === "number" ? info.stockQty : null;
+                      const isOutOfStock = stock !== null && Number.isFinite(stock) && stock <= 0;
 
                       const lowStockThreshold =
                         typeof info?.lowStockThreshold === "number"
                           ? info.lowStockThreshold
-                          : 3;
+                          : DEFAULT_LOW_STOCK;
 
                       const showFewLeft =
-                        stock !== null &&
-                        Number.isFinite(stock) &&
-                        stock > 0 &&
-                        stock <= lowStockThreshold;
+                        stock !== null && Number.isFinite(stock) && stock > 0 && stock <= lowStockThreshold;
 
                       return (
-                        <div
-                          key={product}
-                          className="border rounded-xl bg-white p-3 flex flex-col gap-2 text-sm"
-                        >
+                        <div key={product} className="border rounded-xl bg-white p-3 flex flex-col gap-2 text-sm">
                           {info?.imageUrl ? (
                             <button
                               type="button"
                               onClick={() => {
-                                if (info) {
-                                  setGalleryProduct(info);
-                                  setGalleryIndex(0);
-                                }
+                                setGalleryProduct(info);
+                                setGalleryIndex(0);
                               }}
                               className="w-full rounded-md overflow-hidden bg-neutral-100 aspect-[4/3] border border-neutral-200"
                             >
                               {/* eslint-disable-next-line @next/next/no-img-element */}
-                              <img
-                                src={info.imageUrl}
-                                alt={product}
-                                className="h-full w-full object-cover"
-                              />
+                              <img src={info.imageUrl} alt={product} className="h-full w-full object-cover" />
                             </button>
                           ) : (
-                            <div className="w-full rounded-md overflow-hidden bg-neutral-100 aspect-[4/3] border border-dashed border-neutral-200 flex items-center justify-center text-[11px] text-neutral-400">
+                            <div className="w-full rounded-md bg-neutral-100 aspect-[4/3] border border-dashed border-neutral-200 flex items-center justify-center text-[11px] text-neutral-400">
                               Sem imagem
                             </div>
                           )}
@@ -982,38 +908,30 @@ const registerOrderInFirestore = async (channel: "whatsapp" | "messenger") => {
                             type="button"
                             className="text-left flex-1 space-y-0.5"
                             onClick={() => {
-                              if (
-                                info?.imageUrl ||
-                                info?.extraImageUrls?.length
-                              ) {
+                              if (info?.imageUrl || info?.extraImageUrls?.length) {
                                 setGalleryProduct(info);
                                 setGalleryIndex(0);
                               }
                             }}
                           >
-                            <span className="block text-xs font-semibold leading-snug">
-                              {product}
-                            </span>
-                            {info?.price != null &&
-                              !Number.isNaN(info.price) && (
-                                <span className="block text-xs text-neutral-600">
-                                  ¥{info.price.toLocaleString("ja-JP")}
-                                </span>
-                              )}
+                            <span className="block text-xs font-semibold leading-snug">{product}</span>
+
+                            {info?.price != null && !Number.isNaN(info.price) && (
+                              <span className="block text-xs text-neutral-600">
+                                ¥{info.price.toLocaleString("ja-JP")}
+                              </span>
+                            )}
 
                             {stock !== null && (
                               <>
                                 <span className="block text-[11px] text-neutral-600">
                                   {stock <= 0 ? (
-                                    <span className="text-red-600 font-semibold">
-                                      Esgotado
-                                    </span>
+                                    <span className="text-red-600 font-semibold">Esgotado</span>
                                   ) : (
                                     <>
                                       Disponível:{" "}
                                       <span className="font-semibold">
-                                        {stock} unidade
-                                        {stock > 1 ? "s" : ""}
+                                        {stock} unidade{stock > 1 ? "s" : ""}
                                       </span>
                                     </>
                                   )}
@@ -1028,9 +946,7 @@ const registerOrderInFirestore = async (channel: "whatsapp" | "messenger") => {
                           </button>
 
                           <div className="flex items-center justify-between gap-2">
-                            <span className="text-[11px] text-neutral-600">
-                              Quantidade
-                            </span>
+                            <span className="text-[11px] text-neutral-600">Quantidade</span>
                             <div className="inline-flex items-center gap-2">
                               <button
                                 type="button"
@@ -1039,16 +955,11 @@ const registerOrderInFirestore = async (channel: "whatsapp" | "messenger") => {
                               >
                                 -
                               </button>
-                              <span className="min-w-[1.5rem] text-center text-sm">
-                                {qty}
-                              </span>
+                              <span className="min-w-[1.5rem] text-center text-sm">{qty}</span>
                               <button
                                 type="button"
                                 disabled={isOutOfStock}
-                                onClick={() => {
-                                  if (!isOutOfStock)
-                                    adjustQuantity(product, 1);
-                                }}
+                                onClick={() => !isOutOfStock && adjustQuantity(product, 1)}
                                 className={`h-7 w-7 rounded-full border text-sm flex items-center justify-center ${
                                   isOutOfStock
                                     ? "border-neutral-200 text-neutral-300 cursor-not-allowed"
@@ -1069,83 +980,59 @@ const registerOrderInFirestore = async (channel: "whatsapp" | "messenger") => {
 
             {uncategorized.length > 0 && (
               <div className="space-y-2">
-                <h3 className="text-sm font-semibold text-neutral-800">
-                  Outros
-                </h3>
+                <h3 className="text-sm font-semibold text-neutral-800">Outros</h3>
                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
                   {uncategorized.map((product) => {
                     const info = productsData[product];
                     const qty = quantities[product] ?? 0;
 
-                    const stock =
-                      typeof info?.stockQty === "number"
-                        ? info.stockQty
-                        : null;
-                    const isOutOfStock =
-                      stock !== null &&
-                      Number.isFinite(stock) &&
-                      stock <= 0;
+                    const stock = typeof info?.stockQty === "number" ? info.stockQty : null;
+                    const isOutOfStock = stock !== null && Number.isFinite(stock) && stock <= 0;
 
                     const lowStockThreshold =
                       typeof info?.lowStockThreshold === "number"
                         ? info.lowStockThreshold
-                        : 3;
+                        : DEFAULT_LOW_STOCK;
 
                     const showFewLeft =
-                      stock !== null &&
-                      Number.isFinite(stock) &&
-                      stock > 0 &&
-                      stock <= lowStockThreshold;
+                      stock !== null && Number.isFinite(stock) && stock > 0 && stock <= lowStockThreshold;
 
                     return (
-                      <div
-                        key={product}
-                        className="border rounded-xl bg-white p-3 flex flex-col gap-2 text-sm"
-                      >
+                      <div key={product} className="border rounded-xl bg-white p-3 flex flex-col gap-2 text-sm">
                         {info?.imageUrl ? (
                           <button
                             type="button"
                             onClick={() => {
-                              if (info) {
-                                setGalleryProduct(info);
-                                setGalleryIndex(0);
-                              }
+                              setGalleryProduct(info);
+                              setGalleryIndex(0);
                             }}
                             className="w-full rounded-md overflow-hidden bg-neutral-100 aspect-[4/3] border border-neutral-200"
                           >
                             {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img
-                              src={info.imageUrl}
-                              alt={product}
-                              className="h-full w-full object-cover"
-                            />
+                            <img src={info.imageUrl} alt={product} className="h-full w-full object-cover" />
                           </button>
                         ) : (
-                          <div className="w-full rounded-md overflow-hidden bg-neutral-100 aspect-[4/3] border border-dashed border-neutral-200 flex items-center justify-center text-[11px] text-neutral-400">
+                          <div className="w-full rounded-md bg-neutral-100 aspect-[4/3] border border-dashed border-neutral-200 flex items-center justify-center text-[11px] text-neutral-400">
                             Sem imagem
                           </div>
                         )}
-                        <span className="block text-xs font-semibold leading-snug">
-                          {product}
-                        </span>
+
+                        <span className="block text-xs font-semibold leading-snug">{product}</span>
+
                         {info?.price != null && !Number.isNaN(info.price) && (
-                          <span className="block text-xs text-neutral-600">
-                            ¥{info.price.toLocaleString("ja-JP")}
-                          </span>
+                          <span className="block text-xs text-neutral-600">¥{info.price.toLocaleString("ja-JP")}</span>
                         )}
+
                         {stock !== null && (
                           <>
                             <span className="block text-[11px] text-neutral-600">
                               {stock <= 0 ? (
-                                <span className="text-red-600 font-semibold">
-                                  Esgotado
-                                </span>
+                                <span className="text-red-600 font-semibold">Esgotado</span>
                               ) : (
                                 <>
                                   Disponível:{" "}
                                   <span className="font-semibold">
-                                    {stock} unidade
-                                    {stock > 1 ? "s" : ""}
+                                    {stock} unidade{stock > 1 ? "s" : ""}
                                   </span>
                                 </>
                               )}
@@ -1157,10 +1044,9 @@ const registerOrderInFirestore = async (channel: "whatsapp" | "messenger") => {
                             )}
                           </>
                         )}
+
                         <div className="flex items-center justify-between gap-2">
-                          <span className="text-[11px] text-neutral-600">
-                            Quantidade
-                          </span>
+                          <span className="text-[11px] text-neutral-600">Quantidade</span>
                           <div className="inline-flex items-center gap-2">
                             <button
                               type="button"
@@ -1169,16 +1055,11 @@ const registerOrderInFirestore = async (channel: "whatsapp" | "messenger") => {
                             >
                               -
                             </button>
-                            <span className="min-w-[1.5rem] text-center text-sm">
-                              {qty}
-                            </span>
+                            <span className="min-w-[1.5rem] text-center text-sm">{qty}</span>
                             <button
                               type="button"
                               disabled={isOutOfStock}
-                              onClick={() => {
-                                if (!isOutOfStock)
-                                  adjustQuantity(product, 1);
-                              }}
+                              onClick={() => !isOutOfStock && adjustQuantity(product, 1)}
                               className={`h-7 w-7 rounded-full border text-sm flex items-center justify-center ${
                                 isOutOfStock
                                   ? "border-neutral-200 text-neutral-300 cursor-not-allowed"
@@ -1199,11 +1080,11 @@ const registerOrderInFirestore = async (channel: "whatsapp" | "messenger") => {
         )}
       </section>
 
-      {/* DADOS DO CLIENTE + ENTREGA */}
+      {/* SEUS DADOS */}
       <section className="space-y-3 border rounded-md p-4 bg-white">
         <h2 className="font-semibold text-sm">Seus dados</h2>
+
         <div className="space-y-3">
-          {/* Nome */}
           <div className="space-y-1">
             <label className="text-xs block">Seu nome</label>
             <input
@@ -1214,16 +1095,14 @@ const registerOrderInFirestore = async (channel: "whatsapp" | "messenger") => {
             />
           </div>
 
-          {/* Escolha de data + horário */}
+          {/* Data + Hora */}
           <div className="space-y-2 border rounded-md p-3 bg-neutral-50">
             <h3 className="text-xs font-semibold">Escolha o dia de entrega:</h3>
 
-            {/* Datas do evento */}
             {event.deliveryDates.length > 0 && (
               <div className="flex flex-wrap gap-2">
                 {event.deliveryDates.map((d) => {
-                  const isSelected =
-                    dateOption === "event-date" && selectedDate === d;
+                  const isSelected = dateOption === "event-date" && selectedDate === d;
                   return (
                     <button
                       key={d}
@@ -1281,7 +1160,6 @@ const registerOrderInFirestore = async (channel: "whatsapp" | "messenger") => {
               </div>
             )}
 
-            {/* Picker de horário */}
             <div className="space-y-2 pt-3 border-t border-neutral-200">
               <h4 className="text-xs font-semibold">Horário de entrega</h4>
               <div className="flex flex-wrap items-center gap-2">
@@ -1300,6 +1178,7 @@ const registerOrderInFirestore = async (channel: "whatsapp" | "messenger") => {
                 >
                   Sem preferência
                 </button>
+
                 <button
                   type="button"
                   onClick={() => {
@@ -1316,7 +1195,7 @@ const registerOrderInFirestore = async (channel: "whatsapp" | "messenger") => {
                 >
                   Escolher horário
                 </button>
-                {/* Horário escolhido */}
+
                 <span className="px-3 py-1 rounded-full text-xs bg-neutral-100 border border-neutral-200 text-neutral-800">
                   {getChosenTimeLabel()}
                 </span>
@@ -1327,6 +1206,7 @@ const registerOrderInFirestore = async (channel: "whatsapp" | "messenger") => {
           {/* Modo de entrega */}
           <div className="space-y-2 border rounded-md p-3 bg-neutral-50">
             <h3 className="text-xs font-semibold">Modo de entrega:</h3>
+
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"
@@ -1339,6 +1219,7 @@ const registerOrderInFirestore = async (channel: "whatsapp" | "messenger") => {
               >
                 Entrega
               </button>
+
               <button
                 type="button"
                 onClick={() => setDeliveryMode("pickup")}
@@ -1350,6 +1231,7 @@ const registerOrderInFirestore = async (channel: "whatsapp" | "messenger") => {
               >
                 Retirada no local
               </button>
+
               <button
                 type="button"
                 onClick={() => setDeliveryMode("none")}
@@ -1363,7 +1245,6 @@ const registerOrderInFirestore = async (channel: "whatsapp" | "messenger") => {
               </button>
             </div>
 
-            {/* Entrega: localização + observação */}
             {deliveryMode === "delivery" && (
               <div className="space-y-3 pt-2 border-t border-neutral-200">
                 <div className="space-y-1">
@@ -1377,9 +1258,7 @@ const registerOrderInFirestore = async (channel: "whatsapp" | "messenger") => {
                       disabled={gettingLocation}
                       className="px-3 py-1 rounded-full text-xs border bg-white hover:bg-neutral-100 disabled:opacity-60"
                     >
-                      {gettingLocation
-                        ? "Obtendo localização..."
-                        : "Usar minha localização"}
+                      {gettingLocation ? "Obtendo localização..." : "Usar minha localização"}
                     </button>
                     {locationLink && (
                       <a
@@ -1408,7 +1287,6 @@ const registerOrderInFirestore = async (channel: "whatsapp" | "messenger") => {
               </div>
             )}
 
-            {/* Retirada: mostrar apenas link do mapa da vendedora */}
             {deliveryMode === "pickup" && (
               <div className="space-y-1 pt-2 border-t border-neutral-200">
                 <p className="text-[11px] text-neutral-600">
@@ -1425,19 +1303,15 @@ const registerOrderInFirestore = async (channel: "whatsapp" | "messenger") => {
                   </a>
                 ) : (
                   <p className="text-[11px] text-neutral-500">
-                    A vendedora ainda não definiu o link de retirada. Confirme
-                    diretamente com ela.
+                    A vendedora ainda não definiu o link de retirada.
                   </p>
                 )}
               </div>
             )}
 
-            {/* A combinar: apenas observação */}
             {deliveryMode === "none" && (
               <div className="space-y-1 pt-2 border-t border-neutral-200">
-                <label className="text-xs block">
-                  Observação (como combinar a entrega) – opcional
-                </label>
+                <label className="text-xs block">Observação – opcional</label>
                 <textarea
                   className="w-full border rounded-md px-3 py-2 text-sm min-h-[80px]"
                   value={note}
@@ -1450,14 +1324,12 @@ const registerOrderInFirestore = async (channel: "whatsapp" | "messenger") => {
         </div>
       </section>
 
-      {/* RESUMO E BOTÕES DE ENVIO */}
+      {/* RESUMO */}
       <section className="space-y-3">
         {totalAmount > 0 && (
           <p className="text-sm font-semibold text-neutral-800">
             Total estimado do pedido:{" "}
-              <span className="text-green-700">
-                ¥{totalAmount.toLocaleString("ja-JP")}
-              </span>
+            <span className="text-green-700">¥{totalAmount.toLocaleString("ja-JP")}</span>
           </p>
         )}
 
@@ -1478,15 +1350,12 @@ const registerOrderInFirestore = async (channel: "whatsapp" | "messenger") => {
         )}
 
         <p className="mt-2 text-xs text-neutral-500">
-          Ao clicar, abriremos o aplicativo escolhido com seu pedido já
-          preenchido para a vendedora deste evento.
+          Ao clicar, abriremos o aplicativo escolhido com seu pedido já preenchido.
         </p>
 
-        {/* COMPARTILHAR EVENTO – sempre visível */}
+        {/* Compartilhar */}
         <div className="mt-4 border rounded-lg p-3 bg-neutral-50 space-y-2">
-          <p className="text-xs text-neutral-700">
-            Compartilhe este evento com seus amigos:
-          </p>
+          <p className="text-xs text-neutral-700">Compartilhe este evento com seus amigos:</p>
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
@@ -1518,13 +1387,12 @@ const registerOrderInFirestore = async (channel: "whatsapp" | "messenger") => {
             </button>
           </div>
           <p className="text-[11px] text-neutral-500">
-            Em alguns aparelhos o texto será apenas copiado. É só abrir a
-            conversa e colar.
+            Em alguns aparelhos o texto será apenas copiado. É só abrir a conversa e colar.
           </p>
         </div>
       </section>
 
-      {/* MODAL DO HORÁRIO – agora com input numérico */}
+      {/* MODAL HORA */}
       {timePickerOpen && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 px-4">
           <div className="w-full max-w-xs rounded-xl bg-white p-4 space-y-4 shadow-lg">
@@ -1542,10 +1410,8 @@ const registerOrderInFirestore = async (channel: "whatsapp" | "messenger") => {
             <div className="space-y-3">
               <div className="flex gap-3">
                 <div className="flex-1 space-y-1">
-                  <label className="text-[11px] text-neutral-600">
-                    Hora (0–23)
-                  </label>
-                 <input
+                  <label className="text-[11px] text-neutral-600">Hora (0–23)</label>
+                  <input
                     type="number"
                     inputMode="numeric"
                     pattern="\d*"
@@ -1555,21 +1421,16 @@ const registerOrderInFirestore = async (channel: "whatsapp" | "messenger") => {
                     value={selectedHour ?? ""}
                     onChange={(e) => {
                       const val = e.target.value;
-                      if (val === "") {
-                        setSelectedHour(null);
-                        return;
-                      }
+                      if (val === "") return setSelectedHour(null);
                       const n = Number(val);
-                      if (Number.isNaN(n)) return;
-                      if (n < 0 || n > 23) return;
+                      if (!Number.isFinite(n) || n < 0 || n > 23) return;
                       setSelectedHour(n);
                     }}
                   />
                 </div>
+
                 <div className="flex-1 space-y-1">
-                  <label className="text-[11px] text-neutral-600">
-                    Minutos (0–59)
-                  </label>
+                  <label className="text-[11px] text-neutral-600">Minutos (0–59)</label>
                   <input
                     type="number"
                     inputMode="numeric"
@@ -1580,21 +1441,16 @@ const registerOrderInFirestore = async (channel: "whatsapp" | "messenger") => {
                     value={selectedMinute ?? ""}
                     onChange={(e) => {
                       const val = e.target.value;
-                      if (val === "") {
-                        setSelectedMinute(null);
-                        return;
-                      }
+                      if (val === "") return setSelectedMinute(null);
                       const n = Number(val);
-                      if (Number.isNaN(n)) return;
-                      if (n < 0 || n > 59) return;
+                      if (!Number.isFinite(n) || n < 0 || n > 59) return;
                       setSelectedMinute(n);
                     }}
                   />
                 </div>
               </div>
-              <p className="text-[11px] text-neutral-500">
-                Exemplo: 10:00, 15:30, 19:45
-              </p>
+
+              <p className="text-[11px] text-neutral-500">Exemplo: 10:00, 15:30, 19:45</p>
             </div>
 
             <div className="flex justify-end gap-2 pt-1">
@@ -1613,7 +1469,6 @@ const registerOrderInFirestore = async (channel: "whatsapp" | "messenger") => {
               <button
                 type="button"
                 onClick={() => {
-                  // se usuário não preencheu, define um padrão
                   if (selectedHour == null) setSelectedHour(10);
                   if (selectedMinute == null) setSelectedMinute(0);
                   setTimeOption("custom");
@@ -1628,7 +1483,7 @@ const registerOrderInFirestore = async (channel: "whatsapp" | "messenger") => {
         </div>
       )}
 
-      {/* MODAL DE GALERIA DE IMAGENS */}
+      {/* GALERIA */}
       {galleryProduct && galleryImages.length > 0 && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/50 px-4">
           <div className="max-w-sm w-full bg-white rounded-xl p-4 space-y-3">
@@ -1642,6 +1497,7 @@ const registerOrderInFirestore = async (channel: "whatsapp" | "messenger") => {
                 Fechar
               </button>
             </div>
+
             <div className="w-full rounded-lg overflow-hidden bg-neutral-100 aspect-[4/3]">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
@@ -1650,6 +1506,7 @@ const registerOrderInFirestore = async (channel: "whatsapp" | "messenger") => {
                 className="h-full w-full object-cover"
               />
             </div>
+
             {galleryImages.length > 1 && (
               <div className="flex gap-2 overflow-x-auto pt-1">
                 {galleryImages.map((img, idx) => (
@@ -1658,17 +1515,11 @@ const registerOrderInFirestore = async (channel: "whatsapp" | "messenger") => {
                     type="button"
                     onClick={() => setGalleryIndex(idx)}
                     className={`h-12 w-12 rounded-md overflow-hidden border flex-shrink-0 ${
-                      idx === galleryIndex
-                        ? "border-orange-500"
-                        : "border-neutral-200"
+                      idx === galleryIndex ? "border-orange-500" : "border-neutral-200"
                     }`}
                   >
                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={img}
-                      alt={`Foto ${idx + 1}`}
-                      className="h-full w-full object-cover"
-                    />
+                    <img src={img} alt={`Foto ${idx + 1}`} className="h-full w-full object-cover" />
                   </button>
                 ))}
               </div>
