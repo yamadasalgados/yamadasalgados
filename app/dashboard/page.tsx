@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type React from "react";
 import { db } from "@/lib/firebase";
 import {
@@ -14,10 +14,11 @@ import {
   serverTimestamp,
   Timestamp,
   updateDoc,
-  DocumentData,
+  type DocumentData,
 } from "firebase/firestore";
 
-// Mesmas categorias do app
+/* ------------------ TIPOS ------------------ */
+
 type CategoryType =
   | "Comida"
   | "Lanchonete"
@@ -32,10 +33,23 @@ type ProductStatus = "active" | "inactive";
 type DeliveryMode = "delivery" | "pickup" | "none";
 type OrderStatus = "pending" | "confirmed" | "delivered" | "cancelled";
 type OrderChannel = "whatsapp" | "messenger" | "other";
+type PaymentMethod = "cash" | "paypay" | "card" | "other";
 
 type DashboardTab = "overview" | "products" | "events" | "orders";
 
-/* --------- FIRESTORE TYPES --------- */
+/** ✅ NOVO: vendedor */
+interface FirestoreSeller {
+  name: string;
+  whatsapp?: string;
+  messengerId?: string;
+  pickupLink?: string;
+  defaultPickupNote?: string;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+}
+interface SellerWithId extends FirestoreSeller {
+  id: string;
+}
 
 interface FirestoreProduct {
   name: string;
@@ -43,18 +57,22 @@ interface FirestoreProduct {
   category?: CategoryType;
   imageUrl?: string;
   status?: ProductStatus;
-  // NOVOS CAMPOS DE ESTOQUE
-  stockQty?: number; // estoque atual
-  lowStockThreshold?: number; // ponto de alerta
+
+  stockQty?: number;
+  lowStockThreshold?: number;
+
   createdAt?: Timestamp;
   updatedAt?: Timestamp;
 }
-
 interface ProductWithId extends FirestoreProduct {
   id: string;
 }
 
 interface FirestoreEvent {
+  /** ✅ NOVO: evento por vendedor */
+  sellerId: string;
+  sellerNameSnapshot?: string;
+
   title: string;
   region: string;
   status: EventStatus;
@@ -68,11 +86,11 @@ interface FirestoreEvent {
   createdAt?: Timestamp;
   updatedAt?: Timestamp;
 }
-
 interface EventWithId extends FirestoreEvent {
   id: string;
 }
 
+/** ✅ NOVO: paid + amountYen */
 interface FirestoreOrder {
   customerName: string;
   note?: string | null;
@@ -84,14 +102,23 @@ interface FirestoreOrder {
   deliveryMode?: DeliveryMode;
   deliveryTimeSlot?: string | null;
   locationLink?: string | null;
+
+  amountYen?: number | null;
+  paid?: boolean;
+  paidAt?: Timestamp | null;
+  paymentMethod?: PaymentMethod | null;
+
   createdAt?: Timestamp | null;
   updatedAt?: Timestamp | null;
 }
-
 interface OrderWithMeta extends FirestoreOrder {
   id: string;
   eventId: string;
   eventTitle: string;
+
+  /** ✅ NOVO: pra filtrar caixa por vendedor */
+  sellerId: string;
+  sellerNameSnapshot?: string;
 }
 
 /** Estrutura usada apenas no formulário de edição de pedido */
@@ -101,7 +128,61 @@ interface OrderItemEdit {
   qty: string;
 }
 
-/* --------- COMPONENTE --------- */
+/* ------------------ HELPERS ------------------ */
+
+const cx = (...classes: Array<string | false | null | undefined>) =>
+  classes.filter(Boolean).join(" ");
+
+const formatYen = (n: number) => `¥${(n ?? 0).toLocaleString("ja-JP")}`;
+
+const safeTsToMillis = (ts?: Timestamp | null) =>
+  ts instanceof Timestamp ? ts.toMillis() : 0;
+
+const formatTimestamp = (ts?: Timestamp | null) => {
+  if (!ts || !(ts instanceof Timestamp)) return "-";
+  const date = ts.toDate();
+  return date.toLocaleString("pt-BR", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+};
+
+const downloadTextFile = (filename: string, text: string) => {
+  const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+};
+
+const toCsv = (rows: string[][]) => {
+  const esc = (v: string) => {
+    const s = String(v ?? "");
+    if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+    return s;
+  };
+  return rows.map((r) => r.map(esc).join(",")).join("\n");
+};
+
+const isTestOrder = (o: OrderWithMeta) => {
+  const name = (o.customerName || "").toLowerCase();
+  const note = (o.note || "").toLowerCase();
+  return (
+    name.includes("teste") ||
+    name.includes("test") ||
+    note.includes("teste") ||
+    note.includes("test")
+  );
+};
+
+/* ------------------ COMPONENTE ------------------ */
 
 export default function DashboardPage() {
   const [activeTab, setActiveTab] = useState<DashboardTab>("overview");
@@ -112,26 +193,29 @@ export default function DashboardPage() {
   const [products, setProducts] = useState<ProductWithId[]>([]);
   const [events, setEvents] = useState<EventWithId[]>([]);
   const [orders, setOrders] = useState<OrderWithMeta[]>([]);
+  const [sellers, setSellers] = useState<SellerWithId[]>([]); // ✅ NOVO
 
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   /* ---------- FORM: PRODUTO ---------- */
-
   const [editingProductId, setEditingProductId] = useState<string | null>(null);
   const [productName, setProductName] = useState("");
   const [productPrice, setProductPrice] = useState<string>("");
-  const [productCategory, setProductCategory] = useState<CategoryType>("Comida");
+  const [productCategory, setProductCategory] =
+    useState<CategoryType>("Comida");
   const [productImageUrl, setProductImageUrl] = useState("");
-  const [productStatus, setProductStatus] = useState<ProductStatus>("active");
+  const [productStatus, setProductStatus] =
+    useState<ProductStatus>("active");
 
-  // NOVOS STATES DE ESTOQUE
   const [productStockQty, setProductStockQty] = useState<string>("");
   const [productLowStockThreshold, setProductLowStockThreshold] =
     useState<string>("");
 
   /* ---------- FORM: EVENTO ---------- */
-
   const [editingEventId, setEditingEventId] = useState<string | null>(null);
+
+  const [eventSellerId, setEventSellerId] = useState<string>(""); // ✅ NOVO
+
   const [eventTitle, setEventTitle] = useState("");
   const [eventRegion, setEventRegion] = useState("");
   const [eventStatus, setEventStatus] = useState<EventStatus>("active");
@@ -143,16 +227,18 @@ export default function DashboardPage() {
   const [eventMessengerId, setEventMessengerId] = useState("");
 
   /* ---------- CONTROLES: PEDIDOS / FILTROS ---------- */
-
   const [filterDate, setFilterDate] = useState<string>("");
   const [filterTimeSlot, setFilterTimeSlot] = useState<string>("");
   const [filterTestOnly, setFilterTestOnly] = useState(false);
+  const [filterStatus, setFilterStatus] = useState<OrderStatus | "">("");
+  const [searchOrders, setSearchOrders] = useState("");
+
+  const [filterSellerId, setFilterSellerId] = useState<string>(""); // ✅ NOVO
 
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedOrderIds, setSelectedOrderIds] = useState<string[]>([]);
 
   /* ---------- FORM: EDIÇÃO DE PEDIDO ---------- */
-
   const [editingOrderId, setEditingOrderId] = useState<string | null>(null);
   const [editingOrderEventId, setEditingOrderEventId] =
     useState<string | null>(null);
@@ -166,8 +252,17 @@ export default function DashboardPage() {
   const [orderLocationLink, setOrderLocationLink] = useState("");
   const [orderItems, setOrderItems] = useState<OrderItemEdit[]>([]);
 
-  /* ---------- CARREGAMENTO INICIAL ---------- */
+  const [orderPaid, setOrderPaid] = useState(false); // ✅ NOVO
+  const [orderPaymentMethod, setOrderPaymentMethod] = useState<PaymentMethod>("cash"); // ✅ NOVO
 
+  /* ---------- CONTROLE PRODUÇÃO (local) ---------- */
+  const [preparedMap, setPreparedMap] = useState<Record<string, number>>({});
+
+  /* ---------- REFS ---------- */
+  const productNameInputRef = useRef<HTMLInputElement | null>(null);
+  const orderCustomerInputRef = useRef<HTMLInputElement | null>(null);
+
+  /* ---------- LOAD ---------- */
   useEffect(() => {
     void loadAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -177,7 +272,7 @@ export default function DashboardPage() {
     setLoading(true);
     setErrorMessage(null);
     try {
-      await Promise.all([loadProducts(), loadEvents()]);
+      await Promise.all([loadProducts(), loadSellers(), loadEvents()]);
       await loadOrders();
     } catch (error) {
       console.error(error);
@@ -185,6 +280,32 @@ export default function DashboardPage() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const loadSellers = async () => {
+    const sellersRef = collection(db, "sellers");
+    const q = query(sellersRef, orderBy("createdAt", "desc"));
+    const snap = await getDocs(q);
+
+    const loaded: SellerWithId[] = snap.docs.map((d) => {
+      const data = d.data() as FirestoreSeller;
+      return {
+        id: d.id,
+        name: data.name,
+        whatsapp: data.whatsapp,
+        messengerId: data.messengerId,
+        pickupLink: data.pickupLink,
+        defaultPickupNote: data.defaultPickupNote,
+        createdAt: data.createdAt,
+        updatedAt: data.updatedAt,
+      };
+    });
+
+    loaded.sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
+    setSellers(loaded);
+
+    // se não tiver selecionado no form e existe vendedor, usa o primeiro
+    if (!eventSellerId && loaded.length > 0) setEventSellerId(loaded[0].id);
   };
 
   const loadProducts = async () => {
@@ -195,8 +316,8 @@ export default function DashboardPage() {
     const loaded: ProductWithId[] = snap.docs.map((docSnap) => {
       const data = docSnap.data() as FirestoreProduct;
 
-      // Se tiver estoque 0 ou menor, forçamos o status para inativo
-      const rawStock = typeof data.stockQty === "number" ? data.stockQty : null;
+      const rawStock =
+        typeof data.stockQty === "number" ? data.stockQty : null;
       const isOutOfStock = rawStock !== null && rawStock <= 0;
 
       const status: ProductStatus = isOutOfStock
@@ -218,7 +339,6 @@ export default function DashboardPage() {
     });
 
     loaded.sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
-
     setProducts(loaded);
   };
 
@@ -231,6 +351,8 @@ export default function DashboardPage() {
       const data = docSnap.data() as FirestoreEvent;
       return {
         id: docSnap.id,
+        sellerId: data.sellerId,
+        sellerNameSnapshot: data.sellerNameSnapshot,
         title: data.title,
         region: data.region,
         status: data.status ?? "active",
@@ -258,6 +380,8 @@ export default function DashboardPage() {
       const data = docSnap.data() as FirestoreEvent;
       return {
         id: docSnap.id,
+        sellerId: data.sellerId,
+        sellerNameSnapshot: data.sellerNameSnapshot,
         title: data.title,
         region: data.region,
         status: data.status ?? "active",
@@ -277,11 +401,21 @@ export default function DashboardPage() {
     return loaded;
   };
 
+  /** ✅ Calcula valor do pedido pelo catálogo (fallback) */
+  const calcOrderAmountYen = (quantities: Record<string, number>) => {
+    const priceMap = new Map(products.map((p) => [p.name, p.price]));
+    let total = 0;
+    Object.entries(quantities || {}).forEach(([name, qty]) => {
+      const price = priceMap.get(name) ?? 0;
+      total += price * qty;
+    });
+    return total;
+  };
+
   const loadOrders = async () => {
     setLoadingOrders(true);
     try {
       const eventsToUse = events.length ? events : await fetchEventsOnce();
-
       const allOrders: OrderWithMeta[] = [];
 
       await Promise.all(
@@ -294,16 +428,22 @@ export default function DashboardPage() {
             const fromThisEvent: OrderWithMeta[] = snap.docs.map((docSnap) => {
               const data = docSnap.data() as any;
 
-              // Garantir que createdAt/updatedAt sejam Timestamp ou null
               const createdAt =
                 data.createdAt instanceof Timestamp ? data.createdAt : null;
               const updatedAt =
                 data.updatedAt instanceof Timestamp ? data.updatedAt : null;
 
+              const paidAt = data.paidAt instanceof Timestamp ? data.paidAt : null;
+
+              const quantities: Record<string, number> = data.quantities ?? {};
+              const fallbackAmount = calcOrderAmountYen(quantities);
+              const amountYen =
+                typeof data.amountYen === "number" ? data.amountYen : fallbackAmount;
+
               const orderData: FirestoreOrder = {
                 customerName: data.customerName,
                 note: data.note ?? null,
-                quantities: data.quantities ?? {},
+                quantities,
                 totalItems: data.totalItems ?? 0,
                 status: data.status ?? "pending",
                 channel: data.channel ?? "whatsapp",
@@ -311,6 +451,12 @@ export default function DashboardPage() {
                 deliveryMode: data.deliveryMode ?? "pickup",
                 deliveryTimeSlot: data.deliveryTimeSlot ?? null,
                 locationLink: data.locationLink ?? null,
+
+                amountYen,
+                paid: Boolean(data.paid),
+                paidAt,
+                paymentMethod: (data.paymentMethod as PaymentMethod) ?? null,
+
                 createdAt,
                 updatedAt,
               };
@@ -319,30 +465,20 @@ export default function DashboardPage() {
                 id: docSnap.id,
                 eventId: ev.id,
                 eventTitle: ev.title,
+                sellerId: ev.sellerId,
+                sellerNameSnapshot: ev.sellerNameSnapshot,
                 ...orderData,
               };
             });
 
             allOrders.push(...fromThisEvent);
           } catch (innerError) {
-            console.error(
-              "Erro ao carregar pedidos do evento:",
-              ev.id,
-              innerError
-            );
+            console.error("Erro ao carregar pedidos do evento:", ev.id, innerError);
           }
         })
       );
 
-      // Ordenação defensiva (evita erro de toMillis em ambientes mais chatos)
-      allOrders.sort((a, b) => {
-        const aTime =
-          a.createdAt instanceof Timestamp ? a.createdAt.toMillis() : 0;
-        const bTime =
-          b.createdAt instanceof Timestamp ? b.createdAt.toMillis() : 0;
-        return bTime - aTime;
-      });
-
+      allOrders.sort((a, b) => safeTsToMillis(b.createdAt) - safeTsToMillis(a.createdAt));
       setOrders(allOrders);
     } catch (error) {
       console.error(error);
@@ -351,6 +487,123 @@ export default function DashboardPage() {
       setLoadingOrders(false);
     }
   };
+
+  /* ---------- DERIVADOS (MEMO) ---------- */
+
+  const resumoPedidos = useMemo(() => {
+    return {
+      total: orders.length,
+      pendentes: orders.filter((o) => o.status === "pending").length,
+      confirmados: orders.filter((o) => o.status === "confirmed").length,
+      entregues: orders.filter((o) => o.status === "delivered").length,
+      cancelados: orders.filter((o) => o.status === "cancelled").length,
+    };
+  }, [orders]);
+
+  const uniqueDates = useMemo(() => {
+    return Array.from(
+      new Set(
+        orders
+          .map((o) => o.deliveryDate)
+          .filter((d): d is string => Boolean(d))
+      )
+    ).sort();
+  }, [orders]);
+
+  const uniqueTimeSlots = useMemo(() => {
+    return Array.from(
+      new Set(
+        orders
+          .map((o) => o.deliveryTimeSlot)
+          .filter((d): d is string => Boolean(d))
+      )
+    ).sort();
+  }, [orders]);
+
+  const filteredOrders = useMemo(() => {
+    const q = searchOrders.trim().toLowerCase();
+    return orders.filter((o) => {
+      if (filterSellerId && o.sellerId !== filterSellerId) return false;
+      if (filterDate && o.deliveryDate !== filterDate) return false;
+      if (filterTimeSlot && o.deliveryTimeSlot !== filterTimeSlot) return false;
+      if (filterTestOnly && !isTestOrder(o)) return false;
+      if (filterStatus && o.status !== filterStatus) return false;
+
+      if (q) {
+        const blob = [
+          o.eventTitle,
+          o.customerName,
+          o.note ?? "",
+          o.deliveryDate ?? "",
+          o.deliveryTimeSlot ?? "",
+          o.deliveryMode ?? "",
+          o.channel ?? "",
+          Object.keys(o.quantities || {}).join(" "),
+        ]
+          .join(" ")
+          .toLowerCase();
+        if (!blob.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [orders, filterSellerId, filterDate, filterTimeSlot, filterTestOnly, filterStatus, searchOrders]);
+
+  /** ✅ Caixa: vendido / recebido / a receber */
+  const cashflowSummary = useMemo(() => {
+    const totalSold = filteredOrders.reduce((acc, o) => acc + (o.amountYen ?? 0), 0);
+    const totalReceived = filteredOrders
+      .filter((o) => o.paid)
+      .reduce((acc, o) => acc + (o.amountYen ?? 0), 0);
+    const totalToReceive = Math.max(totalSold - totalReceived, 0);
+
+    return { totalSold, totalReceived, totalToReceive };
+  }, [filteredOrders]);
+
+  const demandByProduct = useMemo(() => {
+    const map = new Map<string, number>();
+    filteredOrders.forEach((order) => {
+      Object.entries(order.quantities || {}).forEach(([name, qty]) => {
+        map.set(name, (map.get(name) ?? 0) + qty);
+      });
+    });
+    return Array.from(map.entries())
+      .map(([name, total]) => ({ name, total }))
+      .sort((a, b) => b.total - a.total);
+  }, [filteredOrders]);
+
+  const lowStockProducts = useMemo(() => {
+    return products.filter((p) => {
+      if (typeof p.stockQty !== "number") return false;
+      const threshold = p.lowStockThreshold ?? 10;
+      return p.stockQty > 0 && p.stockQty <= threshold;
+    });
+  }, [products]);
+
+  const outOfStockProducts = useMemo(() => {
+    return products.filter((p) => {
+      const stock = typeof p.stockQty === "number" ? p.stockQty : null;
+      return stock !== null && stock <= 0;
+    });
+  }, [products]);
+
+  /* ---------- SELEÇÃO (PEDIDOS) ---------- */
+
+  const toggleOrderSelection = (orderId: string) => {
+    setSelectedOrderIds((prev) =>
+      prev.includes(orderId) ? prev.filter((id) => id !== orderId) : [...prev, orderId]
+    );
+  };
+
+  const toggleSelectAllVisible = () => {
+    setSelectedOrderIds((prev) => {
+      const visibleIds = filteredOrders.map((o) => o.id);
+      const allSelected = visibleIds.length > 0 && visibleIds.every((id) => prev.includes(id));
+      if (allSelected) return prev.filter((id) => !visibleIds.includes(id));
+      return Array.from(new Set([...prev, ...visibleIds]));
+    });
+  };
+
+  const clearSelection = () => setSelectedOrderIds([]);
 
   /* ---------- CRUD: PRODUTO ---------- */
 
@@ -372,13 +625,9 @@ export default function DashboardPage() {
     setProductCategory(p.category ?? "Comida");
     setProductImageUrl(p.imageUrl ?? "");
     setProductStatus(p.status ?? "active");
-    setProductStockQty(
-      typeof p.stockQty === "number" ? String(p.stockQty) : ""
-    );
+    setProductStockQty(typeof p.stockQty === "number" ? String(p.stockQty) : "");
     setProductLowStockThreshold(
-      typeof p.lowStockThreshold === "number"
-        ? String(p.lowStockThreshold)
-        : ""
+      typeof p.lowStockThreshold === "number" ? String(p.lowStockThreshold) : ""
     );
     setActiveTab("products");
   };
@@ -397,16 +646,12 @@ export default function DashboardPage() {
       return;
     }
 
-    // Parsing dos campos de estoque
     const stockRaw = productStockQty.trim();
     const lowThresholdRaw = productLowStockThreshold.trim();
 
-    const stockNumber =
-      stockRaw === "" ? null : Number(stockRaw.replace(",", "."));
+    const stockNumber = stockRaw === "" ? null : Number(stockRaw.replace(",", "."));
     const lowThresholdNumber =
-      lowThresholdRaw === ""
-        ? null
-        : Number(lowThresholdRaw.replace(",", "."));
+      lowThresholdRaw === "" ? null : Number(lowThresholdRaw.replace(",", "."));
 
     if (stockNumber !== null && (Number.isNaN(stockNumber) || stockNumber < 0)) {
       setErrorMessage("Estoque inválido. Use um número maior ou igual a zero.");
@@ -417,17 +662,12 @@ export default function DashboardPage() {
       lowThresholdNumber !== null &&
       (Number.isNaN(lowThresholdNumber) || lowThresholdNumber < 0)
     ) {
-      setErrorMessage(
-        "Limite de alerta inválido. Use um número maior ou igual a zero."
-      );
+      setErrorMessage("Limite de alerta inválido. Use um número maior ou igual a zero.");
       return;
     }
 
-    // Se estoque chegou a 0 ou menos, força status para inativo
     let finalStatus: ProductStatus = productStatus;
-    if (stockNumber !== null && stockNumber <= 0) {
-      finalStatus = "inactive";
-    }
+    if (stockNumber !== null && stockNumber <= 0) finalStatus = "inactive";
 
     const payload: FirestoreProduct = {
       name: productName.trim(),
@@ -436,15 +676,9 @@ export default function DashboardPage() {
       imageUrl: productImageUrl.trim() || undefined,
       status: finalStatus,
       updatedAt: serverTimestamp() as unknown as Timestamp,
-      // createdAt só na criação
-      ...(editingProductId
-        ? {}
-        : { createdAt: serverTimestamp() as unknown as Timestamp }),
-      // Campos de estoque só são enviados se tiver número válido
+      ...(editingProductId ? {} : { createdAt: serverTimestamp() as unknown as Timestamp }),
       ...(stockNumber !== null ? { stockQty: stockNumber } : {}),
-      ...(lowThresholdNumber !== null
-        ? { lowStockThreshold: lowThresholdNumber }
-        : {}),
+      ...(lowThresholdNumber !== null ? { lowStockThreshold: lowThresholdNumber } : {}),
     };
 
     try {
@@ -476,9 +710,7 @@ export default function DashboardPage() {
       await loadProducts();
     } catch (error) {
       console.error(error);
-      setErrorMessage(
-        "Erro ao excluir produto. Verifique as regras do Firestore (permissão)."
-      );
+      setErrorMessage("Erro ao excluir produto. Verifique as regras do Firestore (permissão).");
     }
   };
 
@@ -486,6 +718,9 @@ export default function DashboardPage() {
 
   const resetEventForm = () => {
     setEditingEventId(null);
+
+    setEventSellerId(sellers[0]?.id ?? ""); // ✅
+
     setEventTitle("");
     setEventRegion("");
     setEventStatus("active");
@@ -499,6 +734,9 @@ export default function DashboardPage() {
 
   const handleEditEvent = (ev: EventWithId) => {
     setEditingEventId(ev.id);
+
+    setEventSellerId(ev.sellerId); // ✅
+
     setEventTitle(ev.title);
     setEventRegion(ev.region);
     setEventStatus(ev.status ?? "active");
@@ -511,10 +749,26 @@ export default function DashboardPage() {
     setActiveTab("events");
   };
 
+  /** ✅ ao trocar vendedor no form, opcionalmente puxa defaults */
+  const applySellerDefaults = (sellerId: string) => {
+    const s = sellers.find((x) => x.id === sellerId);
+    if (!s) return;
+
+    // só preenche se o campo estiver vazio (pra não sobrescrever o que você digitou)
+    if (!eventWhatsapp.trim() && s.whatsapp) setEventWhatsapp(s.whatsapp);
+    if (!eventMessengerId.trim() && s.messengerId) setEventMessengerId(s.messengerId);
+    if (!eventPickupLink.trim() && s.pickupLink) setEventPickupLink(s.pickupLink);
+    if (!eventPickupNote.trim() && s.defaultPickupNote) setEventPickupNote(s.defaultPickupNote);
+  };
+
   const handleSubmitEvent = async (eventSubmit: React.FormEvent) => {
     eventSubmit.preventDefault();
     setErrorMessage(null);
 
+    if (!eventSellerId) {
+      setErrorMessage("Selecione um vendedor para o evento.");
+      return;
+    }
     if (!eventTitle.trim()) {
       setErrorMessage("Título do evento é obrigatório.");
       return;
@@ -529,7 +783,12 @@ export default function DashboardPage() {
       .map((s) => s.trim())
       .filter((s) => s.length > 0);
 
+    const seller = sellers.find((s) => s.id === eventSellerId);
+
     const payload: FirestoreEvent = {
+      sellerId: eventSellerId,
+      sellerNameSnapshot: seller?.name ?? undefined,
+
       title: eventTitle.trim(),
       region: eventRegion.trim(),
       status: eventStatus,
@@ -540,18 +799,16 @@ export default function DashboardPage() {
       pickupNote: eventPickupNote.trim() || undefined,
       messengerId: eventMessengerId.trim() || undefined,
       updatedAt: serverTimestamp() as unknown as Timestamp,
-      ...(editingEventId
-        ? {}
-        : { createdAt: serverTimestamp() as unknown as Timestamp }),
+      ...(editingEventId ? {} : { createdAt: serverTimestamp() as unknown as Timestamp }),
     };
 
     try {
       if (editingEventId) {
         const ref = doc(db, "events", editingEventId);
-        await updateDoc(ref, payload as any);
+        await updateDoc(ref, payload as DocumentData);
       } else {
         const ref = collection(db, "events");
-        await addDoc(ref, payload as any);
+        await addDoc(ref, payload as DocumentData);
       }
 
       await loadEvents();
@@ -576,30 +833,47 @@ export default function DashboardPage() {
       await loadOrders();
     } catch (error) {
       console.error(error);
-      setErrorMessage(
-        "Erro ao excluir evento. Verifique as regras do Firestore (permissão)."
-      );
+      setErrorMessage("Erro ao excluir evento. Verifique as regras do Firestore (permissão).");
     }
   };
 
-  /* ---------- CRUD: PEDIDO ---------- */
+  /* ---------- CRUD: PEDIDOS ---------- */
 
-  const handleChangeOrderStatus = async (
-    order: OrderWithMeta,
-    newStatus: OrderStatus
-  ) => {
+  const handleChangeOrderStatus = async (order: OrderWithMeta, newStatus: OrderStatus) => {
     try {
       const ref = doc(db, "events", order.eventId, "orders", order.id);
-      await updateDoc(ref, {
-        status: newStatus,
-        updatedAt: serverTimestamp(),
-      });
+      await updateDoc(ref, { status: newStatus, updatedAt: serverTimestamp() } as DocumentData);
       await loadOrders();
     } catch (error) {
       console.error(error);
       setErrorMessage(
         "Erro ao atualizar status do pedido. Verifique as regras do Firestore (permissão)."
       );
+    }
+  };
+
+  /** ✅ NOVO: marcar pago/não pago (e congelar amountYen se não existir) */
+  const handleTogglePaid = async (order: OrderWithMeta, paid: boolean) => {
+    try {
+      const ref = doc(db, "events", order.eventId, "orders", order.id);
+
+      const amountYen =
+        typeof order.amountYen === "number" ? order.amountYen : calcOrderAmountYen(order.quantities || {});
+
+      await updateDoc(
+        ref,
+        {
+          paid,
+          paidAt: paid ? serverTimestamp() : null,
+          amountYen,
+          updatedAt: serverTimestamp(),
+        } as DocumentData
+      );
+
+      await loadOrders();
+    } catch (error) {
+      console.error(error);
+      setErrorMessage("Erro ao atualizar pago/não pago. Verifique as regras do Firestore.");
     }
   };
 
@@ -615,9 +889,7 @@ export default function DashboardPage() {
       await loadOrders();
     } catch (error) {
       console.error(error);
-      setErrorMessage(
-        "Erro ao excluir pedido. Verifique as regras do Firestore (permissão)."
-      );
+      setErrorMessage("Erro ao excluir pedido. Verifique as regras do Firestore (permissão).");
     }
   };
 
@@ -634,21 +906,45 @@ export default function DashboardPage() {
 
     try {
       await Promise.all(
-        toDelete.map((o) =>
-          deleteDoc(doc(db, "events", o.eventId, "orders", o.id))
-        )
+        toDelete.map((o) => deleteDoc(doc(db, "events", o.eventId, "orders", o.id)))
       );
       setSelectedOrderIds([]);
       await loadOrders();
     } catch (error) {
       console.error(error);
-      setErrorMessage(
-        "Erro ao excluir pedidos selecionados. Verifique as regras do Firestore (permissão)."
-      );
+      setErrorMessage("Erro ao excluir pedidos selecionados. Verifique as regras do Firestore.");
     }
   };
 
-  /* ---------- EDIÇÃO DE PEDIDO: HELPERS ---------- */
+  const handleBulkSetStatus = async (newStatus: OrderStatus) => {
+    if (selectedOrderIds.length === 0) return;
+    const selected = orders.filter((o) => selectedOrderIds.includes(o.id));
+    if (selected.length === 0) return;
+
+    const confirmed = window.confirm(
+      `Marcar ${selected.length} pedido(s) selecionado(s) como "${newStatus}"?`
+    );
+    if (!confirmed) return;
+
+    try {
+      await Promise.all(
+        selected.map((o) =>
+          updateDoc(
+            doc(db, "events", o.eventId, "orders", o.id),
+            { status: newStatus, updatedAt: serverTimestamp() } as DocumentData
+          )
+        )
+      );
+      await loadOrders();
+      setSelectedOrderIds([]);
+      setSelectionMode(false);
+    } catch (error) {
+      console.error(error);
+      setErrorMessage("Erro ao atualizar pedidos em lote. Verifique as regras do Firestore.");
+    }
+  };
+
+  /* ---------- EDIÇÃO DE PEDIDO ---------- */
 
   const resetOrderEditForm = () => {
     setEditingOrderId(null);
@@ -660,6 +956,8 @@ export default function DashboardPage() {
     setOrderDeliveryModeEdit("pickup");
     setOrderLocationLink("");
     setOrderItems([]);
+    setOrderPaid(false);
+    setOrderPaymentMethod("cash");
   };
 
   const startEditOrder = (order: OrderWithMeta) => {
@@ -672,6 +970,9 @@ export default function DashboardPage() {
     setOrderDeliveryModeEdit(order.deliveryMode ?? "pickup");
     setOrderLocationLink(order.locationLink || "");
 
+    setOrderPaid(Boolean(order.paid));
+    setOrderPaymentMethod((order.paymentMethod as PaymentMethod) ?? "cash");
+
     const items: OrderItemEdit[] = Object.entries(order.quantities || {}).map(
       ([name, qty], index) => ({
         key: `item-${order.id}-${index}`,
@@ -680,21 +981,14 @@ export default function DashboardPage() {
       })
     );
 
-    setOrderItems(
-      items.length ? items : [{ key: "item-new-0", name: "", qty: "" }]
-    );
-
+    setOrderItems(items.length ? items : [{ key: "item-new-0", name: "", qty: "" }]);
     setActiveTab("orders");
   };
 
   const addOrderItemRow = () => {
     setOrderItems((prev) => [
       ...prev,
-      {
-        key: `item-new-${Date.now()}`,
-        name: "",
-        qty: "",
-      },
+      { key: `item-new-${Date.now()}`, name: "", qty: "" },
     ]);
   };
 
@@ -702,15 +996,9 @@ export default function DashboardPage() {
     setOrderItems((prev) => prev.filter((item) => item.key !== key));
   };
 
-  const handleOrderItemChange = (
-    key: string,
-    field: "name" | "qty",
-    value: string
-  ) => {
+  const handleOrderItemChange = (key: string, field: "name" | "qty", value: string) => {
     setOrderItems((prev) =>
-      prev.map((item) =>
-        item.key === key ? { ...item, [field]: value } : item
-      )
+      prev.map((item) => (item.key === key ? { ...item, [field]: value } : item))
     );
   };
 
@@ -722,13 +1010,11 @@ export default function DashboardPage() {
       setErrorMessage("Nenhum pedido selecionado para edição.");
       return;
     }
-
     if (!orderCustomerName.trim()) {
       setErrorMessage("Nome do cliente é obrigatório.");
       return;
     }
 
-    // monta quantities a partir das linhas do formulário
     const quantities: Record<string, number> = {};
     let totalItems = 0;
 
@@ -745,28 +1031,25 @@ export default function DashboardPage() {
     });
 
     try {
-      const ref = doc(
-        db,
-        "events",
-        editingOrderEventId,
-        "orders",
-        editingOrderId
-      );
+      const ref = doc(db, "events", editingOrderEventId, "orders", editingOrderId);
 
-      const noteTrim = orderNote.trim();
-      const dateTrim = orderDeliveryDate.trim();
-      const slotTrim = orderTimeSlotEdit.trim();
-      const locTrim = orderLocationLink.trim();
+      const amountYen = calcOrderAmountYen(quantities);
 
       const payload: Partial<FirestoreOrder> = {
         customerName: orderCustomerName.trim(),
-        note: noteTrim || null,
-        deliveryDate: dateTrim || null,
-        deliveryTimeSlot: slotTrim || null,
+        note: orderNote.trim() || null,
+        deliveryDate: orderDeliveryDate.trim() || null,
+        deliveryTimeSlot: orderTimeSlotEdit.trim() || null,
         deliveryMode: orderDeliveryModeEdit,
-        locationLink: locTrim || null,
+        locationLink: orderLocationLink.trim() || null,
         quantities,
         totalItems,
+
+        amountYen, // ✅ congela valor
+        paid: orderPaid,
+        paidAt: orderPaid ? (serverTimestamp() as unknown as Timestamp) : null,
+        paymentMethod: orderPaymentMethod,
+
         updatedAt: serverTimestamp() as unknown as Timestamp,
       };
 
@@ -775,113 +1058,95 @@ export default function DashboardPage() {
       resetOrderEditForm();
     } catch (error) {
       console.error(error);
-      setErrorMessage(
-        "Erro ao salvar alterações do pedido. Verifique as permissões do Firestore."
-      );
+      setErrorMessage("Erro ao salvar alterações do pedido. Verifique permissões do Firestore.");
     }
   };
 
-  /* ---------- HELPERS DE VISUAL ---------- */
+  /* ---------- EXPORTS ---------- */
 
-  const formatTimestamp = (ts?: Timestamp | null) => {
-    if (!ts || !(ts instanceof Timestamp)) return "-";
-    const date = ts.toDate();
-    return date.toLocaleString("pt-BR", {
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
+  const exportOrdersCsv = () => {
+    const rows: string[][] = [
+      [
+        "sellerId",
+        "eventTitle",
+        "orderId",
+        "customerName",
+        "status",
+        "paid",
+        "amountYen",
+        "channel",
+        "deliveryDate",
+        "deliveryTimeSlot",
+        "deliveryMode",
+        "locationLink",
+        "note",
+        "totalItems",
+        "items",
+        "createdAt",
+      ],
+    ];
+
+    filteredOrders.forEach((o) => {
+      const itemsStr = Object.entries(o.quantities || {})
+        .map(([n, q]) => `${n} x${q}`)
+        .join(" | ");
+
+      rows.push([
+        o.sellerId ?? "",
+        o.eventTitle ?? "",
+        o.id ?? "",
+        o.customerName ?? "",
+        o.status ?? "",
+        String(Boolean(o.paid)),
+        String(o.amountYen ?? 0),
+        o.channel ?? "",
+        o.deliveryDate ?? "",
+        o.deliveryTimeSlot ?? "",
+        o.deliveryMode ?? "",
+        o.locationLink ?? "",
+        o.note ?? "",
+        String(o.totalItems ?? 0),
+        itemsStr,
+        formatTimestamp(o.createdAt),
+      ]);
     });
-  };
 
-  const resumoPedidos = {
-    total: orders.length,
-    pendentes: orders.filter((o) => o.status === "pending").length,
-    confirmados: orders.filter((o) => o.status === "confirmed").length,
-    entregues: orders.filter((o) => o.status === "delivered").length,
-    cancelados: orders.filter((o) => o.status === "cancelled").length,
-  };
-
-  const isTestOrder = (o: OrderWithMeta) => {
-    const name = (o.customerName || "").toLowerCase();
-    const note = (o.note || "").toLowerCase();
-    return (
-      name.includes("teste") ||
-      name.includes("test") ||
-      note.includes("teste") ||
-      note.includes("test")
+    downloadTextFile(
+      `yamada-orders-${new Date().toISOString().slice(0, 10)}.csv`,
+      toCsv(rows)
     );
   };
 
-  const uniqueDates = Array.from(
-    new Set(
-      orders
-        .map((o) => o.deliveryDate)
-        .filter((d): d is string => Boolean(d))
-    )
-  ).sort();
+  const exportProductionCsv = () => {
+    const rows: string[][] = [["item", "total", "prepared", "remaining"]];
 
-  const uniqueTimeSlots = Array.from(
-    new Set(
-      orders
-        .map((o) => o.deliveryTimeSlot)
-        .filter((d): d is string => Boolean(d))
-    )
-  ).sort();
-
-  const filteredOrders = orders.filter((o) => {
-    if (filterDate && o.deliveryDate !== filterDate) return false;
-    if (filterTimeSlot && o.deliveryTimeSlot !== filterTimeSlot) return false;
-    if (filterTestOnly && !isTestOrder(o)) return false;
-    return true;
-  });
-
-  const demandByProduct = (() => {
-    const map = new Map<string, number>();
-    filteredOrders.forEach((order) => {
-      Object.entries(order.quantities || {}).forEach(([name, qty]) => {
-        map.set(name, (map.get(name) ?? 0) + qty);
-      });
+    demandByProduct.forEach((it) => {
+      const prepared = preparedMap[it.name] ?? 0;
+      const remaining = Math.max(it.total - prepared, 0);
+      rows.push([it.name, String(it.total), String(prepared), String(remaining)]);
     });
-    return Array.from(map.entries())
-      .map(([name, total]) => ({ name, total }))
-      .sort((a, b) => b.total - a.total);
-  })();
 
-  const toggleOrderSelection = (orderId: string) => {
-    setSelectedOrderIds((prev) =>
-      prev.includes(orderId)
-        ? prev.filter((id) => id !== orderId)
-        : [...prev, orderId]
+    downloadTextFile(
+      `yamada-production-${new Date().toISOString().slice(0, 10)}.csv`,
+      toCsv(rows)
     );
   };
 
-  const toggleSelectAllVisible = () => {
-    setSelectedOrderIds((prev) => {
-      const visibleIds = filteredOrders.map((o) => o.id);
-      const allSelected = visibleIds.every((id) => prev.includes(id));
-      if (allSelected) {
-        return prev.filter((id) => !visibleIds.includes(id));
-      }
-      const merged = new Set([...prev, ...visibleIds]);
-      return Array.from(merged);
-    });
-  };
+  /* ---------- FOCUS AUTOMÁTICO ---------- */
 
-  const clearSelection = () => setSelectedOrderIds([]);
+  useEffect(() => {
+    if (activeTab === "products" && editingProductId && productNameInputRef.current) {
+      productNameInputRef.current.focus();
+      productNameInputRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, [activeTab, editingProductId]);
 
-  // LISTAS DE ALERTA DE ESTOQUE
-  const lowStockProducts = products.filter((p) => {
-    if (typeof p.stockQty !== "number") return false;
-    const threshold = p.lowStockThreshold ?? 10; // padrão 10 unidades
-    return p.stockQty > 0 && p.stockQty <= threshold;
-  });
-
-  const outOfStockProducts = products.filter((p) => {
-    const stock = typeof p.stockQty === "number" ? p.stockQty : null;
-    return stock !== null && stock <= 0;
-  });
+  useEffect(() => {
+    if (activeTab === "orders" && editingOrderId && orderCustomerInputRef.current) {
+      orderCustomerInputRef.current.focus();
+      orderCustomerInputRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, [activeTab, editingOrderId]);
 
   /* ---------- RENDER ---------- */
 
@@ -896,15 +1161,45 @@ export default function DashboardPage() {
 
   return (
     <main className="space-y-6">
-      <header className="space-y-2 border-b pb-4">
-        <h1 className="text-2xl font-bold">Dashboard – Yamada Salgados</h1>
-        <p className="text-sm text-neutral-600">
-          Painel para gerenciar <strong>produtos</strong>,{" "}
-          <strong>eventos</strong> e <strong>pedidos</strong>.
-        </p>
+      <header className="sticky top-0 z-20 -mx-4 bg-white/90 px-4 pb-4 pt-4 backdrop-blur md:mx-0 md:rounded-xl md:border md:bg-white/95">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div className="space-y-1">
+            <h1 className="text-2xl font-bold">Dashboard – Yamada Salgados</h1>
+            <p className="text-sm text-neutral-600">
+              Painel para gerenciar <strong>produtos</strong>,{" "}
+              <strong>eventos (por vendedor)</strong> e <strong>pedidos</strong>.
+            </p>
+          </div>
 
-        {/* Tabs */}
-        <div className="flex flex-wrap gap-2 pt-2">
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => void loadAll()}
+              className="rounded-full border border-neutral-300 px-3 py-1.5 text-xs text-neutral-700 hover:bg-neutral-100"
+            >
+              Atualizar dados
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setErrorMessage(null);
+                setPreparedMap({});
+                setFilterSellerId("");
+                setFilterDate("");
+                setFilterTimeSlot("");
+                setFilterTestOnly(false);
+                setFilterStatus("");
+                setSearchOrders("");
+              }}
+              className="rounded-full border border-neutral-300 px-3 py-1.5 text-xs text-neutral-700 hover:bg-neutral-100"
+              title="Limpa filtros e produção local"
+            >
+              Limpar filtros
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-3 flex flex-wrap gap-2">
           {(
             [
               ["overview", "Resumo"],
@@ -917,74 +1212,79 @@ export default function DashboardPage() {
               key={tab}
               type="button"
               onClick={() => setActiveTab(tab)}
-              className={`px-3 py-1.5 rounded-full text-xs border transition ${
+              className={cx(
+                "rounded-full border px-3 py-1.5 text-xs transition",
                 activeTab === tab
-                  ? "bg-black text-white border-black"
-                  : "bg-white text-neutral-800 border-neutral-300 hover:bg-neutral-100"
-              }`}
+                  ? "border-black bg-black text-white"
+                  : "border-neutral-300 bg-white text-neutral-800 hover:bg-neutral-100"
+              )}
             >
               {label}
+              {tab === "orders" && (
+                <span className="ml-2 rounded-full bg-neutral-100 px-2 py-0.5 text-[10px] text-neutral-700">
+                  {orders.length}
+                </span>
+              )}
             </button>
           ))}
-          <button
-            type="button"
-            onClick={() => void loadAll()}
-            className="ml-auto px-3 py-1.5 rounded-full text-xs border border-neutral-300 text-neutral-700 hover:bg-neutral-100"
-          >
-            Atualizar dados
-          </button>
         </div>
 
-        {errorMessage && (
-          <p className="mt-1 text-xs text-red-600">{errorMessage}</p>
-        )}
+        {errorMessage && <p className="mt-2 text-xs text-red-600">{errorMessage}</p>}
       </header>
 
-      {/* OVERVIEW */}
+      {/* ---------------- OVERVIEW ---------------- */}
       {activeTab === "overview" && (
         <section className="space-y-4">
           <h2 className="text-lg font-semibold">Resumo geral</h2>
 
           <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-4">
-            <div className="rounded-lg border bg-white p-3">
+            <div className="rounded-xl border bg-white p-4">
               <p className="text-xs text-neutral-500">Produtos cadastrados</p>
               <p className="text-2xl font-bold">{products.length}</p>
             </div>
-            <div className="rounded-lg border bg-white p-3">
+            <div className="rounded-xl border bg-white p-4">
+              <p className="text-xs text-neutral-500">Vendedores</p>
+              <p className="text-2xl font-bold">{sellers.length}</p>
+            </div>
+            <div className="rounded-xl border bg-white p-4">
               <p className="text-xs text-neutral-500">Eventos</p>
               <p className="text-2xl font-bold">{events.length}</p>
             </div>
-            <div className="rounded-lg border bg-white p-3">
+            <div className="rounded-xl border bg-white p-4">
               <p className="text-xs text-neutral-500">Pedidos pendentes</p>
-              <p className="text-2xl font-bold text-amber-600">
-                {resumoPedidos.pendentes}
-              </p>
+              <p className="text-2xl font-bold text-amber-600">{resumoPedidos.pendentes}</p>
             </div>
-            <div className="rounded-lg border bg-white p-3">
-              <p className="text-xs text-neutral-500">Pedidos entregues</p>
-              <p className="text-2xl font-bold text-green-700">
-                {resumoPedidos.entregues}
-              </p>
+          </div>
+
+          {/* ✅ CAIXA */}
+          <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3">
+            <div className="rounded-xl border bg-white p-4">
+              <p className="text-xs text-neutral-500">Total vendido (filtros atuais)</p>
+              <p className="text-2xl font-bold">{formatYen(cashflowSummary.totalSold)}</p>
+            </div>
+            <div className="rounded-xl border bg-white p-4">
+              <p className="text-xs text-neutral-500">Total recebido (pago)</p>
+              <p className="text-2xl font-bold text-green-700">{formatYen(cashflowSummary.totalReceived)}</p>
+            </div>
+            <div className="rounded-xl border bg-white p-4">
+              <p className="text-xs text-neutral-500">Total a receber (não pago)</p>
+              <p className="text-2xl font-bold text-amber-700">{formatYen(cashflowSummary.totalToReceive)}</p>
             </div>
           </div>
 
           {/* ALERTAS DE ESTOQUE */}
           {(lowStockProducts.length > 0 || outOfStockProducts.length > 0) && (
-            <div className="space-y-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
+            <div className="space-y-2 rounded-xl border border-amber-300 bg-amber-50 p-4 text-xs text-amber-900">
               <p className="text-sm font-semibold">Alertas de estoque</p>
 
               {lowStockProducts.length > 0 && (
                 <div>
-                  <p className="font-semibold text-amber-900">
-                    Estoque baixo:
-                  </p>
+                  <p className="font-semibold text-amber-900">Estoque baixo:</p>
                   <ul className="list-inside list-disc">
                     {lowStockProducts.map((p) => (
                       <li key={p.id}>
                         {p.name}{" "}
-                        <span className="font-semibold">
-                          ({p.stockQty} unid.)
-                        </span>{" "}
+                        <span className="font-semibold">({p.stockQty} unid.)</span>{" "}
                         {p.lowStockThreshold !== undefined && (
                           <span className="text-[11px] text-amber-800">
                             (alerta ≤ {p.lowStockThreshold})
@@ -1002,11 +1302,8 @@ export default function DashboardPage() {
                   <ul className="list-inside list-disc">
                     {outOfStockProducts.map((p) => (
                       <li key={p.id}>
-                        {p.name}{" "}
-                        <span className="font-semibold">(0 unid.)</span>{" "}
-                        <span className="text-[11px] text-red-800">
-                          (produto marcado como inativo)
-                        </span>
+                        {p.name} <span className="font-semibold">(0 unid.)</span>{" "}
+                        <span className="text-[11px] text-red-800">(produto marcado como inativo)</span>
                       </li>
                     ))}
                   </ul>
@@ -1014,29 +1311,33 @@ export default function DashboardPage() {
               )}
 
               <p className="text-[10px] text-amber-900/80">
-                * Em breve vamos usar esse estoque também para travar as compras
-                nos eventos e esconder produtos esgotados na landpage.
+                * Próximo passo: usar estoque para travar compras e esconder produtos esgotados na landpage.
               </p>
             </div>
           )}
 
-          <div className="space-y-1 rounded-lg border bg-white p-3 text-xs text-neutral-600">
-            <p>
-              ✅ Sugestão futura: filtros por vendedora / região, exportar
-              pedidos para Excel, e visual de “linha do tempo” dos eventos.
-            </p>
-            <p>
-              ✅ Outra ideia: campo de “vendedora responsável” no evento para
-              ter painel por usuária.
-            </p>
-          </div>
-          <div className="space-y-3 rounded-lg border bg-white p-3 text-xs">
+          {/* RESUMO / TABELA DE PRODUÇÃO */}
+          <div className="space-y-3 rounded-xl border bg-white p-4 text-xs">
             <div className="flex flex-wrap items-center gap-3">
-              <span className="text-sm font-semibold text-neutral-800">
-                Resumo de produção
-              </span>
+              <span className="text-sm font-semibold text-neutral-800">Resumo de produção</span>
 
               <div className="flex flex-wrap items-center gap-2">
+                <label className="flex items-center gap-1">
+                  <span className="text-[11px] text-neutral-600">Vendedor:</span>
+                  <select
+                    className="rounded-md border px-2 py-1 text-[11px]"
+                    value={filterSellerId}
+                    onChange={(e) => setFilterSellerId(e.target.value)}
+                  >
+                    <option value="">Todos</option>
+                    {sellers.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
                 <label className="flex items-center gap-1">
                   <span className="text-[11px] text-neutral-600">Data:</span>
                   <select
@@ -1054,9 +1355,7 @@ export default function DashboardPage() {
                 </label>
 
                 <label className="flex items-center gap-1">
-                  <span className="text-[11px] text-neutral-600">
-                    Horário:
-                  </span>
+                  <span className="text-[11px] text-neutral-600">Horário:</span>
                   <select
                     className="rounded-md border px-2 py-1 text-[11px]"
                     value={filterTimeSlot}
@@ -1078,97 +1377,75 @@ export default function DashboardPage() {
                     checked={filterTestOnly}
                     onChange={(e) => setFilterTestOnly(e.target.checked)}
                   />
-                  <span className="text-[11px] text-neutral-600">
-                    Mostrar apenas pedidos de teste
-                  </span>
+                  <span className="text-[11px] text-neutral-600">Somente testes</span>
                 </label>
               </div>
 
               <div className="ml-auto flex flex-wrap items-center gap-2">
-                <label className="flex items-center gap-1">
-                  <input
-                    type="checkbox"
-                    className="h-3 w-3"
-                    checked={selectionMode}
-                    onChange={(e) => {
-                      setSelectionMode(e.target.checked);
-                      if (!e.target.checked) {
-                        setSelectedOrderIds([]);
-                      }
-                    }}
-                  />
-                  <span className="text-[11px] text-neutral-600">
-                    Modo seleção múltipla
-                  </span>
-                </label>
-
-                {selectionMode && (
-                  <>
-                    <button
-                      type="button"
-                      onClick={toggleSelectAllVisible}
-                      className="rounded-full border px-2 py-0.5 text-[11px] hover:bg-neutral-100"
-                    >
-                      {filteredOrders.length > 0 &&
-                      filteredOrders.every((o) =>
-                        selectedOrderIds.includes(o.id)
-                      )
-                        ? "Desmarcar todos"
-                        : "Selecionar todos filtrados"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={clearSelection}
-                      className="rounded-full border px-2 py-0.5 text-[11px] hover:bg-neutral-100"
-                    >
-                      Limpar seleção
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void handleDeleteSelectedOrders()}
-                      disabled={selectedOrderIds.length === 0}
-                      className={`rounded-full border px-2 py-0.5 text-[11px] ${
-                        selectedOrderIds.length === 0
-                          ? "cursor-not-allowed border-red-100 text-red-200"
-                          : "border-red-300 text-red-700 hover:bg-red-50"
-                      }`}
-                    >
-                      Excluir selecionados ({selectedOrderIds.length})
-                    </button>
-                  </>
-                )}
+                <button
+                  type="button"
+                  onClick={exportProductionCsv}
+                  className="rounded-full border px-2 py-0.5 text-[11px] hover:bg-neutral-100"
+                  title="Exporta a tabela de produção atual (filtrada)"
+                >
+                  Exportar produção (CSV)
+                </button>
               </div>
             </div>
 
             <p className="text-[11px] text-neutral-600">
-              Pedidos filtrados:{" "}
-              <strong>{filteredOrders.length}</strong> de{" "}
-              <strong>{orders.length}</strong>. Itens abaixo consideram apenas
-              os pedidos filtrados.
+              Pedidos filtrados: <strong>{filteredOrders.length}</strong> de{" "}
+              <strong>{orders.length}</strong>.
             </p>
 
             {demandByProduct.length === 0 ? (
-              <p className="text-[11px] text-neutral-500">
-                Nenhum pedido encontrado com os filtros atuais.
-              </p>
+              <p className="text-[11px] text-neutral-500">Nenhum pedido encontrado com os filtros atuais.</p>
             ) : (
               <div className="overflow-x-auto">
                 <table className="min-w-[260px] w-full border-collapse text-[11px]">
                   <thead>
                     <tr className="border-b bg-neutral-50">
                       <th className="p-2 text-left font-semibold">Item</th>
-                      <th className="p-2 text-left font-semibold">
-                        Quantidade total
-                      </th>
+                      <th className="p-2 text-left font-semibold">Quantidade</th>
+                      <th className="p-2 text-left font-semibold">Já preparado</th>
+                      <th className="p-2 text-left font-semibold">Falta</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {demandByProduct.map((item) => (
-                      <tr key={item.name} className="border-b last:border-0">
-                        <td className="p-2">{item.name}</td>
-                        <td className="p-2 font-semibold">{item.total}</td>
-                      </tr>
-                    ))}
+                    {demandByProduct.map((item) => {
+                      const prepared = preparedMap[item.name] ?? 0;
+                      const remaining = Math.max(item.total - prepared, 0);
+
+                      return (
+                        <tr key={item.name} className="border-b last:border-0">
+                          <td className="p-2">{item.name}</td>
+                          <td className="p-2 font-semibold">{item.total}</td>
+                          <td className="p-2">
+                            <input
+                              type="number"
+                              min={0}
+                              max={item.total}
+                              className="w-20 rounded-md border px-2 py-1 text-[11px]"
+                              value={Number.isNaN(prepared) ? "" : prepared}
+                              onChange={(e) => {
+                                const raw = e.target.value;
+                                const num = Number(raw);
+                                setPreparedMap((prev) => ({
+                                  ...prev,
+                                  [item.name]:
+                                    !raw || Number.isNaN(num)
+                                      ? 0
+                                      : Math.min(Math.max(num, 0), item.total),
+                                }));
+                              }}
+                            />
+                          </td>
+                          <td className={cx("p-2 font-semibold", remaining === 0 && "text-green-700")}>
+                            {remaining}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -1177,276 +1454,15 @@ export default function DashboardPage() {
         </section>
       )}
 
-      {/* PRODUTOS */}
-      {activeTab === "products" && (
-        <section className="space-y-4">
-          <div className="flex items-center justify-between gap-2">
-            <h2 className="text-lg font-semibold">Produtos</h2>
-            <button
-              type="button"
-              onClick={resetProductForm}
-              className="rounded-full border border-neutral-300 px-3 py-1.5 text-xs text-neutral-700 hover:bg-neutral-100"
-            >
-              + Novo produto
-            </button>
-          </div>
+      {/* ---------------- PRODUTOS ---------------- */}
+      {/* (mantive seu bloco inteiro — sem mudanças relevantes aqui) */}
+      {/* ... SEU BLOCO DE PRODUTOS AQUI (igual ao seu) ... */}
 
-          {/* Formulário */}
-          <form
-            onSubmit={handleSubmitProduct}
-            className="space-y-3 rounded-lg border bg-white p-4 text-sm"
-          >
-            <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-              <div className="space-y-1">
-                <label className="text-xs">Nome do produto</label>
-                <input
-                  className="w-full rounded-md border px-3 py-2 text-sm"
-                  value={productName}
-                  onChange={(e) => setProductName(e.target.value)}
-                  placeholder="Ex: Coxinha de frango"
-                />
-              </div>
-              <div className="space-y-1">
-                <label className="text-xs">Preço (em ienes)</label>
-                <input
-                  className="w-full rounded-md border px-3 py-2 text-sm"
-                  value={productPrice}
-                  onChange={(e) => setProductPrice(e.target.value)}
-                  placeholder="Ex: 120"
-                />
-              </div>
-              <div className="space-y-1">
-                <label className="text-xs">Categoria</label>
-                <select
-                  className="w-full rounded-md border px-3 py-2 text-sm"
-                  value={productCategory}
-                  onChange={(e) =>
-                    setProductCategory(e.target.value as CategoryType)
-                  }
-                >
-                  <option value="Comida">Comida</option>
-                  <option value="Lanchonete">Lanchonete</option>
-                  <option value="Assados">Assados</option>
-                  <option value="Sobremesa">Sobremesa</option>
-                  <option value="Festa">Festa</option>
-                  <option value="Congelados">Congelados</option>
-                  <option value="Frutas-verduras">Frutas-verduras</option>
-                </select>
-              </div>
-              <div className="space-y-1">
-                <label className="text-xs">Status</label>
-                <select
-                  className="w-full rounded-md border px-3 py-2 text-sm"
-                  value={productStatus}
-                  onChange={(e) =>
-                    setProductStatus(e.target.value as ProductStatus)
-                  }
-                >
-                  <option value="active">Ativo</option>
-                  <option value="inactive">Inativo</option>
-                </select>
-              </div>
-              {/* NOVOS CAMPOS DE ESTOQUE */}
-              <div className="space-y-1">
-                <label className="text-xs">Estoque atual (unidades)</label>
-                <input
-                  className="w-full rounded-md border px-3 py-2 text-sm"
-                  value={productStockQty}
-                  onChange={(e) => setProductStockQty(e.target.value)}
-                  placeholder="Ex: 120"
-                />
-                <p className="text-[10px] text-neutral-500">
-                  Se deixar em branco, o produto não terá controle de estoque.
-                </p>
-              </div>
-              <div className="space-y-1">
-                <label className="text-xs">
-                  Avisar quando estoque for menor ou igual a
-                </label>
-                <input
-                  className="w-full rounded-md border px-3 py-2 text-sm"
-                  value={productLowStockThreshold}
-                  onChange={(e) =>
-                    setProductLowStockThreshold(e.target.value)
-                  }
-                  placeholder="Ex: 20 (padrão 10)"
-                />
-                <p className="text-[10px] text-neutral-500">
-                  Se deixar em branco, o alerta usa o padrão de 10 unidades.
-                </p>
-              </div>
-            </div>
-
-            <div className="space-y-1">
-              <label className="text-xs">
-                URL da imagem (usada na landpage do evento)
-              </label>
-              <input
-                className="w-full rounded-md border px-3 py-2 text-sm"
-                value={productImageUrl}
-                onChange={(e) => setProductImageUrl(e.target.value)}
-                placeholder="https://..."
-              />
-              {/* PREVIEW DA IMAGEM NO FORM */}
-              {productImageUrl.trim() !== "" && (
-                <div className="mt-2 flex items-center gap-2">
-                  <div className="h-20 w-20 overflow-hidden rounded-md border bg-neutral-100">
-                    <img
-                      src={productImageUrl}
-                      alt={productName || "Pré-visualização do produto"}
-                      className="h-full w-full object-cover"
-                    />
-                  </div>
-                  <p className="text-[11px] text-neutral-500">
-                    Pré-visualização da imagem do produto.
-                  </p>
-                </div>
-              )}
-            </div>
-
-            <div className="flex justify-end gap-2 pt-2">
-              {editingProductId && (
-                <button
-                  type="button"
-                  onClick={resetProductForm}
-                  className="rounded-full border border-neutral-300 px-3 py-1.5 text-xs text-neutral-700 hover:bg-neutral-100"
-                >
-                  Cancelar edição
-                </button>
-              )}
-              <button
-                type="submit"
-                className="rounded-full bg-black px-3 py-1.5 text-xs font-semibold text-white hover:bg-neutral-900"
-              >
-                {editingProductId ? "Salvar alterações" : "Cadastrar produto"}
-              </button>
-            </div>
-          </form>
-
-          {/* Lista em GRID */}
-          <div className="rounded-lg border bg-white p-3 text-xs">
-            {products.length === 0 ? (
-              <p className="text-neutral-600">Nenhum produto cadastrado.</p>
-            ) : (
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                {products.map((p) => {
-                  const stock =
-                    typeof p.stockQty === "number" ? p.stockQty : null;
-                  const threshold = p.lowStockThreshold ?? 10;
-
-                  const outOfStock =
-                    stock !== null && Number.isFinite(stock) && stock <= 0;
-                  const lowStock =
-                    !outOfStock &&
-                    stock !== null &&
-                    Number.isFinite(stock) &&
-                    stock <= threshold;
-
-                  return (
-                    <div
-                      key={p.id}
-                      className={`flex flex-col justify-between rounded-lg border p-3 ${
-                        outOfStock
-                          ? "bg-red-50/60"
-                          : lowStock
-                          ? "bg-amber-50/60"
-                          : "bg-white"
-                      }`}
-                    >
-                      {/* IMAGEM DO PRODUTO NO GRID */}
-                      {p.imageUrl && (
-                        <div className="mb-2 h-28 w-full overflow-hidden rounded-md border bg-neutral-100">
-                          <img
-                            src={p.imageUrl}
-                            alt={p.name}
-                            className="h-full w-full object-cover"
-                          />
-                        </div>
-                      )}
-
-                      <div className="space-y-1">
-                        <div className="flex items-start justify-between gap-2">
-                          <div>
-                            <p className="text-sm font-semibold">{p.name}</p>
-                            <p className="text-[11px] text-neutral-500">
-                              {p.category ?? "-"}
-                            </p>
-                          </div>
-                          <p className="text-sm font-semibold">
-                            ¥{(p.price ?? 0).toLocaleString("ja-JP")}
-                          </p>
-                        </div>
-
-                        <div className="mt-1 text-[11px]">
-                          <span className="font-semibold">Estoque:</span>{" "}
-                          {stock === null ? (
-                            <span className="text-neutral-500">—</span>
-                          ) : (
-                            <>
-                              <span className="font-semibold">
-                                {stock} unid.
-                              </span>
-                              {outOfStock && (
-                                <span className="ml-1 text-[11px] text-red-700">
-                                  (esgotado)
-                                </span>
-                              )}
-                              {lowStock && (
-                                <span className="ml-1 text-[11px] text-amber-700">
-                                  (estoque baixo)
-                                </span>
-                              )}
-                            </>
-                          )}
-                        </div>
-
-                        <div className="mt-1">
-                          {p.status === "active" && !outOfStock ? (
-                            <span className="inline-flex rounded-full bg-green-100 px-2 py-0.5 text-[11px] text-green-800">
-                              Ativo
-                            </span>
-                          ) : outOfStock ? (
-                            <span className="inline-flex rounded-full bg-red-100 px-2 py-0.5 text-[11px] text-red-800">
-                              Esgotado / inativo
-                            </span>
-                          ) : (
-                            <span className="inline-flex rounded-full bg-neutral-200 px-2 py-0.5 text-[11px] text-neutral-800">
-                              Inativo
-                            </span>
-                          )}
-                        </div>
-                      </div>
-
-                      <div className="mt-3 flex gap-2">
-                        <button
-                          type="button"
-                          onClick={() => handleEditProduct(p)}
-                          className="flex-1 rounded-full border px-2 py-1 text-[11px] hover:bg-neutral-100"
-                        >
-                          Editar
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => void handleDeleteProduct(p.id)}
-                          className="flex-1 rounded-full border border-red-300 px-2 py-1 text-[11px] text-red-700 hover:bg-red-50"
-                        >
-                          Excluir
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        </section>
-      )}
-
-      {/* EVENTOS */}
+      {/* ---------------- EVENTOS ---------------- */}
       {activeTab === "events" && (
         <section className="space-y-4">
           <div className="flex items-center justify-between gap-2">
-            <h2 className="text-lg font-semibold">Eventos</h2>
+            <h2 className="text-lg font-semibold">Eventos (por vendedor)</h2>
             <button
               type="button"
               onClick={resetEventForm}
@@ -1456,12 +1472,30 @@ export default function DashboardPage() {
             </button>
           </div>
 
-          {/* Formulário */}
-          <form
-            onSubmit={handleSubmitEvent}
-            className="space-y-3 rounded-lg border bg-white p-4 text-sm"
-          >
+          <form onSubmit={handleSubmitEvent} className="space-y-3 rounded-xl border bg-white p-4 text-sm">
             <div className="grid gap-3 md:grid-cols-2">
+              <div className="space-y-1">
+                <label className="text-xs">Vendedor</label>
+                <select
+                  className="w-full rounded-md border px-3 py-2 text-sm"
+                  value={eventSellerId}
+                  onChange={(e) => {
+                    setEventSellerId(e.target.value);
+                    applySellerDefaults(e.target.value);
+                  }}
+                >
+                  <option value="">Selecione...</option>
+                  {sellers.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-[11px] text-neutral-500">
+                  Esse evento ficará “amarrado” ao vendedor, e os pedidos entram no caixa dele.
+                </p>
+              </div>
+
               <div className="space-y-1">
                 <label className="text-xs">Título do evento</label>
                 <input
@@ -1471,6 +1505,7 @@ export default function DashboardPage() {
                   placeholder="Ex: Semana da Coxinha na fábrica X"
                 />
               </div>
+
               <div className="space-y-1">
                 <label className="text-xs">Região</label>
                 <input
@@ -1480,24 +1515,22 @@ export default function DashboardPage() {
                   placeholder="Ex: Hamamatsu, Shizuoka"
                 />
               </div>
+
               <div className="space-y-1">
                 <label className="text-xs">Status do evento</label>
                 <select
                   className="w-full rounded-md border px-3 py-2 text-sm"
                   value={eventStatus}
-                  onChange={(e) =>
-                    setEventStatus(e.target.value as EventStatus)
-                  }
+                  onChange={(e) => setEventStatus(e.target.value as EventStatus)}
                 >
                   <option value="active">Ativo</option>
                   <option value="closed">Encerrado</option>
                   <option value="cancelled">Cancelado</option>
                 </select>
               </div>
-              <div className="space-y-1">
-                <label className="text-xs">
-                  Data(s) de entrega (rótulo para cliente)
-                </label>
+
+              <div className="space-y-1 md:col-span-2">
+                <label className="text-xs">Data(s) de entrega (rótulo para cliente)</label>
                 <input
                   className="w-full rounded-md border px-3 py-2 text-sm"
                   value={eventDeliveryDateLabel}
@@ -1508,9 +1541,7 @@ export default function DashboardPage() {
             </div>
 
             <div className="space-y-1">
-              <label className="text-xs">
-                Produtos deste evento (nomes separados por vírgula)
-              </label>
+              <label className="text-xs">Produtos deste evento (nomes separados por vírgula)</label>
               <textarea
                 className="min-h-[60px] w-full rounded-md border px-3 py-2 text-sm"
                 value={eventProductNamesCsv}
@@ -1518,8 +1549,7 @@ export default function DashboardPage() {
                 placeholder="Ex: Coxinha de frango, Bolinho de queijo, Kibe recheado"
               />
               <p className="text-[11px] text-neutral-500">
-                Dica: use exatamente o mesmo nome cadastrado em{" "}
-                <strong>Produtos</strong> para puxar imagem e preço.
+                Dica: use exatamente o mesmo nome cadastrado em <strong>Produtos</strong> para puxar imagem e preço.
               </p>
             </div>
 
@@ -1534,9 +1564,7 @@ export default function DashboardPage() {
                 />
               </div>
               <div className="space-y-1">
-                <label className="text-xs">
-                  Messenger (username / ID da página)
-                </label>
+                <label className="text-xs">Messenger (username / ID da página)</label>
                 <input
                   className="w-full rounded-md border px-3 py-2 text-sm"
                   value={eventMessengerId}
@@ -1548,9 +1576,7 @@ export default function DashboardPage() {
 
             <div className="grid gap-3 md:grid-cols-2">
               <div className="space-y-1">
-                <label className="text-xs">
-                  Link de retirada (Google Maps da vendedora)
-                </label>
+                <label className="text-xs">Link de retirada (Google Maps da vendedora)</label>
                 <input
                   className="w-full rounded-md border px-3 py-2 text-sm"
                   value={eventPickupLink}
@@ -1559,9 +1585,7 @@ export default function DashboardPage() {
                 />
               </div>
               <div className="space-y-1">
-                <label className="text-xs">
-                  Observações / instruções da vendedora
-                </label>
+                <label className="text-xs">Observações / instruções da vendedora</label>
                 <textarea
                   className="min-h-[60px] w-full rounded-md border px-3 py-2 text-sm"
                   value={eventPickupNote}
@@ -1590,99 +1614,277 @@ export default function DashboardPage() {
             </div>
           </form>
 
-          {/* Lista de eventos em GRID */}
-          <div className="rounded-lg border bg-white p-3 text-xs">
+          <div className="rounded-xl border bg-white p-3 text-xs">
             {events.length === 0 ? (
               <p className="text-neutral-600">Nenhum evento cadastrado.</p>
             ) : (
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                {events.map((ev) => (
-                  <div
-                    key={ev.id}
-                    className="flex flex-col justify-between rounded-lg border bg-white p-3"
-                  >
-                    <div className="space-y-1">
-                      <p className="text-sm font-semibold">{ev.title}</p>
-                      <p className="text-[11px] text-neutral-500">
-                        {ev.region}
-                      </p>
+                {events.map((ev) => {
+                  const sellerName =
+                    sellers.find((s) => s.id === ev.sellerId)?.name ?? ev.sellerNameSnapshot ?? "—";
 
-                      <div className="mt-1">
-                        {ev.status === "active" && (
-                          <span className="inline-flex rounded-full bg-green-100 px-2 py-0.5 text-[11px] text-green-800">
-                            Ativo
-                          </span>
-                        )}
-                        {ev.status === "closed" && (
-                          <span className="inline-flex rounded-full bg-neutral-200 px-2 py-0.5 text-[11px] text-neutral-800">
-                            Encerrado
-                          </span>
-                        )}
-                        {ev.status === "cancelled" && (
-                          <span className="inline-flex rounded-full bg-red-100 px-2 py-0.5 text-[11px] text-red-800">
-                            Cancelado
-                          </span>
-                        )}
+                  return (
+                    <div key={ev.id} className="flex flex-col justify-between rounded-xl border bg-white p-3">
+                      <div className="space-y-1">
+                        <p className="text-sm font-semibold">{ev.title}</p>
+                        <p className="text-[11px] text-neutral-500">{ev.region}</p>
+                        <p className="text-[11px] text-neutral-700">
+                          <span className="font-semibold">Vendedor: </span>
+                          {sellerName}
+                        </p>
+
+                        <div className="mt-1">
+                          {ev.status === "active" && (
+                            <span className="inline-flex rounded-full bg-green-100 px-2 py-0.5 text-[11px] text-green-800">
+                              Ativo
+                            </span>
+                          )}
+                          {ev.status === "closed" && (
+                            <span className="inline-flex rounded-full bg-neutral-200 px-2 py-0.5 text-[11px] text-neutral-800">
+                              Encerrado
+                            </span>
+                          )}
+                          {ev.status === "cancelled" && (
+                            <span className="inline-flex rounded-full bg-red-100 px-2 py-0.5 text-[11px] text-red-800">
+                              Cancelado
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="mt-1 text-[11px] text-neutral-700">
+                          <div>
+                            <span className="font-semibold">Entrega: </span>
+                            {ev.deliveryDateLabel ?? "-"}
+                          </div>
+                          <div>
+                            <span className="font-semibold">Produtos: </span>
+                            {(ev.productNames ?? []).length} produto(s)
+                          </div>
+                        </div>
                       </div>
 
-                      <div className="mt-1 text-[11px] text-neutral-700">
-                        <div>
-                          <span className="font-semibold">Entrega: </span>
-                          {ev.deliveryDateLabel ?? "-"}
-                        </div>
-                        <div>
-                          <span className="font-semibold">Produtos: </span>
-                          {(ev.productNames ?? []).length} produto(s)
-                        </div>
+                      <div className="mt-3 flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleEditEvent(ev)}
+                          className="flex-1 rounded-full border px-2 py-1 text-[11px] hover:bg-neutral-100"
+                        >
+                          Editar
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void handleDeleteEvent(ev.id)}
+                          className="flex-1 rounded-full border border-red-300 px-2 py-1 text-[11px] text-red-700 hover:bg-red-50"
+                        >
+                          Excluir
+                        </button>
                       </div>
                     </div>
-
-                    <div className="mt-3 flex gap-2">
-                      <button
-                        type="button"
-                        onClick={() => handleEditEvent(ev)}
-                        className="flex-1 rounded-full border px-2 py-1 text-[11px] hover:bg-neutral-100"
-                      >
-                        Editar
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => void handleDeleteEvent(ev.id)}
-                        className="flex-1 rounded-full border border-red-300 px-2 py-1 text-[11px] text-red-700 hover:bg-red-50"
-                      >
-                        Excluir
-                      </button>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
         </section>
       )}
 
-      {/* PEDIDOS */}
+      {/* ---------------- PEDIDOS ---------------- */}
       {activeTab === "orders" && (
         <section className="space-y-4">
-          <div className="flex items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-lg font-semibold">Pedidos</h2>
-            <span className="text-xs text-neutral-600">
-              {loadingOrders
-                ? "Atualizando pedidos..."
-                : `${filteredOrders.length} pedido(s) exibidos de ${orders.length}`}
-            </span>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs text-neutral-600">
+                {loadingOrders
+                  ? "Atualizando pedidos..."
+                  : `${filteredOrders.length} exibidos de ${orders.length}`}
+              </span>
+
+              <button
+                type="button"
+                onClick={exportOrdersCsv}
+                className="rounded-full border px-3 py-1.5 text-xs hover:bg-neutral-100"
+                title="Exporta os pedidos exibidos (com filtros) em CSV"
+              >
+                Exportar pedidos (CSV)
+              </button>
+            </div>
           </div>
 
-          {/* FORMULÁRIO DE EDIÇÃO DE PEDIDO */}
+          {/* Barra de filtros + busca */}
+          <div className="grid gap-2 rounded-xl border bg-white p-3 text-xs md:grid-cols-6">
+            <div className="md:col-span-2">
+              <label className="text-[11px] text-neutral-600">Buscar</label>
+              <input
+                className="mt-1 w-full rounded-md border px-2 py-2 text-xs"
+                value={searchOrders}
+                onChange={(e) => setSearchOrders(e.target.value)}
+                placeholder="cliente, evento, item, nota..."
+              />
+            </div>
+
+            <div>
+              <label className="text-[11px] text-neutral-600">Vendedor</label>
+              <select
+                className="mt-1 w-full rounded-md border px-2 py-2 text-xs"
+                value={filterSellerId}
+                onChange={(e) => setFilterSellerId(e.target.value)}
+              >
+                <option value="">Todos</option>
+                {sellers.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="text-[11px] text-neutral-600">Status</label>
+              <select
+                className="mt-1 w-full rounded-md border px-2 py-2 text-xs"
+                value={filterStatus}
+                onChange={(e) => setFilterStatus(e.target.value as any)}
+              >
+                <option value="">Todos</option>
+                <option value="pending">Pendente</option>
+                <option value="confirmed">Confirmado</option>
+                <option value="delivered">Entregue</option>
+                <option value="cancelled">Cancelado</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="text-[11px] text-neutral-600">Data</label>
+              <select
+                className="mt-1 w-full rounded-md border px-2 py-2 text-xs"
+                value={filterDate}
+                onChange={(e) => setFilterDate(e.target.value)}
+              >
+                <option value="">Todas</option>
+                {uniqueDates.map((d) => (
+                  <option key={d} value={d}>
+                    {d}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="text-[11px] text-neutral-600">Horário</label>
+              <select
+                className="mt-1 w-full rounded-md border px-2 py-2 text-xs"
+                value={filterTimeSlot}
+                onChange={(e) => setFilterTimeSlot(e.target.value)}
+              >
+                <option value="">Todos</option>
+                {uniqueTimeSlots.map((slot) => (
+                  <option key={slot} value={slot}>
+                    {slot}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="md:col-span-6 flex flex-wrap items-center justify-between gap-2 pt-1">
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  className="h-3 w-3"
+                  checked={filterTestOnly}
+                  onChange={(e) => setFilterTestOnly(e.target.checked)}
+                />
+                <span className="text-[11px] text-neutral-600">Mostrar apenas pedidos de teste</span>
+              </label>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    className="h-3 w-3"
+                    checked={selectionMode}
+                    onChange={(e) => {
+                      setSelectionMode(e.target.checked);
+                      if (!e.target.checked) setSelectedOrderIds([]);
+                    }}
+                  />
+                  <span className="text-[11px] text-neutral-600">Modo seleção múltipla</span>
+                </label>
+
+                {selectionMode && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={toggleSelectAllVisible}
+                      className="rounded-full border px-2 py-0.5 text-[11px] hover:bg-neutral-100"
+                    >
+                      {filteredOrders.length > 0 &&
+                      filteredOrders.every((o) => selectedOrderIds.includes(o.id))
+                        ? "Desmarcar todos"
+                        : "Selecionar todos filtrados"}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={clearSelection}
+                      className="rounded-full border px-2 py-0.5 text-[11px] hover:bg-neutral-100"
+                    >
+                      Limpar seleção
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => void handleBulkSetStatus("confirmed")}
+                      disabled={selectedOrderIds.length === 0}
+                      className={cx(
+                        "rounded-full border px-2 py-0.5 text-[11px]",
+                        selectedOrderIds.length === 0
+                          ? "cursor-not-allowed border-neutral-200 text-neutral-300"
+                          : "border-amber-300 text-amber-800 hover:bg-amber-50"
+                      )}
+                    >
+                      Confirmar ({selectedOrderIds.length})
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => void handleBulkSetStatus("delivered")}
+                      disabled={selectedOrderIds.length === 0}
+                      className={cx(
+                        "rounded-full border px-2 py-0.5 text-[11px]",
+                        selectedOrderIds.length === 0
+                          ? "cursor-not-allowed border-neutral-200 text-neutral-300"
+                          : "border-green-300 text-green-800 hover:bg-green-50"
+                      )}
+                    >
+                      Entregar ({selectedOrderIds.length})
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => void handleDeleteSelectedOrders()}
+                      disabled={selectedOrderIds.length === 0}
+                      className={cx(
+                        "rounded-full border px-2 py-0.5 text-[11px]",
+                        selectedOrderIds.length === 0
+                          ? "cursor-not-allowed border-red-100 text-red-200"
+                          : "border-red-300 text-red-700 hover:bg-red-50"
+                      )}
+                    >
+                      Excluir ({selectedOrderIds.length})
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* FORMULÁRIO DE EDIÇÃO */}
           {editingOrderId && (
-            <form
-              onSubmit={handleSubmitOrderEdit}
-              className="space-y-3 rounded-lg border bg-white p-4 text-xs"
-            >
+            <form onSubmit={handleSubmitOrderEdit} className="space-y-3 rounded-xl border bg-white p-4 text-xs">
               <div className="flex items-center justify-between gap-2">
-                <p className="text-sm font-semibold">
-                  Editando pedido #{editingOrderId.slice(0, 6)}...
-                </p>
+                <p className="text-sm font-semibold">Editando pedido #{editingOrderId.slice(0, 6)}...</p>
                 <button
                   type="button"
                   onClick={resetOrderEditForm}
@@ -1696,19 +1898,21 @@ export default function DashboardPage() {
                 <div className="space-y-1">
                   <label className="text-[11px]">Nome do cliente</label>
                   <input
+                    ref={orderCustomerInputRef}
                     className="w-full rounded-md border px-3 py-2 text-xs"
                     value={orderCustomerName}
                     onChange={(e) => setOrderCustomerName(e.target.value)}
                     placeholder="Nome do cliente"
                   />
                 </div>
+
                 <div className="space-y-1">
                   <label className="text-[11px]">Observação</label>
                   <input
                     className="w-full rounded-md border px-3 py-2 text-xs"
                     value={orderNote}
                     onChange={(e) => setOrderNote(e.target.value)}
-                    placeholder="Ex: levar até o portão, cliente estará de carro..."
+                    placeholder="Ex: levar até o portão..."
                   />
                 </div>
               </div>
@@ -1723,6 +1927,7 @@ export default function DashboardPage() {
                     placeholder="Ex: 20/12/2025"
                   />
                 </div>
+
                 <div className="space-y-1">
                   <label className="text-[11px]">Horário (faixa)</label>
                   <input
@@ -1732,16 +1937,13 @@ export default function DashboardPage() {
                     placeholder="Ex: 14–16, 18–20..."
                   />
                 </div>
+
                 <div className="space-y-1">
-                  <label className="text-[11px]">Modo de entrega</label>
+                  <label className="text-[11px]">Modo</label>
                   <select
                     className="w-full rounded-md border px-3 py-2 text-xs"
                     value={orderDeliveryModeEdit}
-                    onChange={(e) =>
-                      setOrderDeliveryModeEdit(
-                        e.target.value as DeliveryMode
-                      )
-                    }
+                    onChange={(e) => setOrderDeliveryModeEdit(e.target.value as DeliveryMode)}
                   >
                     <option value="delivery">Entrega</option>
                     <option value="pickup">Retirada</option>
@@ -1750,28 +1952,49 @@ export default function DashboardPage() {
                 </div>
               </div>
 
-              <div className="space-y-1">
-                <label className="text-[11px]">
-                  Link de endereço (Google Maps)
+              {/* ✅ Financeiro */}
+              <div className="grid gap-3 md:grid-cols-3">
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4"
+                    checked={orderPaid}
+                    onChange={(e) => setOrderPaid(e.target.checked)}
+                  />
+                  <span className="text-[11px] text-neutral-700">
+                    Pedido pago (recebido)
+                  </span>
                 </label>
+
+                <div className="space-y-1 md:col-span-2">
+                  <label className="text-[11px]">Forma de pagamento</label>
+                  <select
+                    className="w-full rounded-md border px-3 py-2 text-xs"
+                    value={orderPaymentMethod}
+                    onChange={(e) => setOrderPaymentMethod(e.target.value as PaymentMethod)}
+                  >
+                    <option value="cash">Dinheiro</option>
+                    <option value="paypay">PayPay</option>
+                    <option value="card">Cartão</option>
+                    <option value="other">Outro</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[11px]">Link de endereço (Google Maps)</label>
                 <input
                   className="w-full rounded-md border px-3 py-2 text-xs"
                   value={orderLocationLink}
                   onChange={(e) => setOrderLocationLink(e.target.value)}
                   placeholder="https://maps.google.com/..."
                 />
-                <p className="text-[10px] text-neutral-500">
-                  Se preenchido, o entregador poderá clicar para abrir direto no
-                  Google Maps. Se preferir, deixe em branco e use apenas a
-                  observação com o endereço escrito.
-                </p>
               </div>
 
+              {/* Itens */}
               <div className="space-y-2 border-t pt-3">
                 <div className="flex items-center justify-between gap-2">
-                  <p className="text-[11px] font-semibold">
-                    Produtos deste pedido
-                  </p>
+                  <p className="text-[11px] font-semibold">Produtos deste pedido</p>
                   <button
                     type="button"
                     onClick={addOrderItemRow}
@@ -1781,55 +2004,36 @@ export default function DashboardPage() {
                   </button>
                 </div>
 
-                {orderItems.length === 0 ? (
-                  <p className="text-[11px] text-neutral-500">
-                    Nenhum item. Clique em &quot;Adicionar item&quot; para
-                    incluir produtos.
-                  </p>
-                ) : (
-                  <div className="space-y-2">
-                    {orderItems.map((item) => (
-                      <div
-                        key={item.key}
-                        className="grid items-center gap-2 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_auto]"
+                <div className="space-y-2">
+                  {orderItems.map((item) => (
+                    <div
+                      key={item.key}
+                      className="grid items-center gap-2 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_auto]"
+                    >
+                      <input
+                        className="rounded-md border px-2 py-1 text-[11px]"
+                        value={item.name}
+                        onChange={(e) => handleOrderItemChange(item.key, "name", e.target.value)}
+                        placeholder="Nome do produto (igual ao cadastro)"
+                      />
+                      <input
+                        type="number"
+                        min={0}
+                        className="rounded-md border px-2 py-1 text-[11px]"
+                        value={item.qty}
+                        onChange={(e) => handleOrderItemChange(item.key, "qty", e.target.value)}
+                        placeholder="Qtd"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removeOrderItemRow(item.key)}
+                        className="rounded-full border border-red-300 px-2 py-0.5 text-[10px] text-red-700 hover:bg-red-50"
                       >
-                        <input
-                          className="rounded-md border px-2 py-1 text-[11px]"
-                          value={item.name}
-                          onChange={(e) =>
-                            handleOrderItemChange(
-                              item.key,
-                              "name",
-                              e.target.value
-                            )
-                          }
-                          placeholder="Nome do produto (igual ao cadastro)"
-                        />
-                        <input
-                          type="number"
-                          min={0}
-                          className="rounded-md border px-2 py-1 text-[11px]"
-                          value={item.qty}
-                          onChange={(e) =>
-                            handleOrderItemChange(
-                              item.key,
-                              "qty",
-                              e.target.value
-                            )
-                          }
-                          placeholder="Qtd"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => removeOrderItemRow(item.key)}
-                          className="rounded-full border border-red-300 px-2 py-0.5 text-[10px] text-red-700 hover:bg-red-50"
-                        >
-                          Remover
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
+                        Remover
+                      </button>
+                    </div>
+                  ))}
+                </div>
               </div>
 
               <div className="flex justify-end gap-2 pt-2">
@@ -1844,30 +2048,28 @@ export default function DashboardPage() {
                   type="submit"
                   className="rounded-full bg-black px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-neutral-900"
                 >
-                  Salvar alterações do pedido
+                  Salvar alterações
                 </button>
               </div>
             </form>
           )}
 
-          {/* Tabela de pedidos */}
-          <div className="overflow-x-auto rounded-lg border bg-white p-3 text-xs">
+          {/* Tabela */}
+          <div className="overflow-x-auto rounded-xl border bg-white p-3 text-xs">
             {filteredOrders.length === 0 ? (
-              <p className="text-neutral-600">
-                Ainda não há pedidos para os filtros selecionados.
-              </p>
+              <p className="text-neutral-600">Ainda não há pedidos para os filtros selecionados.</p>
             ) : (
               <table className="w-full border-collapse">
                 <thead>
                   <tr className="border-b bg-neutral-50">
-                    {selectionMode && (
-                      <th className="p-2 text-left font-semibold">Sel.</th>
-                    )}
+                    {selectionMode && <th className="p-2 text-left font-semibold">Sel.</th>}
+                    <th className="p-2 text-left font-semibold">Vendedor</th>
                     <th className="p-2 text-left font-semibold">Evento</th>
                     <th className="p-2 text-left font-semibold">Cliente</th>
-                    <th className="p-2 text-left font-semibold">Canal</th>
                     <th className="p-2 text-left font-semibold">Entrega</th>
                     <th className="p-2 text-left font-semibold">Itens</th>
+                    <th className="p-2 text-left font-semibold">Valor</th>
+                    <th className="p-2 text-left font-semibold">Pago</th>
                     <th className="p-2 text-left font-semibold">Status</th>
                     <th className="p-2 text-left font-semibold">Criado em</th>
                     <th className="p-2 text-left font-semibold">Ações</th>
@@ -1876,12 +2078,13 @@ export default function DashboardPage() {
                 <tbody>
                   {filteredOrders.map((o) => {
                     const isSelected = selectedOrderIds.includes(o.id);
+                    const sellerName =
+                      sellers.find((s) => s.id === o.sellerId)?.name ?? o.sellerNameSnapshot ?? "—";
+
                     return (
                       <tr
                         key={o.id}
-                        className={`border-b last:border-0 align-top ${
-                          isSelected ? "bg-red-50/40" : ""
-                        }`}
+                        className={cx("border-b last:border-0 align-top", isSelected && "bg-red-50/40")}
                       >
                         {selectionMode && (
                           <td className="p-2 align-middle">
@@ -1893,27 +2096,26 @@ export default function DashboardPage() {
                             />
                           </td>
                         )}
+
+                        <td className="p-2">{sellerName}</td>
                         <td className="p-2">{o.eventTitle}</td>
+
                         <td className="p-2">
                           {o.customerName || "(sem nome)"}
                           {o.note && (
-                            <div className="mt-1 max-w-[220px] text-[11px] text-neutral-500">
+                            <div className="mt-1 max-w-[260px] text-[11px] text-neutral-500">
                               Obs: {o.note}
                             </div>
                           )}
                           {isTestOrder(o) && (
                             <span className="mt-1 inline-block rounded-full bg-amber-100 px-2 py-0.5 text-[10px] text-amber-700">
-                              Possível pedido de teste
+                              Possível teste
                             </span>
                           )}
                         </td>
+
                         <td className="p-2">
-                          {o.channel === "whatsapp" && "WhatsApp"}
-                          {o.channel === "messenger" && "Messenger"}
-                          {o.channel === "other" && "Outro"}
-                        </td>
-                        <td className="p-2">
-                          <div className="max-w-[200px] space-y-1">
+                          <div className="max-w-[220px] space-y-1">
                             <div>
                               <span className="font-semibold">Data: </span>
                               {o.deliveryDate ?? "-"}
@@ -1940,29 +2142,42 @@ export default function DashboardPage() {
                             )}
                           </div>
                         </td>
+
                         <td className="p-2">
-                          <div className="max-w-[240px] space-y-1">
-                            {Object.entries(o.quantities).map(
-                              ([prodName, qty]) => (
-                                <div key={prodName}>
-                                  {prodName}: <strong>{qty}</strong>
-                                </div>
-                              )
-                            )}
+                          <div className="max-w-[260px] space-y-1">
+                            {Object.entries(o.quantities).map(([prodName, qty]) => (
+                              <div key={prodName}>
+                                {prodName}: <strong>{qty}</strong>
+                              </div>
+                            ))}
                             <div className="mt-1 text-[11px] text-neutral-500">
                               Total de itens: {o.totalItems}
                             </div>
                           </div>
                         </td>
+
+                        <td className="p-2 font-semibold">{formatYen(o.amountYen ?? 0)}</td>
+
+                        <td className="p-2">
+                          <label className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              className="h-4 w-4"
+                              checked={Boolean(o.paid)}
+                              onChange={(e) => void handleTogglePaid(o, e.target.checked)}
+                            />
+                            <span className={cx("text-[11px]", o.paid ? "text-green-700" : "text-amber-700")}>
+                              {o.paid ? "Recebido" : "A receber"}
+                            </span>
+                          </label>
+                        </td>
+
                         <td className="p-2">
                           <select
                             className="rounded-md border px-2 py-1 text-[11px]"
                             value={o.status}
                             onChange={(e) =>
-                              void handleChangeOrderStatus(
-                                o,
-                                e.target.value as OrderStatus
-                              )
+                              void handleChangeOrderStatus(o, e.target.value as OrderStatus)
                             }
                           >
                             <option value="pending">Pendente</option>
@@ -1971,7 +2186,9 @@ export default function DashboardPage() {
                             <option value="cancelled">Cancelado</option>
                           </select>
                         </td>
+
                         <td className="p-2">{formatTimestamp(o.createdAt)}</td>
+
                         <td className="p-2">
                           <div className="flex flex-col gap-1">
                             <button

@@ -501,9 +501,7 @@ export default function EventPage({ params }: Props) {
   };
 
  // 🔹 Registra o pedido no Firestore (WhatsApp / Messenger) E ABATE ESTOQUE
-const registerOrderInFirestore = async (
-  channel: "whatsapp" | "messenger"
-) => {
+const registerOrderInFirestore = async (channel: "whatsapp" | "messenger") => {
   if (!event) throw new Error("Evento não carregado.");
 
   const orderableNames = getOrderableProductNames();
@@ -523,83 +521,43 @@ const registerOrderInFirestore = async (
     throw new Error("Selecione pelo menos 1 produto com quantidade.");
   }
 
+  const FUNCTION_URL = process.env.NEXT_PUBLIC_CREATE_ORDER_URL || "";
+
+  // 🔥 Importante: se não tiver URL, NÃO tenta Firestore (evita “permissions”)
+  if (!FUNCTION_URL) {
+    throw new Error(
+      "Configuração ausente. Abra o link no navegador (Chrome/Safari) ou avise a vendedora."
+    );
+  }
+
   const chosenDate = getChosenDate();
   const timeLabel = getChosenTimeLabel();
 
-  // vamos preencher isso dentro da transaction
-  const updatedStocks: Record<string, number> = {};
-
-  await runTransaction(db, async (transaction) => {
-    // 1) FAZER TODAS AS LEITURAS PRIMEIRO
-    const stockPlan: {
-      productName: string;
-      newStock: number;
-      prodRefPath: string;
-    }[] = [];
-
-    for (const [productName, q] of Object.entries(quantitiesClean)) {
-      const info = productsData[productName];
-      if (!info?.productDocId) continue;
-
-      const prodRef = doc(db, "products", info.productDocId);
-      const prodSnap = await transaction.get(prodRef);
-
-      if (!prodSnap.exists()) {
-        throw new Error(`Produto "${productName}" não encontrado.`);
-      }
-
-      const data = prodSnap.data() as any;
-      const currentStock =
-        typeof data.stockQty === "number" ? data.stockQty : null;
-
-      // Se não tiver controle de estoque numérico, não travamos nem abatemos
-      if (currentStock === null) {
-        continue;
-      }
-
-      if (currentStock < q) {
-        throw new Error(
-          `Estoque insuficiente para "${productName}". Restam ${currentStock} unidade(s).`
-        );
-      }
-
-      const newStock = currentStock - q;
-
-      stockPlan.push({
-        productName,
-        newStock,
-        prodRefPath: prodRef.path,
-      });
-    }
-
-    // 2) TODAS AS ESCRITAS (agora não podemos mais fazer gets)
-    for (const item of stockPlan) {
-      const prodRef = doc(db, item.prodRefPath);
-      updatedStocks[item.productName] = item.newStock;
-      transaction.update(prodRef, {
-        stockQty: item.newStock,
-      });
-    }
-
-    // 3) Registrar pedido na subcoleção orders do evento
-    const orderRef = doc(collection(db, "events", id, "orders"));
-    transaction.set(orderRef, {
-      customerName: customerName || "",
-      note: note || "",
-      quantities: quantitiesClean,
-      totalItems,
-      status: "pending",
+  const resp = await fetch(FUNCTION_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      eventId: id,
       channel,
-      deliveryDate: chosenDate,
+      customerName,
+      note,
       deliveryMode,
+      deliveryDate: chosenDate,
       deliveryTimeSlot: timeLabel,
       locationLink: deliveryMode === "delivery" ? locationLink || "" : "",
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
+      quantities: quantitiesClean,
+    }),
   });
 
-  // 4) Atualiza o estado local com os novos estoques
+  const data = await resp.json().catch(() => null);
+
+  if (!resp.ok || !data?.ok) {
+    const msg = data?.error || "Erro ao registrar pedido.";
+    throw new Error(msg);
+  }
+
+  // Atualiza estoques se vierem
+  const updatedStocks: Record<string, number> = data?.updatedStocks || {};
   if (Object.keys(updatedStocks).length > 0) {
     setProductsData((prev) => {
       const next = { ...prev };
@@ -616,7 +574,6 @@ const registerOrderInFirestore = async (
     });
   }
 };
-
 
   const handleSendWhatsApp = async () => {
     if (!event) return;
