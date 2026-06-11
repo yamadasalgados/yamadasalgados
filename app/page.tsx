@@ -1,47 +1,44 @@
-// app/page.tsx
+"use client";
+
 import Link from "next/link";
+import { useI18n } from "@/app/lib/i18n"; // Ajustado para o caminho correto dentro de _old
 
 export default function HomePage() {
+  const { t } = useI18n();
+
   return (
-    <main className="space-y-6">
-      <header className="space-y-2">
-        <h1 className="text-3xl font-bold tracking-tight">
-          Yamada Salgados –{" "}
-          <span className="text-orange-600">Eventos por região</span>
-        </h1>
-        <p className="text-sm text-neutral-700">
-          Organize suas vendas por cidade, data e vendedora usando links
-          personalizados para cada evento.
-        </p>
-      </header>
+    <main className="flex min-h-[85vh] flex-col items-center justify-center px-4 text-center">
+      <div className="space-y-6 max-w-2xl">
+        <img
+          src="/logo-yamada.png"
+          alt="Yamada Salgados"
+          className="mx-auto h-28 w-28 rounded-[2.5rem] shadow-2xl transition-transform hover:scale-105"
+        />
 
-      <section className="grid gap-4 md:grid-cols-2">
-        <div className="rounded-xl bg-white shadow-sm border border-neutral-200 p-4 space-y-2">
-          <h2 className="text-sm font-semibold">Para vendedoras</h2>
-          <ul className="text-xs text-neutral-700 space-y-1 list-disc pl-4">
-            <li>Criar eventos por região e data de entrega</li>
-            <li>Selecionar produtos específicos para cada evento</li>
-            <li>Gerar link único para enviar pelo WhatsApp</li>
-          </ul>
+        <div className="space-y-2">
+          <h1 className="text-4xl md:text-6xl font-black tracking-tighter text-neutral-900 dark:text-white">
+            Order <span className="text-neutral-500 dark:text-neutral-400">System</span>
+          </h1>
+          <p className="text-lg text-neutral-600 dark:text-neutral-400 font-medium max-w-md mx-auto">
+            {t("home.subtitle")}
+          </p>
         </div>
 
-        <div className="rounded-xl bg-white shadow-sm border border-neutral-200 p-4 space-y-2">
-          <h2 className="text-sm font-semibold">Para clientes</h2>
-          <ul className="text-xs text-neutral-700 space-y-1 list-disc pl-4">
-            <li>Acessam apenas os produtos daquele evento</li>
-            <li>Escolhem quantidades rapidamente</li>
-            <li>Enviam o pedido direto pelo WhatsApp</li>
-          </ul>
-        </div>
-      </section>
+        <div className="flex flex-col sm:flex-row gap-4 justify-center pt-6 w-full max-w-sm mx-auto">
+          <Link
+            href="/login"
+            className="flex-1 px-8 py-4 bg-black dark:bg-white text-white dark:text-black rounded-2xl font-black text-base hover:scale-[1.02] active:scale-[0.98] transition-all shadow-xl text-center"
+          >
+            {t("home.cta.login")}
+          </Link>
 
-      <div>
-        <Link
-          href="/login"
-          className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-black text-white text-sm font-medium hover:bg-neutral-800 transition"
-        >
-          Entrar como vendedora
-        </Link>
+          <Link
+            href="/login?mode=register"
+            className="flex-1 px-8 py-4 bg-white dark:bg-neutral-900 text-black dark:text-white border border-neutral-200 dark:border-neutral-800 rounded-2xl font-black text-base hover:bg-neutral-50 dark:hover:bg-neutral-800/50 transition-colors text-center"
+          >
+            {t("home.cta.register")}
+          </Link>
+        </div>
       </div>
     </main>
   );

@@ -39,3 +39,38 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+functions/lib
+
+# dependencies
+node_modules/
+functions/node_modules/
+
+# build
+.next/
+out/
+.vercel/
+
+# env / secrets
+.env
+.env.local
+.env.production
+serviceAccountKey.json
+
+serviceAccountKey.json
+*.json.backup
+
+serviceAccountKey.json
+functions/node_modules/
+node_modules/
+.next/
+.env
+.env.local
+.vercel/
+
+serviceAccountKey.json
+functions/node_modules/
+node_modules/
+.next/
+.env
+.env.local
+.vercel/

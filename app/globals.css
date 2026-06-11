@@ -1,16 +1,51 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  :root {
+    /* Modo Claro: Slate 50 (Fundo) + Branco (Cards) */
+    --background: 210 40% 98%;
+    --foreground: 222 47% 11%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+    --border: 214.3 31.8% 91.4%;
+    --primary: 47.9 95.8% 53.1%; /* Amarelo Yamada */
+  }
+
+  .dark {
+    /* Modo Escuro: Grafite Profundo (Fundo) + Zinc 900 (Cards) */
+    --background: 222 47% 4%;
+    --foreground: 213 31% 91%;
+    --card: 222 47% 7%;
+    --card-foreground: 213 31% 91%;
+    --border: 217.2 32.6% 17.5%;
+  }
+}
+
 html,
 body {
   width: 100%;
   max-width: 100%;
   overflow-x: hidden;
   -webkit-text-size-adjust: 100%;
+  @apply bg-[hsla(var(--background))] text-[hsla(var(--foreground))];
 }
+
+/* Utilitários de Superfície */
+@layer components {
+  .bg-card {
+    background-color: hsl(var(--card));
+    color: hsl(var(--card-foreground));
+  }
+  .border-app {
+    border-color: hsl(var(--border));
+  }
+}
+
 /* Evita zoom automático do Safari em inputs com fonte < 16px */
 @supports (-webkit-touch-callout: none) {
-  .ios-anti-zoom-input {
+  input, textarea, select {
     font-size: 16px !important;
   }
 }
