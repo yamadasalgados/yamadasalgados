@@ -289,6 +289,36 @@ export default function EventClient({ sellerId, id }: { sellerId: string; id: st
     }).format(ts.toDate());
   }, []);
 
+  const resetOrderForm = useCallback(() => {
+    setQuantities({});
+    setNote("");
+    setLocationLink("");
+    setTimeOption("no-preference");
+    setSelectedHour(null);
+    setSelectedMinute(null);
+
+    if (event?.deliveryDates?.length) {
+      setDateOption("event-date");
+      setSelectedDate(event.deliveryDates[0]);
+    } else {
+      setDateOption("no-preference");
+      setSelectedDate("");
+    }
+
+    if (event?.allowPickup !== false) {
+      setDeliveryMode("pickup");
+    } else if (event?.allowDelivery !== false) {
+      setDeliveryMode("delivery");
+    } else {
+      setDeliveryMode("none");
+    }
+  }, [event]);
+
+  const showSentToast = useCallback(() => {
+    setSentToast(true);
+    setTimeout(() => setSentToast(false), 5000);
+  }, []);
+
   const adjustQuantity = useCallback(
     (productId: string, delta: number) => {
       setQuantities((prev) => {
@@ -626,26 +656,35 @@ export default function EventClient({ sellerId, id }: { sellerId: string; id: st
         alert(tr("event.whatsapp.missing_phone", "Pedido registrado, mas o WhatsApp do vendedor não está configurado."));
       }
 
-      setSentToast(true);
-      setTimeout(() => setSentToast(false), 3000);
+      resetOrderForm();
+      showSentToast();
     } catch (err: any) {
       alert(err?.message || tr("event.error.register_order", "Não foi possível registrar o pedido."));
     } finally {
       setSubmitting(false);
     }
-  }, [submitting, registerOrderInFirestore, getWhatsappPhone, buildWhatsappMessage, tr]);
+  }, [submitting, registerOrderInFirestore, getWhatsappPhone, buildWhatsappMessage, tr, resetOrderForm, showSentToast]);
 
   const handleSendMessenger = useCallback(async () => {
+    if (submitting) return;
+
     try {
+      setSubmitting(true);
+
       await registerOrderInFirestore("messenger");
 
+      resetOrderForm();
+      showSentToast();
+
       if (event?.messengerId) {
-        window.open(`https://m.me/${event.messengerId}`, "_blank", "noopener,noreferrer");
+        window.location.href = `https://m.me/${event.messengerId}`;
       }
     } catch (err: any) {
       alert(err?.message || tr("event.error.register_order", "Não foi possível registrar o pedido."));
+    } finally {
+      setSubmitting(false);
     }
-  }, [event, registerOrderInFirestore, tr]);
+  }, [submitting, event, registerOrderInFirestore, resetOrderForm, showSentToast, tr]);
 
   const handleSendChat = useCallback(async () => {
     if (!event) return;
@@ -695,9 +734,9 @@ export default function EventClient({ sellerId, id }: { sellerId: string; id: st
       <OpenInBrowserGate url={currentUrl} />
 
       {sentToast && (
-        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50">
-          <div className="rounded-full bg-black text-white dark:bg-white dark:text-black text-xs font-black px-6 py-2.5 shadow-xl uppercase tracking-wider">
-            {tr("event.order.sent", "Pedido enviado")}
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 w-[calc(100%-2rem)] max-w-md">
+          <div className="rounded-2xl bg-black text-white dark:bg-white dark:text-black text-xs font-black px-5 py-3 shadow-xl uppercase tracking-wider text-center">
+            {tr("event.order.sent", "Pedido enviado com sucesso! Os campos foram limpos.")}
           </div>
         </div>
       )}
@@ -969,7 +1008,7 @@ export default function EventClient({ sellerId, id }: { sellerId: string; id: st
             disabled={submitting || totalAmount <= 0}
             className="w-full bg-blue-600 text-white py-4 rounded-2xl font-black text-sm uppercase tracking-wider transition hover:opacity-95 shadow-xl disabled:opacity-30"
           >
-            {tr("event.order.send_messenger", "Enviar pelo Messenger")}
+            {submitting ? tr("event.order.finalizing", "Finalizando...") : tr("event.order.send_messenger", "Enviar pelo Messenger")}
           </button>
         )}
 
