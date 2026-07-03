@@ -69,7 +69,10 @@ const MAIN_CLASS = "p-4 space-y-6 max-w-3xl mx-auto animate-fade-in";
 
 const normalizeStringArray = (value: any): string[] =>
   Array.isArray(value)
-    ? value.filter((v) => typeof v === "string").map((s) => s.trim()).filter(Boolean)
+    ? value
+        .filter((v) => typeof v === "string")
+        .map((s) => s.trim())
+        .filter(Boolean)
     : [];
 
 const safeNumber = (v: any) => {
@@ -99,10 +102,6 @@ function makeId() {
   return `c_${Math.random().toString(16).slice(2)}_${Date.now().toString(16)}`;
 }
 
-function normalizeProductKey(value: string) {
-  return value.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase().trim().replace(/\s+/g, " ");
-}
-
 function normalizeCategoryDynamic(v: any): CategoryName | undefined {
   if (typeof v !== "string") return undefined;
   const s = v.trim();
@@ -114,7 +113,10 @@ function mapProductSnapToData(snap: any): Record<string, ProductImageData> {
 
   snap.docs.forEach((d: any) => {
     const docData = d.data() as any;
-    const stockQty = typeof docData.stockQty === "number" && Number.isFinite(docData.stockQty) ? docData.stockQty : undefined;
+    const stockQty =
+      typeof docData.stockQty === "number" && Number.isFinite(docData.stockQty)
+        ? docData.stockQty
+        : undefined;
     const lowStockThreshold =
       typeof docData.lowStockThreshold === "number" && Number.isFinite(docData.lowStockThreshold)
         ? docData.lowStockThreshold
@@ -133,7 +135,7 @@ function mapProductSnapToData(snap: any): Record<string, ProductImageData> {
             ? docData.image
             : "",
       extraImageUrls: normalizeStringArray(docData.extraImageUrls),
-      price: safeNumber(docData.price),
+      price: safeNumber(docData.price || docData.sellPrice),
       category: normalizeCategoryDynamic(docData.category),
       stockQty,
       lowStockThreshold,
@@ -154,21 +156,7 @@ async function fetchEventPublishedProducts(sellerId: string, eventId: string, pr
   const eventProductsSnap = await getDocs(collection(db, "sellers", sellerId, "events", eventId, "products"));
   Object.assign(result, mapProductSnapToData(eventProductsSnap));
 
-  const rootProductsSnap = await getDocs(collection(db, "products"));
-  const rootProductsMap = mapProductSnapToData(rootProductsSnap);
-
-  const byName: Record<string, ProductImageData> = {};
-  Object.values(rootProductsMap).forEach((p) => {
-    byName[normalizeProductKey(p.name)] = p;
-  });
-
   wantedNames.forEach((name) => {
-    const found = byName[normalizeProductKey(name)];
-
-    if (found) {
-      result[name] = { ...found, id: name, name: found.name || name };
-    }
-
     if (!result[name]) {
       result[name] = {
         id: name,
@@ -262,13 +250,20 @@ export default function EventClient({ sellerId, id }: { sellerId: string; id: st
     return Array.from(set).sort((a, b) => a.localeCompare(b, "pt-BR"));
   }, [sortedProductIds, productsData]);
 
-  const uncategorized = useMemo(() => sortedProductIds.filter((pid) => !productsData[pid]?.category), [sortedProductIds, productsData]);
+  const uncategorized = useMemo(
+    () => sortedProductIds.filter((pid) => !productsData[pid]?.category),
+    [sortedProductIds, productsData]
+  );
 
   const visibleProductIds = useMemo(() => {
     if (activeCategory === "__all__") return sortedProductIds;
     if (activeCategory === "__other__") return uncategorized;
     return sortedProductIds.filter((pid) => (productsData[pid]?.category || "") === activeCategory);
   }, [sortedProductIds, productsData, activeCategory, uncategorized]);
+
+  const totalItems = useMemo(() => {
+    return orderableIds.reduce((sum, pid) => sum + (quantities[pid] || 0), 0);
+  }, [orderableIds, quantities]);
 
   const totalAmount = useMemo(() => {
     return orderableIds.reduce((sum, pid) => {
@@ -290,6 +285,7 @@ export default function EventClient({ sellerId, id }: { sellerId: string; id: st
   }, []);
 
   const resetOrderForm = useCallback(() => {
+    setCustomerName("");
     setQuantities({});
     setNote("");
     setLocationLink("");
@@ -381,58 +377,6 @@ export default function EventClient({ sellerId, id }: { sellerId: string; id: st
     [tr]
   );
 
-  const getWhatsappPhone = useCallback(() => {
-    let phone = (event?.whatsapp || "").replace(/\D/g, "");
-    if (phone.startsWith("0")) phone = `81${phone.slice(1)}`;
-    return phone;
-  }, [event]);
-
-  const buildWhatsappMessage = useCallback(() => {
-    const items = orderableIds
-      .filter((pid) => (quantities[pid] || 0) > 0)
-      .map((pid) => {
-        const item = productsData[pid];
-        const name = item?.name || pid;
-        const qty = quantities[pid] || 0;
-        const price = item?.price || 0;
-        return `• ${name} x${qty} - ¥${(qty * price).toLocaleString("ja-JP")}`;
-      })
-      .join("\n");
-
-    return [
-      tr("event.whatsapp.greeting", "Olá! Quero fazer um pedido:"),
-      "",
-      `${tr("event.whatsapp.event", "Evento")}: ${event?.title || ""}`,
-      `${tr("event.whatsapp.name", "Nome")}: ${customerName || tr("event.whatsapp.not_informed", "Não informado")}`,
-      `${tr("event.whatsapp.mode", "Modo")}: ${getDeliveryModeLabel(deliveryMode)}`,
-      `${tr("event.whatsapp.date", "Data")}: ${getChosenDate()}`,
-      `${tr("event.whatsapp.time", "Hora")}: ${getChosenTimeLabel()}`,
-      deliveryMode === "delivery" && locationLink ? `${tr("event.whatsapp.location", "Localização")}: ${locationLink}` : "",
-      "",
-      `${tr("event.whatsapp.items", "Itens")}:`,
-      items,
-      "",
-      `${tr("event.whatsapp.total", "Total")}: ¥${totalAmount.toLocaleString("ja-JP")}`,
-      note ? `${tr("event.whatsapp.note", "Observação")}: ${note}` : "",
-    ]
-      .filter(Boolean)
-      .join("\n");
-  }, [
-    tr,
-    event,
-    customerName,
-    deliveryMode,
-    getDeliveryModeLabel,
-    getChosenDate,
-    getChosenTimeLabel,
-    locationLink,
-    orderableIds,
-    quantities,
-    productsData,
-    totalAmount,
-    note,
-  ]);
-
   useEffect(() => {
     if (typeof window === "undefined") return;
 
@@ -480,9 +424,7 @@ export default function EventClient({ sellerId, id }: { sellerId: string; id: st
 
         const data = snap.data() as any;
 
-        const effectiveSellerId =
-          eventSource === "seller-events" ? sellerId : String(data.sellerId || sellerId);
-
+        const effectiveSellerId = eventSource === "seller-events" ? sellerId : String(data.sellerId || sellerId);
         const deliveryDates = normalizeStringArray(data.deliveryDates);
 
         let deliveryDateLabel = String(data.deliveryDateLabel || data.deliveryDate || "");
@@ -564,7 +506,11 @@ export default function EventClient({ sellerId, id }: { sellerId: string; id: st
     setChatLoading(true);
 
     return onSnapshot(
-      query(collection(db, "sellers", effectiveSellerId, "events", id, "orders", lastOrderId, "messages"), orderBy("createdAt", "asc"), limit(200)),
+      query(
+        collection(db, "sellers", effectiveSellerId, "events", id, "orders", lastOrderId, "messages"),
+        orderBy("createdAt", "asc"),
+        limit(200)
+      ),
       (snap) => {
         setMessages(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as ChatMessage));
         setChatLoading(false);
@@ -577,85 +523,116 @@ export default function EventClient({ sellerId, id }: { sellerId: string; id: st
     );
   }, [event?.sellerId, sellerId, id, lastOrderId]);
 
-  const registerOrderInFirestore = useCallback(
-    async (channel: "whatsapp" | "messenger") => {
-      if (!event) return;
+  const canSubmit = useMemo(() => {
+    if (submitting) return false;
+    if (!event) return false;
+    if (String(event.status || "active") !== "active") return false;
+    if (!customerName.trim()) return false;
+    if (totalItems <= 0 || totalAmount <= 0) return false;
+    if (!deliveryMode) return false;
+    if (event.deliveryDates.length > 0 && dateOption === "event-date" && !selectedDate) return false;
+    if (timeOption === "custom" && (selectedHour == null || selectedMinute == null)) return false;
+    return true;
+  }, [
+    submitting,
+    event,
+    customerName,
+    totalItems,
+    totalAmount,
+    deliveryMode,
+    dateOption,
+    selectedDate,
+    timeOption,
+    selectedHour,
+    selectedMinute,
+  ]);
 
-      const quantitiesClean: Record<string, number> = {};
+  const registerOrderInFirestore = useCallback(async () => {
+    if (!event) return "";
 
-      orderableIds.forEach((pid) => {
-        if ((quantities[pid] || 0) > 0) quantitiesClean[pid] = quantities[pid];
+    const quantitiesClean: Record<string, number> = {};
+    const items: Array<{
+      productId: string;
+      name: string;
+      qty: number;
+      unitPrice: number;
+      subtotal: number;
+      imageUrl?: string;
+      category?: string;
+    }> = [];
+
+    orderableIds.forEach((pid) => {
+      const qty = quantities[pid] || 0;
+      if (qty <= 0) return;
+
+      const product = productsData[pid];
+      const unitPrice = product?.price || 0;
+
+      quantitiesClean[pid] = qty;
+      items.push({
+        productId: pid,
+        name: product?.name || pid,
+        qty,
+        unitPrice,
+        subtotal: qty * unitPrice,
+        imageUrl: product?.imageUrl || "",
+        category: product?.category || "",
       });
+    });
 
-      const createOrderUrl = process.env.NEXT_PUBLIC_CREATE_ORDER_URL || "";
+    const effectiveSellerId = event.sellerId || sellerId;
 
-      if (!createOrderUrl) {
-        throw new Error(tr("event.error.create_order_url_missing", "NEXT_PUBLIC_CREATE_ORDER_URL não está configurado."));
-      }
-
-      const resp = await fetch(createOrderUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sellerId: event.sellerId || sellerId,
-          eventId: id,
-          channel,
-          customerName,
-          note,
-          deliveryMode,
-          deliveryDate: getChosenDate(),
-          deliveryTimeSlot: getChosenTimeLabel(),
-          locationLink: deliveryMode === "delivery" ? locationLink : "",
-          quantities: quantitiesClean,
-          customerClientId: customerId,
-        }),
-      });
-
-      const data = await resp.json().catch(() => null);
-
-      if (!resp.ok || !data?.ok) {
-        throw new Error(data?.error || tr("event.error.register_order", "Não foi possível registrar o pedido."));
-      }
-
-      if (data?.orderId) {
-        setLastOrderId(data.orderId);
-        setChatOpen(true);
-      }
-    },
-    [
-      event,
-      sellerId,
-      id,
-      orderableIds,
-      quantities,
-      customerName,
-      note,
+    const orderRef = await addDoc(collection(db, "sellers", effectiveSellerId, "events", id, "orders"), {
+      customerName: customerName.trim(),
+      note: note.trim(),
+      quantities: quantitiesClean,
+      items,
+      totalItems,
+      totalAmount,
+      status: "pending",
+      channel: "pwa",
       deliveryMode,
-      locationLink,
-      customerId,
-      tr,
-      getChosenDate,
-      getChosenTimeLabel,
-    ]
-  );
+      deliveryDate: getChosenDate(),
+      deliveryTimeSlot: getChosenTimeLabel(),
+      locationLink: deliveryMode === "delivery" ? locationLink.trim() : "",
+      customerClientId: customerId,
+      sellerUnread: true,
+      sellerReadAt: null,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+
+    setLastOrderId(orderRef.id);
+    setChatOpen(true);
+
+    return orderRef.id;
+  }, [
+    event,
+    sellerId,
+    id,
+    orderableIds,
+    quantities,
+    productsData,
+    customerName,
+    note,
+    totalItems,
+    totalAmount,
+    deliveryMode,
+    locationLink,
+    customerId,
+    getChosenDate,
+    getChosenTimeLabel,
+  ]);
 
   const handleFinalize = useCallback(async () => {
-    if (submitting) return;
+    if (!canSubmit) {
+      alert(tr("event.error.fill_required", "Escolha produtos, informe seu nome e selecione entrega/data/hora antes de finalizar."));
+      return;
+    }
 
     try {
       setSubmitting(true);
-
-      await registerOrderInFirestore("whatsapp");
-
-      const phone = getWhatsappPhone();
-      const message = buildWhatsappMessage();
-
-      if (phone) {
-        window.open(`https://wa.me/${phone}?text=${encodeURIComponent(message)}`, "_blank", "noopener,noreferrer");
-      } else {
-        alert(tr("event.whatsapp.missing_phone", "Pedido registrado, mas o WhatsApp do vendedor não está configurado."));
-      }
-
+      await registerOrderInFirestore();
       resetOrderForm();
       showSentToast();
     } catch (err: any) {
@@ -663,28 +640,7 @@ export default function EventClient({ sellerId, id }: { sellerId: string; id: st
     } finally {
       setSubmitting(false);
     }
-  }, [submitting, registerOrderInFirestore, getWhatsappPhone, buildWhatsappMessage, tr, resetOrderForm, showSentToast]);
-
-  const handleSendMessenger = useCallback(async () => {
-    if (submitting) return;
-
-    try {
-      setSubmitting(true);
-
-      await registerOrderInFirestore("messenger");
-
-      resetOrderForm();
-      showSentToast();
-
-      if (event?.messengerId) {
-        window.location.href = `https://m.me/${event.messengerId}`;
-      }
-    } catch (err: any) {
-      alert(err?.message || tr("event.error.register_order", "Não foi possível registrar o pedido."));
-    } finally {
-      setSubmitting(false);
-    }
-  }, [submitting, event, registerOrderInFirestore, resetOrderForm, showSentToast, tr]);
+  }, [canSubmit, registerOrderInFirestore, resetOrderForm, showSentToast, tr]);
 
   const handleSendChat = useCallback(async () => {
     if (!event) return;
@@ -728,6 +684,7 @@ export default function EventClient({ sellerId, id }: { sellerId: string; id: st
 
   const canDelivery = event.allowDelivery !== false;
   const canPickup = event.allowPickup !== false;
+  const eventClosed = String(event.status || "active") !== "active";
 
   return (
     <main className={MAIN_CLASS}>
@@ -736,7 +693,7 @@ export default function EventClient({ sellerId, id }: { sellerId: string; id: st
       {sentToast && (
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 w-[calc(100%-2rem)] max-w-md">
           <div className="rounded-2xl bg-black text-white dark:bg-white dark:text-black text-xs font-black px-5 py-3 shadow-xl uppercase tracking-wider text-center">
-            {tr("event.order.sent", "Pedido enviado com sucesso! Os campos foram limpos.")}
+            {tr("event.order.sent", "Pedido finalizado com sucesso! O vendedor recebeu seu pedido.")}
           </div>
         </div>
       )}
@@ -751,29 +708,181 @@ export default function EventClient({ sellerId, id }: { sellerId: string; id: st
           {tr("event.header.delivery_dates", "Data(s) de entrega")}:{" "}
           <span className="font-bold text-neutral-800 dark:text-neutral-200">{event.deliveryDateLabel}</span>
         </p>
+
+        {eventClosed && (
+          <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-xs font-black uppercase tracking-wider text-red-700 dark:border-red-900/30 dark:bg-red-950/20 dark:text-red-400">
+            {tr("event.closed", "Este evento não está recebendo pedidos no momento.")}
+          </div>
+        )}
       </header>
 
-      <section className="bg-neutral-50 dark:bg-neutral-900/40 border border-neutral-200 dark:border-neutral-800 rounded-[2rem] p-5 space-y-4">
-        <h4 className="text-xs font-black uppercase tracking-widest text-neutral-400">
-          {tr("event.delivery.title", "Modo de entrega")}
-        </h4>
+      <section className="space-y-4">
+        <div className="flex items-center justify-between border-b border-neutral-100 dark:border-neutral-800/60 pb-2">
+          <div>
+            <h2 className="text-sm font-black uppercase tracking-widest text-neutral-400">
+              {tr("event.products.title", "1. Escolha os produtos")}
+            </h2>
+            <p className="text-[11px] font-bold text-neutral-400 mt-1">
+              {tr("event.products.subtitle", "Use + e - para definir a quantidade de cada item.")}
+            </p>
+          </div>
+        </div>
 
-        <div className="flex gap-2 flex-wrap">
-          {canPickup && (
-            <button type="button" onClick={() => setDeliveryMode("pickup")} className={pill(deliveryMode === "pickup")}>
-              {tr("event.delivery.pickup", "Retirada no local")}
-            </button>
-          )}
-
-          {canDelivery && (
-            <button type="button" onClick={() => setDeliveryMode("delivery")} className={pill(deliveryMode === "delivery")}>
-              {tr("event.delivery.delivery", "Entrega")}
-            </button>
-          )}
-
-          <button type="button" onClick={() => setDeliveryMode("none")} className={pill(deliveryMode === "none")}>
-            {tr("event.common.to_be_arranged", "A combinar")}
+        <div className="flex flex-wrap gap-1.5 overflow-x-auto pb-1 scrollbar-none">
+          <button type="button" onClick={() => setActiveCategory("__all__")} className={pill(activeCategory === "__all__")}>
+            {tr("event.categories.all", "Todos")}
           </button>
+
+          {dynamicCategories.map((cat) => (
+            <button key={cat} type="button" onClick={() => setActiveCategory(cat)} className={pill(activeCategory === cat)}>
+              {cat}
+            </button>
+          ))}
+
+          {uncategorized.length > 0 && (
+            <button type="button" onClick={() => setActiveCategory("__other__")} className={pill(activeCategory === "__other__")}>
+              {tr("event.categories.other", "Outros")}
+            </button>
+          )}
+        </div>
+
+        {visibleProductIds.length === 0 ? (
+          <div className="rounded-3xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-6 text-center">
+            <p className="text-sm font-bold text-neutral-500">
+              {tr("event.products.empty", "Nenhum produto disponível neste evento.")}
+            </p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+            {visibleProductIds.map((pid) => {
+              const info = productsData[pid];
+              const name = info?.name || pid;
+              const qty = quantities[pid] ?? 0;
+              const stock = typeof info?.stockQty === "number" ? info.stockQty : null;
+              const isOutOfStock = stock !== null && stock <= 0;
+
+              return (
+                <div
+                  key={pid}
+                  className={cn(
+                    "border border-neutral-200 dark:border-neutral-800 rounded-3xl bg-white dark:bg-neutral-900 p-4 flex flex-col justify-between min-h-[220px] shadow-sm animate-fade-in hover:shadow-md transition",
+                    qty > 0 && "ring-2 ring-black dark:ring-white"
+                  )}
+                >
+                  <div className="space-y-2">
+                    <div className="aspect-[4/3] rounded-2xl bg-neutral-50 dark:bg-neutral-800 border border-neutral-100 dark:border-neutral-700 overflow-hidden flex items-center justify-center">
+                      {info?.imageUrl ? (
+                        <img src={info.imageUrl} alt={name} className="h-full w-full object-cover" />
+                      ) : (
+                        <span className="text-[10px] text-neutral-400 font-black uppercase">
+                          {tr("event.product.no_image", "Sem imagem")}
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="space-y-0.5">
+                      <h4 className="text-sm font-black text-neutral-900 dark:text-white tracking-tight truncate">{name}</h4>
+
+                      <p className="text-xs font-black text-neutral-600 dark:text-neutral-400">
+                        ¥{(info?.price || 0).toLocaleString("ja-JP")}
+                      </p>
+
+                      {stock !== null && !isOutOfStock && (
+                        <p className="text-[10px] font-bold text-neutral-400">
+                          {tr("event.product.stock", "Estoque")}: {stock}
+                        </p>
+                      )}
+
+                      {isOutOfStock && (
+                        <span className="text-[10px] font-black text-red-500 uppercase">
+                          {tr("event.product.sold_out", "Esgotado")}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-2 border-t border-neutral-100 dark:border-neutral-800/40 pt-3 mt-2">
+                    <span className="text-[10px] font-black uppercase text-neutral-400">
+                      {tr("event.product.quantity", "Quantidade")}
+                    </span>
+
+                    <div className="inline-flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => adjustQuantity(pid, -1)}
+                        className="h-8 w-8 rounded-full border border-neutral-300 dark:border-neutral-700 text-sm flex items-center justify-center font-bold bg-white dark:bg-neutral-900 text-app hover:bg-neutral-50 transition"
+                      >
+                        -
+                      </button>
+
+                      <span className="min-w-[1.5rem] text-center font-black text-sm text-neutral-900 dark:text-white">{qty}</span>
+
+                      <button
+                        type="button"
+                        disabled={isOutOfStock || eventClosed}
+                        onClick={() => adjustQuantity(pid, 1)}
+                        className="h-8 w-8 rounded-full border border-neutral-300 dark:border-neutral-700 text-sm flex items-center justify-center font-bold bg-white dark:bg-neutral-900 text-app hover:bg-neutral-50 transition disabled:opacity-30"
+                      >
+                        +
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      <section className="space-y-4 border-t border-neutral-200 dark:border-neutral-800 pt-6">
+        <h2 className="text-sm font-black uppercase tracking-widest text-neutral-400">
+          {tr("event.customer.title", "2. Informe seu nome")}
+        </h2>
+
+        <div className="space-y-3">
+          <input
+            value={customerName}
+            onChange={(e) => setCustomerName(e.target.value)}
+            placeholder={tr("event.form.customer_name", "Seu nome")}
+            className="w-full rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-4 py-3 text-sm text-neutral-900 dark:text-white focus:outline-none"
+          />
+
+          <textarea
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder={tr("event.form.note", "Observação")}
+            className="w-full rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-4 py-3 text-sm text-neutral-900 dark:text-white focus:outline-none min-h-[90px]"
+          />
+        </div>
+      </section>
+
+      <section className="bg-neutral-50 dark:bg-neutral-900/40 border border-neutral-200 dark:border-neutral-800 rounded-[2rem] p-5 space-y-4">
+        <h2 className="text-sm font-black uppercase tracking-widest text-neutral-400">
+          {tr("event.delivery.title", "3. Escolha entrega, data e hora")}
+        </h2>
+
+        <div className="space-y-2">
+          <p className="text-[10px] font-black uppercase tracking-widest text-neutral-400">
+            {tr("event.delivery.mode_title", "Tipo de entrega")}
+          </p>
+
+          <div className="flex gap-2 flex-wrap">
+            {canPickup && (
+              <button type="button" onClick={() => setDeliveryMode("pickup")} className={pill(deliveryMode === "pickup")}>
+                {tr("event.delivery.pickup", "Retirada no local")}
+              </button>
+            )}
+
+            {canDelivery && (
+              <button type="button" onClick={() => setDeliveryMode("delivery")} className={pill(deliveryMode === "delivery")}>
+                {tr("event.delivery.delivery", "Entrega")}
+              </button>
+            )}
+
+            <button type="button" onClick={() => setDeliveryMode("none")} className={pill(deliveryMode === "none")}>
+              {tr("event.common.to_be_arranged", "A combinar")}
+            </button>
+          </div>
         </div>
 
         <div className="space-y-3 pt-3">
@@ -872,145 +981,72 @@ export default function EventClient({ sellerId, id }: { sellerId: string; id: st
             {locationLink && <p className="text-xs text-neutral-500 break-all">{locationLink}</p>}
           </div>
         )}
-      </section>
 
-      <section className="space-y-4">
-        <div className="flex items-center justify-between border-b border-neutral-100 dark:border-neutral-800/60 pb-2">
-          <h2 className="text-sm font-black uppercase tracking-widest text-neutral-400">
-            {tr("event.products.title", "Produtos disponíveis")}
-          </h2>
-        </div>
-
-        <div className="flex flex-wrap gap-1.5 overflow-x-auto pb-1 scrollbar-none">
-          <button type="button" onClick={() => setActiveCategory("__all__")} className={pill(activeCategory === "__all__")}>
-            {tr("event.categories.all", "Todos")}
-          </button>
-
-          {dynamicCategories.map((cat) => (
-            <button key={cat} type="button" onClick={() => setActiveCategory(cat)} className={pill(activeCategory === cat)}>
-              {cat}
-            </button>
-          ))}
-
-          {uncategorized.length > 0 && (
-            <button type="button" onClick={() => setActiveCategory("__other__")} className={pill(activeCategory === "__other__")}>
-              {tr("event.categories.other", "Outros")}
-            </button>
-          )}
-        </div>
-
-        {visibleProductIds.length === 0 ? (
-          <div className="rounded-3xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-6 text-center">
-            <p className="text-sm font-bold text-neutral-500">
-              {tr("event.products.empty", "Nenhum produto disponível neste evento.")}
-            </p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-            {visibleProductIds.map((pid) => {
-              const info = productsData[pid];
-              const name = info?.name || pid;
-              const qty = quantities[pid] ?? 0;
-              const stock = typeof info?.stockQty === "number" ? info.stockQty : null;
-              const isOutOfStock = stock !== null && stock <= 0;
-
-              return (
-                <div key={pid} className="border border-neutral-200 dark:border-neutral-800 rounded-3xl bg-white dark:bg-neutral-900 p-4 flex flex-col justify-between min-h-[220px] shadow-sm animate-fade-in hover:shadow-md transition">
-                  <div className="space-y-2">
-                    <div className="aspect-[4/3] rounded-2xl bg-neutral-50 dark:bg-neutral-800 border border-neutral-100 dark:border-neutral-700 overflow-hidden flex items-center justify-center">
-                      {info?.imageUrl ? (
-                        <img src={info.imageUrl} alt={name} className="h-full w-full object-cover" />
-                      ) : (
-                        <span className="text-[10px] text-neutral-400 font-black uppercase">
-                          {tr("event.product.no_image", "Sem imagem")}
-                        </span>
-                      )}
-                    </div>
-
-                    <div className="space-y-0.5">
-                      <h4 className="text-sm font-black text-neutral-900 dark:text-white tracking-tight truncate">{name}</h4>
-
-                      <p className="text-xs font-black text-neutral-600 dark:text-neutral-400">
-                        ¥{(info?.price || 0).toLocaleString("ja-JP")}
-                      </p>
-
-                      {isOutOfStock && (
-                        <span className="text-[10px] font-black text-red-500 uppercase">
-                          {tr("event.product.sold_out", "Esgotado")}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="flex items-center justify-between gap-2 border-t border-neutral-100 dark:border-neutral-800/40 pt-3 mt-2">
-                    <span className="text-[10px] font-black uppercase text-neutral-400">
-                      {tr("event.product.quantity", "Quantidade")}
-                    </span>
-
-                    <div className="inline-flex items-center gap-2">
-                      <button type="button" onClick={() => adjustQuantity(pid, -1)} className="h-7 w-7 rounded-full border border-neutral-300 dark:border-neutral-700 text-sm flex items-center justify-center font-bold bg-white dark:bg-neutral-900 text-app hover:bg-neutral-50 transition">
-                        -
-                      </button>
-
-                      <span className="min-w-[1.2rem] text-center font-black text-sm text-neutral-900 dark:text-white">{qty}</span>
-
-                      <button type="button" disabled={isOutOfStock} onClick={() => adjustQuantity(pid, 1)} className="h-7 w-7 rounded-full border border-neutral-300 dark:border-neutral-700 text-sm flex items-center justify-center font-bold bg-white dark:bg-neutral-900 text-app hover:bg-neutral-50 transition disabled:opacity-30">
-                        +
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
+        {deliveryMode === "pickup" && (event.pickupLink || event.pickupNote) && (
+          <div className="rounded-2xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 p-4 space-y-2">
+            {event.pickupNote && <p className="text-xs font-bold text-neutral-500">{event.pickupNote}</p>}
+            {event.pickupLink && (
+              <a href={event.pickupLink} target="_blank" rel="noreferrer" className="text-xs font-black underline text-blue-600 dark:text-blue-400">
+                {tr("event.pickup.open_map", "Abrir local de retirada")}
+              </a>
+            )}
           </div>
         )}
       </section>
 
       <section className="space-y-4 border-t border-neutral-200 dark:border-neutral-800 pt-6">
-        <div className="space-y-3">
-          <input
-            value={customerName}
-            onChange={(e) => setCustomerName(e.target.value)}
-            placeholder={tr("event.form.customer_name", "Seu nome")}
-            className="w-full rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-4 py-3 text-sm text-neutral-900 dark:text-white focus:outline-none"
-          />
+        <div className="rounded-[2rem] border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-5 space-y-3 shadow-sm">
+          <h2 className="text-sm font-black uppercase tracking-widest text-neutral-400">
+            {tr("event.order.summary", "4. Finalizar pedido")}
+          </h2>
 
-          <textarea
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            placeholder={tr("event.form.note", "Observação")}
-            className="w-full rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-4 py-3 text-sm text-neutral-900 dark:text-white focus:outline-none min-h-[90px]"
-          />
-        </div>
+          <div className="space-y-1 text-xs font-bold text-neutral-500 dark:text-neutral-400">
+            <p>
+              {tr("event.form.customer_name", "Seu nome")}:{" "}
+              <span className="text-neutral-900 dark:text-white">{customerName.trim() || "—"}</span>
+            </p>
+            <p>
+              {tr("event.whatsapp.mode", "Modo")}:{" "}
+              <span className="text-neutral-900 dark:text-white">{getDeliveryModeLabel(deliveryMode)}</span>
+            </p>
+            <p>
+              {tr("event.whatsapp.date", "Data")}:{" "}
+              <span className="text-neutral-900 dark:text-white">{getChosenDate()}</span>
+            </p>
+            <p>
+              {tr("event.whatsapp.time", "Hora")}:{" "}
+              <span className="text-neutral-900 dark:text-white">{getChosenTimeLabel()}</span>
+            </p>
+            <p>
+              {tr("event.order.items_count", "Itens")}:{" "}
+              <span className="text-neutral-900 dark:text-white">{totalItems}</span>
+            </p>
+          </div>
 
-        {totalAmount > 0 && (
-          <p className="text-sm font-black text-neutral-800 dark:text-neutral-300">
-            {tr("event.order.total", "Total")}:{" "}
-            <span className="text-xl text-emerald-600 dark:text-emerald-400">
-              ¥{totalAmount.toLocaleString("ja-JP")}
-            </span>
-          </p>
-        )}
+          {totalAmount > 0 && (
+            <p className="text-sm font-black text-neutral-800 dark:text-neutral-300">
+              {tr("event.order.total", "Total")}:{" "}
+              <span className="text-xl text-emerald-600 dark:text-emerald-400">
+                ¥{totalAmount.toLocaleString("ja-JP")}
+              </span>
+            </p>
+          )}
 
-        <button
-          type="button"
-          onClick={handleFinalize}
-          disabled={submitting || totalAmount <= 0}
-          className="w-full bg-green-600 text-white py-4 rounded-2xl font-black text-sm uppercase tracking-wider transition hover:opacity-95 shadow-xl disabled:opacity-30"
-        >
-          {submitting ? tr("event.order.finalizing", "Finalizando...") : tr("event.order.send_whatsapp", "Enviar pedido pelo WhatsApp")}
-        </button>
-
-        {event.messengerId && (
           <button
             type="button"
-            onClick={handleSendMessenger}
-            disabled={submitting || totalAmount <= 0}
-            className="w-full bg-blue-600 text-white py-4 rounded-2xl font-black text-sm uppercase tracking-wider transition hover:opacity-95 shadow-xl disabled:opacity-30"
+            onClick={handleFinalize}
+            disabled={!canSubmit}
+            className="w-full bg-green-600 text-white py-4 rounded-2xl font-black text-sm uppercase tracking-wider transition hover:opacity-95 shadow-xl disabled:opacity-30"
           >
-            {submitting ? tr("event.order.finalizing", "Finalizando...") : tr("event.order.send_messenger", "Enviar pelo Messenger")}
+            {submitting ? tr("event.order.finalizing", "Finalizando...") : tr("event.order.finalize_pwa", "Finalizar pedido")}
           </button>
-        )}
+
+          {!canSubmit && (
+            <p className="text-[11px] font-bold text-neutral-400 text-center">
+              {tr("event.order.fill_required_hint", "Escolha produtos, informe seu nome e selecione entrega/data/hora para finalizar.")}
+            </p>
+          )}
+        </div>
 
         {lastOrderId && (
           <div className="border border-neutral-200 dark:border-neutral-800 rounded-3xl bg-neutral-50 dark:bg-neutral-900/30 p-5 space-y-4 shadow-sm animate-fade-in">
@@ -1028,6 +1064,10 @@ export default function EventClient({ sellerId, id }: { sellerId: string; id: st
                   {chatLoading ? (
                     <p className="text-xs font-bold text-neutral-400 text-center py-6">
                       {tr("event.chat.loading", "Carregando...")}
+                    </p>
+                  ) : messages.length === 0 ? (
+                    <p className="text-xs font-bold text-neutral-400 text-center py-6">
+                      {tr("event.chat.empty", "Pedido recebido. Se precisar, envie uma mensagem ao vendedor.")}
                     </p>
                   ) : (
                     messages.map((m) => {
