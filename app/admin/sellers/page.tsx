@@ -10,14 +10,12 @@ import {
 import {
   collection,
   doc,
-  documentId,
   getDocs,
   limit,
   orderBy,
   query,
   serverTimestamp,
   updateDoc,
-  where,
   type DocumentData,
   type QueryDocumentSnapshot,
 } from "firebase/firestore";
@@ -46,12 +44,6 @@ type UserRow = {
   regionId: string;
   plan: PlanId;
   subscriptionStatus: SubscriptionStatus;
-};
-
-type SellerMergeData = {
-  plan?: PlanId;
-  subscriptionStatus?: SubscriptionStatus;
-  regionId?: string;
 };
 
 const EMPTY_BUSY_MAP: Record<string, BusyAction> = {};
@@ -104,78 +96,6 @@ function normalizeUserRow(
       data.subscriptionStatus
     ),
   };
-}
-
-function chunkValues<T>(values: T[], size: number): T[][] {
-  const chunks: T[][] = [];
-
-  for (let index = 0; index < values.length; index += size) {
-    chunks.push(values.slice(index, index + size));
-  }
-
-  return chunks;
-}
-
-async function mergeSellerData(
-  rows: UserRow[]
-): Promise<UserRow[]> {
-  const sellerIds = Array.from(
-    new Set(
-      rows
-        .filter((row) => row.role === "seller")
-        .map((row) => row.sellerId)
-        .filter(Boolean)
-    )
-  );
-
-  if (sellerIds.length === 0) return rows;
-
-  const sellerMap = new Map<string, SellerMergeData>();
-
-  for (const sellerIdChunk of chunkValues(sellerIds, 10)) {
-    const sellerQuery = query(
-      collection(db, "sellers"),
-      where(documentId(), "in", sellerIdChunk)
-    );
-
-    const snapshot = await getDocs(sellerQuery);
-
-    snapshot.forEach((sellerSnapshot) => {
-      const data = sellerSnapshot.data();
-
-      sellerMap.set(sellerSnapshot.id, {
-        plan:
-          data.plan === "starter" ||
-          data.plan === "pro" ||
-          data.plan === "business"
-            ? data.plan
-            : undefined,
-        subscriptionStatus:
-          data.subscriptionStatus === "none" ||
-          data.subscriptionStatus === "pending" ||
-          data.subscriptionStatus === "active" ||
-          data.subscriptionStatus === "past_due" ||
-          data.subscriptionStatus === "cancelled"
-            ? data.subscriptionStatus
-            : undefined,
-        regionId: text(data.regionId),
-      });
-    });
-  }
-
-  return rows.map((row) => {
-    if (row.role !== "seller") return row;
-
-    const seller = sellerMap.get(row.sellerId);
-
-    return {
-      ...row,
-      plan: seller?.plan ?? row.plan,
-      subscriptionStatus:
-        seller?.subscriptionStatus ?? row.subscriptionStatus,
-      regionId: row.regionId || seller?.regionId || "",
-    };
-  });
 }
 
 export default function AdminSellersPage() {
@@ -278,10 +198,9 @@ export default function AdminSellersPage() {
         );
       }
 
-      const normalizedRows = snapshot.docs.map(normalizeUserRow);
-      const mergedRows = await mergeSellerData(normalizedRows);
+const normalizedRows = snapshot.docs.map(normalizeUserRow);
 
-      setRows(mergedRows);
+setRows(normalizedRows);
     } catch (error) {
       console.error("[AdminSellers] loadUsers:", error);
 
