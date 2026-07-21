@@ -1,32 +1,44 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState, useCallback } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import {
   collection,
+  doc,
+  documentId,
   getDocs,
   limit,
   orderBy,
   query,
-  updateDoc,
-  doc,
-  getDoc,
   serverTimestamp,
+  updateDoc,
   where,
-  documentId,
+  type DocumentData,
+  type QueryDocumentSnapshot,
 } from "firebase/firestore";
 import { db } from "@/app/lib/firebase";
-import AdminGuard from "@/app/_components/AdminGuard";
 import { deleteSellerFromAdmin } from "@/app/lib/deleteSeller";
 import { useI18n } from "@/app/lib/i18n";
 
 type PlanId = "starter" | "pro" | "business";
-type SubscriptionStatus = "none" | "pending" | "active" | "past_due" | "cancelled";
+type SubscriptionStatus =
+  | "none"
+  | "pending"
+  | "active"
+  | "past_due"
+  | "cancelled";
+
+type BusyAction = "toggle" | "delete" | "";
 
 type UserRow = {
   id: string;
-  email?: string | null;
-  displayName?: string | null;
+  email: string;
+  displayName: string;
   role: "admin" | "seller";
   active: boolean;
   suspended: boolean;
@@ -36,81 +48,251 @@ type UserRow = {
   subscriptionStatus: SubscriptionStatus;
 };
 
-function norm(s: any) {
-  return String(s ?? "").trim();
+type SellerMergeData = {
+  plan?: PlanId;
+  subscriptionStatus?: SubscriptionStatus;
+  regionId?: string;
+};
+
+const EMPTY_BUSY_MAP: Record<string, BusyAction> = {};
+
+function text(value: unknown): string {
+  return String(value ?? "").trim();
 }
 
-function badgeTone(role?: string) {
-  if (role === "admin") return "bg-emerald-500/10 border-emerald-500/20 text-emerald-700 dark:text-emerald-400";
-  return "bg-neutral-500/10 border-neutral-200 dark:border-neutral-800 text-neutral-800 dark:text-neutral-300";
+function normalizePlan(value: unknown): PlanId {
+  return value === "pro" || value === "business"
+    ? value
+    : "starter";
+}
+
+function normalizeSubscriptionStatus(
+  value: unknown
+): SubscriptionStatus {
+  return value === "pending" ||
+    value === "active" ||
+    value === "past_due" ||
+    value === "cancelled"
+    ? value
+    : "none";
+}
+
+function badgeTone(role: UserRow["role"]): string {
+  return role === "admin"
+    ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
+    : "border-neutral-200 bg-neutral-500/10 text-neutral-800 dark:border-neutral-800 dark:text-neutral-300";
+}
+
+function normalizeUserRow(
+  snapshot: QueryDocumentSnapshot<DocumentData>
+): UserRow {
+  const data = snapshot.data();
+  const role: UserRow["role"] =
+    data.role === "admin" ? "admin" : "seller";
+
+  return {
+    id: snapshot.id,
+    email: text(data.email),
+    displayName: text(data.displayName ?? data.name),
+    role,
+    active: data.active !== false,
+    suspended: data.suspended === true,
+    sellerId: text(data.sellerId) || snapshot.id,
+    regionId: text(data.regionId),
+    plan: normalizePlan(data.plan),
+    subscriptionStatus: normalizeSubscriptionStatus(
+      data.subscriptionStatus
+    ),
+  };
+}
+
+function chunkValues<T>(values: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+
+  for (let index = 0; index < values.length; index += size) {
+    chunks.push(values.slice(index, index + size));
+  }
+
+  return chunks;
+}
+
+async function mergeSellerData(
+  rows: UserRow[]
+): Promise<UserRow[]> {
+  const sellerIds = Array.from(
+    new Set(
+      rows
+        .filter((row) => row.role === "seller")
+        .map((row) => row.sellerId)
+        .filter(Boolean)
+    )
+  );
+
+  if (sellerIds.length === 0) return rows;
+
+  const sellerMap = new Map<string, SellerMergeData>();
+
+  for (const sellerIdChunk of chunkValues(sellerIds, 10)) {
+    const sellerQuery = query(
+      collection(db, "sellers"),
+      where(documentId(), "in", sellerIdChunk)
+    );
+
+    const snapshot = await getDocs(sellerQuery);
+
+    snapshot.forEach((sellerSnapshot) => {
+      const data = sellerSnapshot.data();
+
+      sellerMap.set(sellerSnapshot.id, {
+        plan:
+          data.plan === "starter" ||
+          data.plan === "pro" ||
+          data.plan === "business"
+            ? data.plan
+            : undefined,
+        subscriptionStatus:
+          data.subscriptionStatus === "none" ||
+          data.subscriptionStatus === "pending" ||
+          data.subscriptionStatus === "active" ||
+          data.subscriptionStatus === "past_due" ||
+          data.subscriptionStatus === "cancelled"
+            ? data.subscriptionStatus
+            : undefined,
+        regionId: text(data.regionId),
+      });
+    });
+  }
+
+  return rows.map((row) => {
+    if (row.role !== "seller") return row;
+
+    const seller = sellerMap.get(row.sellerId);
+
+    return {
+      ...row,
+      plan: seller?.plan ?? row.plan,
+      subscriptionStatus:
+        seller?.subscriptionStatus ?? row.subscriptionStatus,
+      regionId: row.regionId || seller?.regionId || "",
+    };
+  });
 }
 
 export default function AdminSellersPage() {
-  return <AdminGuard>{() => <AdminSellersInner />}</AdminGuard>;
-}
-
-function AdminSellersInner() {
   const { t, lang } = useI18n();
+
   const [loading, setLoading] = useState(true);
-  const [errMsg, setErrMsg] = useState("");
+  const [message, setMessage] = useState("");
   const [rows, setRows] = useState<UserRow[]>([]);
-  const [qText, setQText] = useState("");
+  const [searchText, setSearchText] = useState("");
   const [onlySellers, setOnlySellers] = useState(true);
-  const [busyMap, setBusyMap] = useState<Record<string, "toggle" | "delete" | "">>({});
+  const [busyMap, setBusyMap] =
+    useState<Record<string, BusyAction>>(EMPTY_BUSY_MAP);
 
-  const setBusy = useCallback((uid: string, v: "toggle" | "delete" | "") => {
-    setBusyMap((prev) => ({ ...prev, [uid]: v }));
-  }, []);
+  const translate = useCallback(
+    (key: string, fallback: string) => {
+      const value = t(key);
+      return value && value !== key ? value : fallback;
+    },
+    [t]
+  );
 
-  const yen = useCallback(
-    (n: number) => {
-      const locale = lang === "pt" ? "pt-BR" : lang === "en" ? "en-US" : "ja-JP";
-      return new Intl.NumberFormat(locale, {
-        style: "currency",
-        currency: "JPY",
-        maximumFractionDigits: 0,
-      }).format(Math.round(n || 0));
+  const setBusy = useCallback(
+    (userId: string, action: BusyAction) => {
+      setBusyMap((previous) => ({
+        ...previous,
+        [userId]: action,
+      }));
+    },
+    []
+  );
+
+  const getStatus = useCallback(
+    (active: boolean, suspended: boolean) => {
+      if (suspended) {
+        return {
+          label:
+            lang === "ja"
+              ? "アカウント停止中"
+              : lang === "en"
+                ? "Suspended"
+                : "Suspenso",
+          className:
+            "border-red-500/20 bg-red-500/10 text-red-600 dark:text-red-400",
+        };
+      }
+
+      if (!active) {
+        return {
+          label:
+            lang === "ja"
+              ? "無効"
+              : lang === "en"
+                ? "Inactive"
+                : "Inativo",
+          className:
+            "border-amber-500/20 bg-amber-500/10 text-amber-700 dark:text-amber-400",
+        };
+      }
+
+      return {
+        label:
+          lang === "ja"
+            ? "有効"
+            : lang === "en"
+              ? "Active"
+              : "Ativo",
+        className:
+          "border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
+      };
     },
     [lang]
   );
 
-  const statusTone = useCallback((active: boolean, suspended: boolean) => {
-    if (suspended) {
-      return { 
-        label: lang === "ja" ? "アカウント停止中" : lang === "en" ? "Suspended" : "Suspenso", 
-        cls: "bg-red-500/10 border-red-500/20 text-red-600 dark:text-red-400" 
-      };
-    }
-    if (!active) {
-      return { 
-        label: lang === "ja" ? "無効" : lang === "en" ? "Inactive" : "Inativo", 
-        cls: "bg-amber-500/10 border-amber-500/20 text-amber-700 dark:text-amber-400" 
-      };
-    }
-    return { 
-      label: lang === "ja" ? "有効" : lang === "en" ? "Active" : "Ativo", 
-      cls: "bg-emerald-500/10 border-emerald-500/20 text-emerald-700 dark:text-emerald-400" 
-    };
-  }, [lang]);
-
-  const load = useCallback(async () => {
-    setErrMsg("");
+  const loadUsers = useCallback(async () => {
     setLoading(true);
+    setMessage("");
 
     try {
-      let snap;
+      let snapshot;
+
       try {
-        snap = await getDocs(query(collection(db, "users"), orderBy("createdAt", "desc"), limit(300)));
+        snapshot = await getDocs(
+          query(
+            collection(db, "users"),
+            orderBy("createdAt", "desc"),
+            limit(300)
+          )
+        );
       } catch {
-        snap = await getDocs(query(collection(db, "users"), limit(300)));
-        setErrMsg(lang === "ja" ? "警告：一部のユーザーに作成日時がありません。" : lang === "en" ? "Warning: some users lack a creation timestamp." : "Aviso: alguns usuários não têm data de criação.");
+        snapshot = await getDocs(
+          query(collection(db, "users"), limit(300))
+        );
+
+        setMessage(
+          lang === "ja"
+            ? "警告：一部のユーザーに作成日時がありません。"
+            : lang === "en"
+              ? "Warning: some users lack a creation timestamp."
+              : "Aviso: alguns usuários não têm data de criação."
+        );
       }
 
-      const baseList = snap.docs.map((d) => normalizeUserRow(d.id, d.data() as any));
-      const merged = await mergeSellerData(baseList);
-      setRows(merged);
-    } catch {
-      setErrMsg(lang === "ja" ? "データの読み込みに失敗しました。" : lang === "en" ? "Failed to load users." : "Falha ao carregar usuários.");
+      const normalizedRows = snapshot.docs.map(normalizeUserRow);
+      const mergedRows = await mergeSellerData(normalizedRows);
+
+      setRows(mergedRows);
+    } catch (error) {
+      console.error("[AdminSellers] loadUsers:", error);
+
+      setMessage(
+        lang === "ja"
+          ? "データの読み込みに失敗しました。"
+          : lang === "en"
+            ? "Failed to load users."
+            : "Falha ao carregar usuários."
+      );
+
       setRows([]);
     } finally {
       setLoading(false);
@@ -118,299 +300,645 @@ function AdminSellersInner() {
   }, [lang]);
 
   useEffect(() => {
-    load();
-  }, [load]);
+    void loadUsers();
+  }, [loadUsers]);
 
-  const filtered = useMemo(() => {
-    const term = qText.trim().toLowerCase();
-    let base = rows;
+  const filteredRows = useMemo(() => {
+    const search = searchText.trim().toLowerCase();
 
-    if (onlySellers) base = base.filter((r) => r.role === "seller");
+    const result = rows.filter((row) => {
+      if (onlySellers && row.role !== "seller") return false;
+      if (!search) return true;
 
-    if (term) {
-      base = base.filter((r) => {
-        const hay = `${norm(r.email)} ${norm(r.displayName)} ${norm(r.id)} ${norm(r.sellerId)} ${norm(
-          r.regionId
-        )} ${norm(r.plan)} ${norm(r.subscriptionStatus)}`.toLowerCase();
-        return hay.includes(term);
-      });
-    }
-
-    return [...base].sort((a, b) => {
-      const aAdmin = a.role === "admin";
-      const bAdmin = b.role === "admin";
-      if (aAdmin !== bAdmin) return aAdmin ? -1 : 1;
-
-      const an = (a.displayName || a.email || a.id).toLowerCase();
-      const bn = (b.displayName || b.email || b.id).toLowerCase();
-      return an.localeCompare(bn, "pt-BR");
+      return [
+        row.email,
+        row.displayName,
+        row.id,
+        row.sellerId,
+        row.regionId,
+        row.plan,
+        row.subscriptionStatus,
+      ]
+        .join(" ")
+        .toLowerCase()
+        .includes(search);
     });
-  }, [rows, qText, onlySellers]);
 
-  async function updateSuspension(userId: string, suspended: boolean) {
-    setErrMsg("");
-    setBusy(userId, "toggle");
-    try {
-      await updateDoc(doc(db, "users", userId), { suspended, updatedAt: serverTimestamp() });
-      try { await updateDoc(doc(db, "sellers", userId), { suspended, updatedAt: serverTimestamp() }); } catch {}
-      setRows((prev) => prev.map((x) => (x.id === userId ? { ...x, suspended } : x)));
-    } catch {
-      setErrMsg(lang === "ja" ? "ステータスの更新に失敗しました。" : lang === "en" ? "Failed to update suspension status." : "Falha ao atualizar suspensão.");
-    } finally {
-      setBusy(userId, "");
-    }
-  }
+    return [...result].sort((first, second) => {
+      if (first.role !== second.role) {
+        return first.role === "admin" ? -1 : 1;
+      }
 
-  async function updateActivation(userId: string, active: boolean) {
-    setErrMsg("");
-    setBusy(userId, "toggle");
-    try {
-      await updateDoc(doc(db, "users", userId), { active, updatedAt: serverTimestamp() });
-      try { await updateDoc(doc(db, "sellers", userId), { active, updatedAt: serverTimestamp() }); } catch {}
-      setRows((prev) => prev.map((x) => (x.id === userId ? { ...x, active } : x)));
-    } catch {
-      setErrMsg(lang === "ja" ? "アクティベーション状態の更新に失敗しました。" : lang === "en" ? "Failed to update activation status." : "Falha ao atualizar ativo/inativo.");
-    } finally {
-      setBusy(userId, "");
-    }
-  }
+      const firstName =
+        first.displayName || first.email || first.id;
+      const secondName =
+        second.displayName || second.email || second.id;
 
-  async function updateRole(userId: string, role: "admin" | "seller") {
-    setErrMsg("");
-    setBusy(userId, "toggle");
-    try {
-      await updateDoc(doc(db, "users", userId), { role, updatedAt: serverTimestamp() });
-      setRows((prev) => prev.map((x) => (x.id === userId ? { ...x, role } : x)));
-    } catch {
-      setErrMsg(lang === "ja" ? "権限の更新に失敗しました。" : lang === "en" ? "Failed to update role." : "Falha ao atualizar role.");
-    } finally {
-      setBusy(userId, "");
-    }
-  }
+      return firstName.localeCompare(secondName, "pt-BR");
+    });
+  }, [onlySellers, rows, searchText]);
 
-  async function hardDeleteSeller(userId: string) {
-    setErrMsg("");
-    setBusy(userId, "delete");
-    try {
-      const msgConfirm = lang === "ja" 
-        ? "⚠️ 注意！\n\nこの操作は販売者とすべての関連データ（製品、イベント、注文、メッセージ）を完全に削除します。よろしいですか？"
-        : lang === "en"
-        ? "⚠️ WARNING!\n\nThis will permanently delete this seller and ALL associated data (products, events, orders, messages). Continue?"
-        : "⚠️ ATENÇÃO!\n\nIsso vai APAGAR DEFINITIVAMENTE o seller e TODOS os dados dele (produtos, eventos, pedidos, mensagens). Deseja continuar?";
-      
-      if (!confirm(msgConfirm)) return;
+  const updateUserAndSeller = useCallback(
+    async (
+      user: UserRow,
+      patch: Record<string, unknown>
+    ) => {
+      await updateDoc(doc(db, "users", user.id), {
+        ...patch,
+        updatedAt: serverTimestamp(),
+      });
 
-      await deleteSellerFromAdmin(userId);
-      setRows((prev) => prev.filter((x) => x.id !== userId));
-    } catch {
-      setErrMsg(lang === "ja" ? "削除に失敗しました。" : lang === "en" ? "Failed to delete seller." : "Falha ao apagar seller.");
-    } finally {
-      setBusy(userId, "");
-    }
-  }
+      if (user.role === "seller" && user.sellerId) {
+        try {
+          await updateDoc(doc(db, "sellers", user.sellerId), {
+            ...patch,
+            updatedAt: serverTimestamp(),
+          });
+        } catch (error) {
+          console.warn(
+            "[AdminSellers] seller mirror update skipped:",
+            error
+          );
+        }
+      }
+    },
+    []
+  );
+
+  const updateSuspension = useCallback(
+    async (user: UserRow) => {
+      setMessage("");
+      setBusy(user.id, "toggle");
+
+      try {
+        const suspended = !user.suspended;
+
+        await updateUserAndSeller(user, { suspended });
+
+        setRows((previous) =>
+          previous.map((row) =>
+            row.id === user.id ? { ...row, suspended } : row
+          )
+        );
+      } catch (error) {
+        console.error("[AdminSellers] suspension:", error);
+
+        setMessage(
+          lang === "ja"
+            ? "ステータスの更新に失敗しました。"
+            : lang === "en"
+              ? "Failed to update suspension status."
+              : "Falha ao atualizar suspensão."
+        );
+      } finally {
+        setBusy(user.id, "");
+      }
+    },
+    [lang, setBusy, updateUserAndSeller]
+  );
+
+  const updateActivation = useCallback(
+    async (user: UserRow) => {
+      setMessage("");
+      setBusy(user.id, "toggle");
+
+      try {
+        const active = !user.active;
+
+        await updateUserAndSeller(user, { active });
+
+        setRows((previous) =>
+          previous.map((row) =>
+            row.id === user.id ? { ...row, active } : row
+          )
+        );
+      } catch (error) {
+        console.error("[AdminSellers] activation:", error);
+
+        setMessage(
+          lang === "ja"
+            ? "アクティベーション状態の更新に失敗しました。"
+            : lang === "en"
+              ? "Failed to update activation status."
+              : "Falha ao atualizar ativo/inativo."
+        );
+      } finally {
+        setBusy(user.id, "");
+      }
+    },
+    [lang, setBusy, updateUserAndSeller]
+  );
+
+  const updateRole = useCallback(
+    async (user: UserRow) => {
+      setMessage("");
+      setBusy(user.id, "toggle");
+
+      try {
+        const role: UserRow["role"] =
+          user.role === "admin" ? "seller" : "admin";
+
+        await updateDoc(doc(db, "users", user.id), {
+          role,
+          updatedAt: serverTimestamp(),
+        });
+
+        setRows((previous) =>
+          previous.map((row) =>
+            row.id === user.id ? { ...row, role } : row
+          )
+        );
+      } catch (error) {
+        console.error("[AdminSellers] role:", error);
+
+        setMessage(
+          lang === "ja"
+            ? "権限の更新に失敗しました。"
+            : lang === "en"
+              ? "Failed to update role."
+              : "Falha ao atualizar role."
+        );
+      } finally {
+        setBusy(user.id, "");
+      }
+    },
+    [lang, setBusy]
+  );
+
+  const hardDeleteSeller = useCallback(
+    async (user: UserRow) => {
+      const confirmation =
+        lang === "ja"
+          ? "⚠️ 注意！\n\n販売者とすべての関連データを完全に削除します。続行しますか？"
+          : lang === "en"
+            ? "⚠️ WARNING!\n\nThis permanently deletes the seller and all associated data. Continue?"
+            : "⚠️ ATENÇÃO!\n\nIsso apagará definitivamente o seller e todos os dados relacionados. Continuar?";
+
+      if (!window.confirm(confirmation)) return;
+
+      setMessage("");
+      setBusy(user.id, "delete");
+
+      try {
+        await deleteSellerFromAdmin(user.id);
+
+        setRows((previous) =>
+          previous.filter((row) => row.id !== user.id)
+        );
+      } catch (error) {
+        console.error("[AdminSellers] delete:", error);
+
+        setMessage(
+          lang === "ja"
+            ? "削除に失敗しました。"
+            : lang === "en"
+              ? "Failed to delete seller."
+              : "Falha ao apagar seller."
+        );
+      } finally {
+        setBusy(user.id, "");
+      }
+    },
+    [lang, setBusy]
+  );
 
   return (
-    <div className="space-y-6 animate-fade-in max-w-6xl mx-auto p-2 sm:p-0">
-      <section className="bg-neutral-50 dark:bg-neutral-900/40 border border-neutral-200 dark:border-neutral-800 rounded-[2rem] p-5 space-y-4 shadow-sm">
+    <div className="mx-auto w-full min-w-0 max-w-6xl space-y-6 overflow-x-hidden animate-fade-in">
+      <section className="space-y-4 rounded-[2rem] border border-neutral-200 bg-neutral-50 p-4 shadow-sm dark:border-neutral-800 dark:bg-neutral-900/40 sm:p-5">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="space-y-0.5">
-            <h2 className="text-sm font-black uppercase tracking-widest text-neutral-400 dark:text-neutral-500">Sellers & Users</h2>
-            <p className="text-xs font-medium text-neutral-400">{lang === "ja" ? "ユーザーの検索、ステータスの変更、および完全削除を行います。" : lang === "en" ? "Search and manage user properties, roles, suspensions, and hard deletion." : "Buscar e gerenciar usuários. Controlar suspensão, ativação, role e exclusão definitiva."}</p>
+          <div className="min-w-0 space-y-1">
+            <h1 className="text-sm font-black uppercase tracking-widest text-neutral-500">
+              Sellers &amp; Users
+            </h1>
+
+            <p className="text-xs font-medium leading-relaxed text-neutral-400">
+              {lang === "ja"
+                ? "ユーザーの検索、ステータス変更、権限管理、完全削除を行います。"
+                : lang === "en"
+                  ? "Search users and manage status, roles, and permanent deletion."
+                  : "Busque usuários e gerencie status, permissões e exclusão definitiva."}
+            </p>
           </div>
 
-          <button onClick={load} className="rounded-xl bg-black dark:bg-white text-white dark:text-black text-xs font-black px-4 py-2.5 shadow-sm uppercase tracking-wider self-start sm:self-center transition">
-            {t("common.reload") || "Sync"}
+          <button
+            type="button"
+            onClick={() => void loadUsers()}
+            disabled={loading}
+            className="self-start rounded-xl bg-black px-4 py-2.5 text-xs font-black uppercase tracking-wider text-white shadow-sm transition disabled:opacity-40 dark:bg-white dark:text-black sm:self-center"
+          >
+            {translate("common.reload", "Atualizar")}
           </button>
         </div>
 
-        <div className="flex flex-col md:flex-row gap-3">
+        <div className="flex min-w-0 flex-col gap-3 md:flex-row md:items-center">
           <input
-            value={qText}
-            onChange={(e) => setQText(e.target.value)}
-            placeholder={lang === "ja" ? "メール、名前、UID、地域ID、プランで検索..." : lang === "en" ? "Search by email, name, uid, regionId, plan..." : "Buscar por email, nome, uid, regionId, plan..."}
-            className="w-full border border-neutral-200 dark:border-neutral-800 rounded-xl px-4 py-2.5 text-sm bg-white dark:bg-neutral-900 text-neutral-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white transition"
+            value={searchText}
+            onChange={(event) =>
+              setSearchText(event.target.value)
+            }
+            placeholder={
+              lang === "ja"
+                ? "メール、名前、UID、地域、プランで検索..."
+                : lang === "en"
+                  ? "Search by email, name, UID, region, or plan..."
+                  : "Buscar por email, nome, UID, região ou plano..."
+            }
+            className="min-w-0 flex-1 rounded-xl border border-neutral-200 bg-white px-4 py-2.5 text-sm text-neutral-900 outline-none transition focus:ring-2 focus:ring-black dark:border-neutral-800 dark:bg-neutral-900 dark:text-white dark:focus:ring-white"
           />
 
-          <label className="flex items-center gap-2 text-xs font-black uppercase tracking-wider text-neutral-500 cursor-pointer whitespace-nowrap self-start md:self-center">
-            <input type="checkbox" checked={onlySellers} onChange={(e) => setOnlySellers(e.target.checked)} className="accent-black dark:accent-white h-4 w-4 rounded" />
-            <span>{lang === "ja" ? "販売者のみ表示" : lang === "en" ? "Show sellers only" : "Mostrar apenas sellers"}</span>
+          <label className="flex cursor-pointer items-center gap-2 self-start whitespace-nowrap text-xs font-black uppercase tracking-wider text-neutral-500 md:self-center">
+            <input
+              type="checkbox"
+              checked={onlySellers}
+              onChange={(event) =>
+                setOnlySellers(event.target.checked)
+              }
+              className="h-4 w-4 rounded accent-black dark:accent-white"
+            />
+
+            <span>
+              {lang === "ja"
+                ? "販売者のみ"
+                : lang === "en"
+                  ? "Sellers only"
+                  : "Apenas sellers"}
+            </span>
           </label>
         </div>
       </section>
 
-      {errMsg && (
-        <div className="rounded-2xl border border-red-200 bg-red-50 text-red-700 dark:border-red-900/30 dark:bg-red-950/20 dark:text-red-400 px-4 py-3.5 text-xs font-black uppercase tracking-wider">
-          {errMsg}
+      {message && (
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3.5 text-xs font-bold text-amber-800 dark:border-amber-900/30 dark:bg-amber-950/20 dark:text-amber-300">
+          {message}
         </div>
       )}
 
       {loading ? (
-        <div className="animate-pulse h-32 bg-neutral-100 dark:bg-neutral-900 rounded-[2rem] border border-neutral-200 dark:border-neutral-800" />
+        <div className="h-32 animate-pulse rounded-[2rem] border border-neutral-200 bg-neutral-100 dark:border-neutral-800 dark:bg-neutral-900" />
+      ) : filteredRows.length === 0 ? (
+        <div className="rounded-[2rem] border-2 border-dashed border-neutral-200 px-4 py-16 text-center text-sm font-bold text-neutral-400 dark:border-neutral-800">
+          {lang === "ja"
+            ? "ユーザーが見つかりません。"
+            : lang === "en"
+              ? "No users matched your search."
+              : "Nenhum usuário encontrado."}
+        </div>
       ) : (
-        <section className="border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950 rounded-[2rem] p-4 shadow-sm overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs border-collapse">
-              <thead>
-                <tr className="text-left font-black uppercase tracking-wider text-neutral-400 border-b border-neutral-100 dark:border-neutral-800/60">
-                  <th className="py-3 px-3">User</th>
-                  <th className="py-3 px-3">Role</th>
-                  <th className="py-3 px-3">Status</th>
-                  <th className="py-3 px-3">Tier</th>
-                  <th className="py-3 px-3">IDs</th>
-                  <th className="py-3 px-3 text-right">Actions</th>
-                </tr>
-              </thead>
-
-              <tbody className="divide-y divide-neutral-100 dark:divide-neutral-800/40 font-medium">
-                {filtered.map((r) => {
-                  const status = statusTone(r.active, r.suspended);
-                  const busy = busyMap[r.id] || "";
-                  const isBusy = busy === "toggle";
-                  const isDeleting = busy === "delete";
-
-                  return (
-                    <tr key={r.id} className="hover:bg-neutral-50/40 dark:hover:bg-neutral-900/20 transition">
-                      <td className="py-3.5 px-3">
-                        <div className="font-black text-neutral-900 dark:text-white text-sm tracking-tight">{r.displayName || "—"}</div>
-                        <div className="text-neutral-400 font-mono text-[11px]">{r.email || "—"}</div>
-                        <div className="text-[10px] font-mono text-neutral-400 mt-0.5">
-                          UID: <span className="font-bold">{r.id}</span>
-                        </div>
-                      </td>
-
-                      <td className="py-3.5 px-3">
-                        <span className={`inline-flex items-center px-2.5 py-0.5 border rounded-md text-[10px] font-black uppercase tracking-wider ${badgeTone(r.role)}`}>
-                          {r.role}
-                        </span>
-                      </td>
-
-                      <td className="py-3.5 px-3">
-                        <span className={`inline-flex items-center px-2.5 py-0.5 border rounded-md text-[10px] font-black uppercase tracking-wider ${status.cls}`}>
-                          {status.label}
-                        </span>
-                      </td>
-
-                      <td className="py-3.5 px-3">
-                        <div className="text-neutral-900 dark:text-white font-black uppercase tracking-tight">{r.plan}</div>
-                        <div className="text-[10px] font-mono text-neutral-400 uppercase tracking-wider">{r.subscriptionStatus}</div>
-                      </td>
-
-                      <td className="py-3.5 px-3 font-mono text-[11px] text-neutral-500 space-y-0.5">
-                        <div>sId: <span className="font-bold text-neutral-900 dark:text-neutral-300">{r.sellerId}</span></div>
-                        <div>rId: <span className="font-bold text-neutral-900 dark:text-neutral-300">{r.regionId || "—"}</span></div>
-                      </td>
-
-                      <td className="py-3.5 px-3 text-right">
-                        <div className="flex flex-wrap gap-1.5 justify-end">
-                          <Link
-                            href={`/admin/sellers/${r.id}`}
-                            className="rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 text-neutral-800 dark:text-neutral-200 text-[11px] font-black px-3 py-1.5 transition uppercase tracking-wide"
-                          >
-                            {lang === "ja" ? "詳細" : lang === "en" ? "Details" : "Detalhes"}
-                          </Link>
-
-                          <button
-                            disabled={isBusy || isDeleting}
-                            onClick={() => updateSuspension(r.id, !r.suspended)}
-                            className={`disabled:opacity-40 rounded-lg text-[11px] font-black px-3 py-1.5 border uppercase tracking-wide transition ${r.suspended ? "bg-emerald-500 text-white border-emerald-500" : "bg-red-50 dark:bg-red-950/20 text-red-600 border-red-200 dark:border-red-900/30"}`}
-                          >
-                            {r.suspended ? (lang === "ja" ? "解除" : lang === "en" ? "Unsuspend" : "Reativar") : (lang === "ja" ? "停止" : lang === "en" ? "Suspend" : "Suspender")}
-                          </button>
-
-                          <button
-                            disabled={isBusy || isDeleting}
-                            onClick={() => updateActivation(r.id, !r.active)}
-                            className={`disabled:opacity-40 rounded-lg text-[11px] font-black px-3 py-1.5 border uppercase tracking-wide transition ${r.active ? "bg-amber-50 dark:bg-amber-950/20 text-amber-700 border-amber-200 dark:border-amber-900/30" : "bg-emerald-50 dark:bg-emerald-950/20 text-emerald-700 border-emerald-200 dark:border-emerald-900/30"}`}
-                          >
-                            {r.active ? (lang === "ja" ? "無効化" : lang === "en" ? "Deactivate" : "Inativar") : (lang === "ja" ? "有効化" : lang === "en" ? "Activate" : "Ativar")}
-                          </button>
-
-                          <button
-                            disabled={isBusy || isDeleting}
-                            onClick={() => updateRole(r.id, r.role === "admin" ? "seller" : "admin")}
-                            className="disabled:opacity-40 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 text-neutral-800 dark:text-neutral-200 text-[11px] font-black px-3 py-1.5 uppercase tracking-wide transition"
-                          >
-                            {r.role === "admin" ? (lang === "ja" ? "降格" : lang === "en" ? "Demote" : "Rebaixar") : (lang === "ja" ? "管理者へ昇格" : lang === "en" ? "Promote" : "Promover")}
-                          </button>
-
-                          {r.role !== "admin" && (
-                            <button
-                              disabled={isBusy || isDeleting}
-                              onClick={() => hardDeleteSeller(r.id)}
-                              className="disabled:opacity-40 rounded-lg bg-red-600 text-white text-[11px] font-black px-3 py-1.5 uppercase tracking-wide transition shadow-sm"
-                            >
-                              {isDeleting ? "..." : (lang === "ja" ? "物理削除" : lang === "en" ? "Delete" : "Excluir")}
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-
-                {!filtered.length && (
-                  <tr>
-                    <td colSpan={6} className="py-12 text-center text-neutral-400 font-bold italic">
-                      {lang === "ja" ? "ユーザーが見つかりません。" : lang === "en" ? "No users matched your criteria." : "Nenhum usuário encontrado."}
-                    </td>
-                  </tr>
+        <>
+          <section className="grid grid-cols-1 gap-4 lg:hidden">
+            {filteredRows.map((user) => (
+              <MobileUserCard
+                key={user.id}
+                user={user}
+                busy={busyMap[user.id] ?? ""}
+                status={getStatus(
+                  user.active,
+                  user.suspended
                 )}
-              </tbody>
-            </table>
-          </div>
-        </section>
+                lang={lang}
+                onSuspension={() =>
+                  void updateSuspension(user)
+                }
+                onActivation={() =>
+                  void updateActivation(user)
+                }
+                onRole={() => void updateRole(user)}
+                onDelete={() =>
+                  void hardDeleteSeller(user)
+                }
+              />
+            ))}
+          </section>
+
+          <section className="hidden overflow-hidden rounded-[2rem] border border-neutral-200 bg-white shadow-sm dark:border-neutral-800 dark:bg-neutral-950 lg:block">
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[980px] border-collapse text-xs">
+                <thead>
+                  <tr className="border-b border-neutral-100 text-left font-black uppercase tracking-wider text-neutral-400 dark:border-neutral-800/60">
+                    <th className="px-3 py-3">User</th>
+                    <th className="px-3 py-3">Role</th>
+                    <th className="px-3 py-3">Status</th>
+                    <th className="px-3 py-3">Plan</th>
+                    <th className="px-3 py-3">IDs</th>
+                    <th className="px-3 py-3 text-right">
+                      Actions
+                    </th>
+                  </tr>
+                </thead>
+
+                <tbody className="divide-y divide-neutral-100 font-medium dark:divide-neutral-800/40">
+                  {filteredRows.map((user) => {
+                    const status = getStatus(
+                      user.active,
+                      user.suspended
+                    );
+                    const busy = busyMap[user.id] ?? "";
+
+                    return (
+                      <tr
+                        key={user.id}
+                        className="transition hover:bg-neutral-50/50 dark:hover:bg-neutral-900/20"
+                      >
+                        <td className="px-3 py-3.5">
+                          <div className="font-black text-neutral-900 dark:text-white">
+                            {user.displayName || "—"}
+                          </div>
+                          <div className="font-mono text-[11px] text-neutral-400">
+                            {user.email || "—"}
+                          </div>
+                        </td>
+
+                        <td className="px-3 py-3.5">
+                          <Badge
+                            className={badgeTone(user.role)}
+                          >
+                            {user.role}
+                          </Badge>
+                        </td>
+
+                        <td className="px-3 py-3.5">
+                          <Badge
+                            className={status.className}
+                          >
+                            {status.label}
+                          </Badge>
+                        </td>
+
+                        <td className="px-3 py-3.5">
+                          <div className="font-black uppercase text-neutral-900 dark:text-white">
+                            {user.plan}
+                          </div>
+                          <div className="text-[10px] uppercase tracking-wider text-neutral-400">
+                            {user.subscriptionStatus}
+                          </div>
+                        </td>
+
+                        <td className="px-3 py-3.5 font-mono text-[11px] text-neutral-500">
+                          <div>sId: {user.sellerId}</div>
+                          <div>rId: {user.regionId || "—"}</div>
+                        </td>
+
+                        <td className="px-3 py-3.5">
+                          <Actions
+                            user={user}
+                            busy={busy}
+                            lang={lang}
+                            onSuspension={() =>
+                              void updateSuspension(user)
+                            }
+                            onActivation={() =>
+                              void updateActivation(user)
+                            }
+                            onRole={() =>
+                              void updateRole(user)
+                            }
+                            onDelete={() =>
+                              void hardDeleteSeller(user)
+                            }
+                          />
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </>
       )}
     </div>
   );
 }
 
-function normalizeUserRow(docId: string, data: any): UserRow {
-  const role: "admin" | "seller" = data.role === "admin" ? "admin" : "seller";
-  return {
-    id: docId,
-    email: data.email ?? null,
-    displayName: data.displayName ?? null,
-    role,
-    active: data.active !== false,
-    suspended: !!data.suspended,
-    sellerId: norm(data.sellerId) || docId,
-    regionId: norm(data.regionId),
-    plan: (data.plan as PlanId) || "starter",
-    subscriptionStatus: (data.subscriptionStatus as SubscriptionStatus) || "none",
-  };
+function Badge({
+  children,
+  className,
+}: {
+  children: React.ReactNode;
+  className: string;
+}) {
+  return (
+    <span
+      className={`inline-flex items-center rounded-md border px-2.5 py-0.5 text-[10px] font-black uppercase tracking-wider ${className}`}
+    >
+      {children}
+    </span>
+  );
 }
 
-async function mergeSellerData(list: UserRow[]): Promise<UserRow[]> {
-  const sellerUids = list.filter((r) => r.role === "seller").map((r) => r.id);
-  if (!sellerUids.length) return list;
+function MobileUserCard({
+  user,
+  busy,
+  status,
+  lang,
+  onSuspension,
+  onActivation,
+  onRole,
+  onDelete,
+}: {
+  user: UserRow;
+  busy: BusyAction;
+  status: { label: string; className: string };
+  lang: string;
+  onSuspension: () => void;
+  onActivation: () => void;
+  onRole: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <article className="min-w-0 space-y-4 rounded-[2rem] border border-neutral-200 bg-white p-4 shadow-sm dark:border-neutral-800 dark:bg-neutral-950">
+      <div className="min-w-0">
+        <div className="truncate font-black text-neutral-900 dark:text-white">
+          {user.displayName || "—"}
+        </div>
+        <div className="truncate text-xs text-neutral-400">
+          {user.email || "—"}
+        </div>
+        <div className="mt-1 break-all font-mono text-[10px] text-neutral-400">
+          UID: {user.id}
+        </div>
+      </div>
 
-  const chunks: string[][] = [];
-  for (let i = 0; i < sellerUids.length; i += 10) chunks.push(sellerUids.slice(i, i + 10));
+      <div className="flex flex-wrap gap-2">
+        <Badge className={badgeTone(user.role)}>
+          {user.role}
+        </Badge>
+        <Badge className={status.className}>
+          {status.label}
+        </Badge>
+        <Badge className="border-neutral-200 bg-neutral-50 text-neutral-700 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-200">
+          {user.plan}
+        </Badge>
+      </div>
 
-  const sellerMap = new Map<string, { plan?: PlanId; subscriptionStatus?: SubscriptionStatus; regionId?: string | null }>();
+      <div className="grid grid-cols-1 gap-2 text-xs sm:grid-cols-2">
+        <Info label="Seller ID" value={user.sellerId} />
+        <Info
+          label="Region ID"
+          value={user.regionId || "—"}
+        />
+        <Info
+          label="Subscription"
+          value={user.subscriptionStatus}
+        />
+      </div>
 
-  for (const chunk of chunks) {
-    const qs = query(collection(db, "sellers"), where(documentId(), "in", chunk));
-    const snap = await getDocs(qs);
-    snap.forEach((d) => {
-      const s = d.data() as any;
-      sellerMap.set(d.id, {
-        plan: s.plan || undefined,
-        subscriptionStatus: s.subscriptionStatus || undefined,
-        regionId: s.regionId ?? null,
-      });
-    });
-  }
+      <Actions
+        user={user}
+        busy={busy}
+        lang={lang}
+        onSuspension={onSuspension}
+        onActivation={onActivation}
+        onRole={onRole}
+        onDelete={onDelete}
+        mobile
+      />
+    </article>
+  );
+}
 
-  return list.map((r) => {
-    if (r.role !== "seller") return r;
-    const s = sellerMap.get(r.id);
-    return {
-      ...r,
-      plan: (s?.plan as any) || r.plan || "starter",
-      subscriptionStatus: (s?.subscriptionStatus as any) || r.subscriptionStatus || "none",
-      regionId: r.regionId || (s?.regionId || "") || "",
-      sellerId: r.id,
-    };
-  });
+function Info({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="min-w-0 rounded-xl border border-neutral-100 bg-neutral-50 px-3 py-2 dark:border-neutral-800 dark:bg-neutral-900">
+      <div className="text-[9px] font-black uppercase tracking-wider text-neutral-400">
+        {label}
+      </div>
+      <div className="break-all text-xs font-bold text-neutral-800 dark:text-neutral-200">
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function Actions({
+  user,
+  busy,
+  lang,
+  onSuspension,
+  onActivation,
+  onRole,
+  onDelete,
+  mobile = false,
+}: {
+  user: UserRow;
+  busy: BusyAction;
+  lang: string;
+  onSuspension: () => void;
+  onActivation: () => void;
+  onRole: () => void;
+  onDelete: () => void;
+  mobile?: boolean;
+}) {
+  const disabled = busy !== "";
+
+  return (
+    <div
+      className={`flex flex-wrap gap-2 ${
+        mobile ? "" : "justify-end"
+      }`}
+    >
+      <Link
+        href={`/admin/sellers/${user.id}`}
+        className="rounded-lg border border-neutral-200 bg-white px-3 py-2 text-[11px] font-black uppercase tracking-wide text-neutral-800 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-200"
+      >
+        {lang === "ja"
+          ? "詳細"
+          : lang === "en"
+            ? "Details"
+            : "Detalhes"}
+      </Link>
+
+      <ActionButton
+        disabled={disabled}
+        onClick={onSuspension}
+      >
+        {user.suspended
+          ? lang === "ja"
+            ? "解除"
+            : lang === "en"
+              ? "Unsuspend"
+              : "Reativar"
+          : lang === "ja"
+            ? "停止"
+            : lang === "en"
+              ? "Suspend"
+              : "Suspender"}
+      </ActionButton>
+
+      <ActionButton
+        disabled={disabled}
+        onClick={onActivation}
+      >
+        {user.active
+          ? lang === "ja"
+            ? "無効化"
+            : lang === "en"
+              ? "Deactivate"
+              : "Inativar"
+          : lang === "ja"
+            ? "有効化"
+            : lang === "en"
+              ? "Activate"
+              : "Ativar"}
+      </ActionButton>
+
+      <ActionButton disabled={disabled} onClick={onRole}>
+        {user.role === "admin"
+          ? lang === "ja"
+            ? "降格"
+            : lang === "en"
+              ? "Demote"
+              : "Rebaixar"
+          : lang === "ja"
+            ? "管理者へ昇格"
+            : lang === "en"
+              ? "Promote"
+              : "Promover"}
+      </ActionButton>
+
+      {user.role !== "admin" && (
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={onDelete}
+          className="rounded-lg bg-red-600 px-3 py-2 text-[11px] font-black uppercase tracking-wide text-white shadow-sm disabled:opacity-40"
+        >
+          {busy === "delete"
+            ? "..."
+            : lang === "ja"
+              ? "削除"
+              : lang === "en"
+                ? "Delete"
+                : "Excluir"}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function ActionButton({
+  children,
+  disabled,
+  onClick,
+}: {
+  children: React.ReactNode;
+  disabled: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className="rounded-lg border border-neutral-200 bg-white px-3 py-2 text-[11px] font-black uppercase tracking-wide text-neutral-800 transition disabled:opacity-40 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-200"
+    >
+      {children}
+    </button>
+  );
 }
