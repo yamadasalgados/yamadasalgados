@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { auth, db } from "@/app/lib/firebase";
 import { onAuthStateChanged, type User } from "firebase/auth";
-import { doc, getDoc, serverTimestamp, updateDoc } from "firebase/firestore";
+import { doc, getDoc, serverTimestamp, updateDoc, Timestamp } from "firebase/firestore";
 import { useI18n } from "@/app/lib/i18n";
 
 type SubscriptionStatus = "none" | "pending" | "active" | "past_due" | "cancelled";
@@ -18,6 +18,7 @@ type UserDoc = {
   subscriptionStatus?: SubscriptionStatus;
   maxEvents?: number;
   maxProducts?: number;
+  currentPeriodEnd?: Timestamp;
 };
 
 export default function RentPage() {
@@ -55,9 +56,18 @@ export default function RentPage() {
           const data = snap.data() as UserDoc;
           setProfile(data);
 
-          if (data.subscriptionStatus === "active" && !data.suspended && data.active !== false) {
-            router.replace("/seller");
-          }
+        const planStillValid =
+          data.subscriptionStatus === "active" &&
+          !data.suspended &&
+          data.active !== false &&
+          (
+            !data.currentPeriodEnd ||
+            data.currentPeriodEnd.toDate().getTime() > Date.now()
+          );
+
+        if (planStillValid) {
+          router.replace("/seller");
+        }
         }
       } catch (e) {
         setErr(tt("guard.err.loadProfile", "Erro ao carregar perfil."));
@@ -111,17 +121,37 @@ const requestPlan = useCallback(
       setMsg(null);
 
       try {
-        await updateDoc(doc(db, "users", user.uid), {
-          plan: p.id,
-          subscriptionStatus: "pending",
-          maxEvents: p.maxEvents,
-          maxProducts: p.maxProducts,
-          requestedPlanAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        });
+await updateDoc(doc(db, "users", user.uid), {
+  requestedPlan: p.id,
+
+  planRequestType:
+    profile?.plan === p.id
+      ? "renew"
+      : profile?.plan === "starter" && p.id !== "starter"
+      ? "upgrade"
+      : profile?.plan === "business" && p.id !== "business"
+      ? "downgrade"
+      : profile?.plan === "pro" && p.id === "business"
+      ? "upgrade"
+      : "downgrade",
+
+  planRequestStatus: "pending",
+  requestedPlanAt: serverTimestamp(),
+  updatedAt: serverTimestamp(),
+});
 
         setMsg(tt("rent.requested", "Solicitação enviada! Aguarde a ativação."));
-        setProfile((prev) => (prev ? { ...prev, plan: p.id, subscriptionStatus: "pending" } : prev));
+setProfile((prev) =>
+  prev
+    ? {
+        ...prev,
+        requestedPlan: p.id,
+        planRequestType:
+          prev.plan === p.id ? "renew" : undefined,
+        planRequestStatus: "pending",
+      }
+    : prev
+);
 } catch (e: any) {
   console.error("PLAN ERROR:", e);
 

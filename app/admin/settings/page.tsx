@@ -1,68 +1,114 @@
 "use client";
 
-import { useEffect, useMemo, useState, useCallback } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 import AdminGuard from "@/app/_components/AdminGuard";
 import { db } from "@/app/lib/firebase";
 import { useI18n } from "@/app/lib/i18n";
 import {
   collection,
+  doc,
   getDocs,
-  where,
   limit,
   orderBy,
   query,
+  serverTimestamp,
   Timestamp,
   updateDoc,
-  doc,
-  serverTimestamp,
+  where,
 } from "firebase/firestore";
 
-type SubscriptionStatus = "none" | "pending" | "active" | "past_due" | "cancelled";
+type SubscriptionStatus =
+  | "none"
+  | "pending"
+  | "active"
+  | "past_due"
+  | "cancelled";
+
 type PlanId = "starter" | "pro" | "business";
+type PlanRequestType = "renew" | "upgrade" | "downgrade";
+type PlanRequestStatus =
+  | "pending"
+  | "approved"
+  | "rejected"
+  | "cancelled";
+
+type UserRole = "admin" | "seller" | "unknown";
+type FilterId = "pending" | "active" | "suspended" | "all";
 
 type UserRow = {
   uid: string;
   email: string;
   displayName: string;
-  role: "admin" | "seller" | "unknown";
+  role: UserRole;
   active: boolean;
   suspended: boolean;
   plan: PlanId;
   subscriptionStatus: SubscriptionStatus;
-  requestedPlanAt?: any;
-  currentPeriodStart?: any;
-  currentPeriodEnd?: any;
-  inactiveSince?: any;
+  currentPeriodStart?: unknown;
+  currentPeriodEnd?: unknown;
+  inactiveSince?: unknown;
+  requestedPlan?: PlanId;
+  planRequestType?: PlanRequestType;
+  planRequestStatus?: PlanRequestStatus;
+  requestedPlanAt?: unknown;
   maxEvents?: number;
   maxProducts?: number;
 };
 
-function toDateSafe(value: any): Date | null {
+const PLAN_ORDER: Record<PlanId, number> = {
+  starter: 1,
+  pro: 2,
+  business: 3,
+};
+
+const PLAN_LIMITS: Record<
+  PlanId,
+  { maxEvents: number; maxProducts: number }
+> = {
+  starter: { maxEvents: 1, maxProducts: 20 },
+  pro: { maxEvents: 3, maxProducts: 60 },
+  business: { maxEvents: 10, maxProducts: 200 },
+};
+
+function toDateSafe(value: unknown): Date | null {
   if (!value) return null;
 
   try {
-    if (typeof value?.toDate === "function") {
-      const d = value.toDate();
-      return Number.isNaN(d.getTime()) ? null : d;
+    if (
+      typeof value === "object" &&
+      value !== null &&
+      "toDate" in value &&
+      typeof (value as { toDate?: unknown }).toDate === "function"
+    ) {
+      const date = (value as { toDate: () => Date }).toDate();
+      return Number.isNaN(date.getTime()) ? null : date;
     }
 
     if (value instanceof Date) {
       return Number.isNaN(value.getTime()) ? null : value;
     }
 
-    if (typeof value === "number") {
-      const d = new Date(value);
-      return Number.isNaN(d.getTime()) ? null : d;
+    if (typeof value === "number" || typeof value === "string") {
+      const date = new Date(value);
+      return Number.isNaN(date.getTime()) ? null : date;
     }
 
-    if (typeof value === "string") {
-      const d = new Date(value);
-      return Number.isNaN(d.getTime()) ? null : d;
-    }
-
-    if (typeof value?.seconds === "number") {
-      const d = new Date(value.seconds * 1000);
-      return Number.isNaN(d.getTime()) ? null : d;
+    if (
+      typeof value === "object" &&
+      value !== null &&
+      "seconds" in value &&
+      typeof (value as { seconds?: unknown }).seconds === "number"
+    ) {
+      const date = new Date(
+        (value as { seconds: number }).seconds * 1000
+      );
+      return Number.isNaN(date.getTime()) ? null : date;
     }
 
     return null;
@@ -71,83 +117,135 @@ function toDateSafe(value: any): Date | null {
   }
 }
 
-function toMillisSafe(value: any): number {
-  const d = toDateSafe(value);
-  return d ? d.getTime() : 0;
+function toMillisSafe(value: unknown): number {
+  return toDateSafe(value)?.getTime() ?? 0;
 }
 
-function fmtDate(value?: any) {
-  const d = toDateSafe(value);
-  if (!d) return "—";
-
-  return new Intl.DateTimeFormat("pt-BR", {
-    timeZone: "Asia/Tokyo",
-    day: "2-digit",
-    month: "2-digit",
-    year: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(d);
-}
-
-function daysLeft(value?: any) {
-  const d = toDateSafe(value);
-  if (!d) return null;
-
-  return Math.ceil((d.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
-}
-
-function addDays(days: number) {
-  const d = new Date();
-  d.setDate(d.getDate() + days);
-  return d;
-}
-
-function normalizeSubscriptionStatus(value: any): SubscriptionStatus {
-  if (
-    value === "pending" ||
+function normalizeSubscriptionStatus(value: unknown): SubscriptionStatus {
+  return value === "pending" ||
     value === "active" ||
     value === "past_due" ||
     value === "cancelled" ||
     value === "none"
-  ) {
-    return value;
-  }
-
-  return "none";
+    ? value
+    : "none";
 }
 
-function normalizePlan(value: any): PlanId {
-  if (value === "pro" || value === "business" || value === "starter") {
-    return value;
-  }
-
-  return "starter";
+function normalizePlan(value: unknown): PlanId {
+  return value === "pro" ||
+    value === "business" ||
+    value === "starter"
+    ? value
+    : "starter";
 }
 
-function defaultLimits(plan: PlanId) {
-  if (plan === "business") return { maxEvents: 10, maxProducts: 200 };
-  if (plan === "pro") return { maxEvents: 3, maxProducts: 60 };
-  return { maxEvents: 1, maxProducts: 20 };
+function normalizeRequestType(value: unknown): PlanRequestType | undefined {
+  return value === "renew" ||
+    value === "upgrade" ||
+    value === "downgrade"
+    ? value
+    : undefined;
+}
+
+function normalizeRequestStatus(
+  value: unknown
+): PlanRequestStatus | undefined {
+  return value === "pending" ||
+    value === "approved" ||
+    value === "rejected" ||
+    value === "cancelled"
+    ? value
+    : undefined;
+}
+
+function daysLeft(value?: unknown): number | null {
+  const date = toDateSafe(value);
+  if (!date) return null;
+
+  return Math.ceil(
+    (date.getTime() - Date.now()) / (1000 * 60 * 60 * 24)
+  );
+}
+
+function addDays(days: number): Date {
+  const date = new Date();
+  date.setDate(date.getDate() + days);
+  return date;
+}
+
+function requestedPlanFor(user: UserRow): PlanId {
+  return user.requestedPlan ?? user.plan;
+}
+
+function inferredRequestType(user: UserRow): PlanRequestType {
+  if (user.planRequestType) return user.planRequestType;
+
+  const requested = requestedPlanFor(user);
+
+  if (requested === user.plan) return "renew";
+
+  return PLAN_ORDER[requested] > PLAN_ORDER[user.plan]
+    ? "upgrade"
+    : "downgrade";
 }
 
 export default function AdminSettingsPage() {
-  return <AdminGuard>{() => <AdminSettingsInner />}</AdminGuard>;
+  return (
+    <AdminGuard>
+      {() => <AdminSettingsInner />}
+    </AdminGuard>
+  );
 }
 
 function AdminSettingsInner() {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
+
+  const locale =
+    lang === "en"
+      ? "en-US"
+      : lang === "ja"
+        ? "ja-JP"
+        : "pt-BR";
+
+  const tt = useCallback(
+    (key: string, fallback: string) => {
+      const translated = t(key);
+      return translated && translated !== key ? translated : fallback;
+    },
+    [t]
+  );
+
+  const fmtDate = useCallback(
+    (value?: unknown) => {
+      const date = toDateSafe(value);
+      if (!date) return "—";
+
+      return new Intl.DateTimeFormat(locale, {
+        timeZone: "Asia/Tokyo",
+        day: "2-digit",
+        month: "2-digit",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      }).format(date);
+    },
+    [locale]
+  );
 
   const [loading, setLoading] = useState(true);
   const [errMsg, setErrMsg] = useState("");
   const [okMsg, setOkMsg] = useState("");
   const [users, setUsers] = useState<UserRow[]>([]);
-  const [qText, setQText] = useState("");
-  const [filter, setFilter] = useState<"pending" | "all" | "active" | "suspended">("pending");
+  const [searchText, setSearchText] = useState("");
+  const [filter, setFilter] = useState<FilterId>("pending");
   const [busyUid, setBusyUid] = useState("");
 
   const patchUser = useCallback(
-    async (uid: string, patch: Record<string, any>, success: string) => {
+    async (
+      uid: string,
+      patch: Record<string, unknown>,
+      successMessage: string
+    ) => {
       setErrMsg("");
       setOkMsg("");
       setBusyUid(uid);
@@ -158,56 +256,78 @@ function AdminSettingsInner() {
           updatedAt: serverTimestamp(),
         });
 
-        setUsers((prev) =>
-          prev.map((u) => (u.uid === uid ? ({ ...u, ...patch } as UserRow) : u))
+        setUsers((previous) =>
+          previous.map((user) =>
+            user.uid === uid
+              ? ({ ...user, ...patch } as UserRow)
+              : user
+          )
         );
 
-        setOkMsg(success);
-        setTimeout(() => setOkMsg(""), 2500);
-      } catch (e: any) {
-        console.error(e);
-        setErrMsg(e?.message || t("admin.settings.msg.updateError"));
+        setOkMsg(successMessage);
+        window.setTimeout(() => setOkMsg(""), 2500);
+      } catch (error: unknown) {
+        console.error("[AdminSettings] patchUser:", error);
+
+        setErrMsg(
+          error instanceof Error
+            ? error.message
+            : tt(
+                "admin.settings.msg.updateError",
+                "Não foi possível atualizar o usuário."
+              )
+        );
       } finally {
         setBusyUid("");
       }
     },
-    [t]
+    [tt]
   );
 
-  useEffect(() => {
-    async function run() {
-      setLoading(true);
-      setErrMsg("");
+  const loadUsers = useCallback(async () => {
+    setLoading(true);
+    setErrMsg("");
 
-      try {
-        const qPending = query(
-          collection(db, "users"),
-          where("subscriptionStatus", "==", "pending"),
-          orderBy("requestedPlanAt", "desc"),
-          limit(300)
-        );
+    try {
+      const pendingQuery = query(
+        collection(db, "users"),
+        where("planRequestStatus", "==", "pending"),
+        orderBy("requestedPlanAt", "desc"),
+        limit(300)
+      );
 
-        const qRecent = query(
-          collection(db, "users"),
-          orderBy("updatedAt", "desc"),
-          limit(300)
-        );
+      const recentQuery = query(
+        collection(db, "users"),
+        orderBy("updatedAt", "desc"),
+        limit(300)
+      );
 
-        const [pendingSnap, recentSnap] = await Promise.all([
-          getDocs(qPending).catch(() => null),
-          getDocs(qRecent).catch(() => null),
-        ]);
+      const [pendingSnapshot, recentSnapshot] = await Promise.all([
+        getDocs(pendingQuery).catch(() => null),
+        getDocs(recentQuery).catch(() => null),
+      ]);
 
-        const byUid = new Map<string, any>();
+      const byUid = new Map<string, Record<string, unknown>>();
 
-        recentSnap?.docs.forEach((d) => byUid.set(d.id, d.data()));
-        pendingSnap?.docs.forEach((d) => byUid.set(d.id, d.data()));
+      recentSnapshot?.docs.forEach((snapshot) => {
+        byUid.set(snapshot.id, snapshot.data());
+      });
 
-        const expiredPatches: Array<{ uid: string; patch: Record<string, any> }> = [];
+      pendingSnapshot?.docs.forEach((snapshot) => {
+        byUid.set(snapshot.id, snapshot.data());
+      });
 
-        const list: UserRow[] = Array.from(byUid.entries()).map(([uid, data]) => {
-          const subscriptionStatus = normalizeSubscriptionStatus(data.subscriptionStatus);
-          const plan = normalizePlan(data.plan);
+      const expiredUpdates: Array<{
+        uid: string;
+        patch: Record<string, unknown>;
+      }> = [];
+
+      const normalizedUsers = Array.from(byUid.entries()).map(
+        ([uid, data]): UserRow => {
+          const subscriptionStatus = normalizeSubscriptionStatus(
+            data.subscriptionStatus
+          );
+
           const currentPeriodEnd = data.currentPeriodEnd;
           const currentPeriodEndMs = toMillisSafe(currentPeriodEnd);
 
@@ -217,7 +337,7 @@ function AdminSettingsInner() {
             currentPeriodEndMs < Date.now();
 
           if (isExpired) {
-            expiredPatches.push({
+            expiredUpdates.push({
               uid,
               patch: {
                 subscriptionStatus: "past_due",
@@ -230,175 +350,351 @@ function AdminSettingsInner() {
 
           return {
             uid,
-            email: String(data.email || ""),
-            displayName: String(data.displayName || data.name || ""),
-            role: data.role === "admin" ? "admin" : data.role === "seller" ? "seller" : "unknown",
+            email: String(data.email ?? ""),
+            displayName: String(data.displayName ?? data.name ?? ""),
+            role:
+              data.role === "admin"
+                ? "admin"
+                : data.role === "seller"
+                  ? "seller"
+                  : "unknown",
             active: isExpired ? false : data.active !== false,
-            suspended: !!data.suspended,
-            plan,
-            subscriptionStatus: isExpired ? "past_due" : subscriptionStatus,
-            requestedPlanAt: data.requestedPlanAt,
+            suspended: data.suspended === true,
+            plan: normalizePlan(data.plan),
+            subscriptionStatus: isExpired
+              ? "past_due"
+              : subscriptionStatus,
             currentPeriodStart: data.currentPeriodStart,
             currentPeriodEnd,
             inactiveSince: data.inactiveSince,
-            maxEvents: typeof data.maxEvents === "number" ? data.maxEvents : undefined,
-            maxProducts: typeof data.maxProducts === "number" ? data.maxProducts : undefined,
+            requestedPlan:
+              data.requestedPlan === "starter" ||
+              data.requestedPlan === "pro" ||
+              data.requestedPlan === "business"
+                ? data.requestedPlan
+                : undefined,
+            planRequestType: normalizeRequestType(
+              data.planRequestType
+            ),
+            planRequestStatus: normalizeRequestStatus(
+              data.planRequestStatus
+            ),
+            requestedPlanAt: data.requestedPlanAt,
+            maxEvents:
+              typeof data.maxEvents === "number"
+                ? data.maxEvents
+                : undefined,
+            maxProducts:
+              typeof data.maxProducts === "number"
+                ? data.maxProducts
+                : undefined,
           };
-        });
+        }
+      );
 
-        list.sort((a, b) => {
-          const score = (u: UserRow) =>
-            u.subscriptionStatus === "pending"
-              ? 0
-              : u.subscriptionStatus === "active"
-                ? 1
-                : u.subscriptionStatus === "past_due"
-                  ? 2
-                  : u.suspended || !u.active
-                    ? 3
-                    : 4;
+      normalizedUsers.sort((a, b) => {
+        const score = (user: UserRow) => {
+          if (user.planRequestStatus === "pending") return 0;
+          if (user.subscriptionStatus === "active") return 1;
+          if (user.subscriptionStatus === "past_due") return 2;
+          if (user.suspended || !user.active) return 3;
+          return 4;
+        };
 
-          return (
-            score(a) - score(b) ||
-            toMillisSafe(b.requestedPlanAt) - toMillisSafe(a.requestedPlanAt)
-          );
-        });
-
-        setUsers(list);
-
-        await Promise.all(
-          expiredPatches.map((item) => updateDoc(doc(db, "users", item.uid), item.patch))
+        return (
+          score(a) - score(b) ||
+          toMillisSafe(b.requestedPlanAt) -
+            toMillisSafe(a.requestedPlanAt)
         );
-      } catch (e) {
-        console.error(e);
-        setErrMsg(t("admin.settings.msg.error"));
-      } finally {
-        setLoading(false);
-      }
+      });
+
+      setUsers(normalizedUsers);
+
+      await Promise.all(
+        expiredUpdates.map(({ uid, patch }) =>
+          updateDoc(doc(db, "users", uid), patch)
+        )
+      );
+    } catch (error) {
+      console.error("[AdminSettings] loadUsers:", error);
+      setErrMsg(
+        tt(
+          "admin.settings.msg.error",
+          "Não foi possível carregar os usuários."
+        )
+      );
+    } finally {
+      setLoading(false);
     }
+  }, [tt]);
 
-    run();
-  }, [t]);
+  useEffect(() => {
+    void loadUsers();
+  }, [loadUsers]);
 
-  const filtered = useMemo(() => {
-    const text = qText.trim().toLowerCase();
+  const filteredUsers = useMemo(() => {
+    const normalizedSearch = searchText.trim().toLowerCase();
 
-    const byTab = users.filter((u) => {
-      if (filter === "pending") return u.subscriptionStatus === "pending";
-      if (filter === "active") return u.subscriptionStatus === "active" && !u.suspended && u.active;
+    const filteredByTab = users.filter((user) => {
+      if (filter === "pending") {
+        return user.planRequestStatus === "pending";
+      }
+
+      if (filter === "active") {
+        return (
+          user.subscriptionStatus === "active" &&
+          !user.suspended &&
+          user.active
+        );
+      }
+
       if (filter === "suspended") {
-        return u.suspended || !u.active || u.subscriptionStatus === "past_due";
+        return (
+          user.suspended ||
+          !user.active ||
+          user.subscriptionStatus === "past_due"
+        );
       }
 
       return true;
     });
 
-    if (!text) return byTab;
+    if (!normalizedSearch) return filteredByTab;
 
-    return byTab.filter((u) => {
-      const hay = `${u.uid} ${u.email} ${u.displayName} ${u.plan} ${u.subscriptionStatus}`.toLowerCase();
-      return hay.includes(text);
+    return filteredByTab.filter((user) => {
+      const searchableText = [
+        user.uid,
+        user.email,
+        user.displayName,
+        user.plan,
+        user.requestedPlan,
+        user.subscriptionStatus,
+        user.planRequestStatus,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+
+      return searchableText.includes(normalizedSearch);
     });
-  }, [users, qText, filter]);
+  }, [filter, searchText, users]);
 
-  const activatePlan = useCallback(
-    (u: UserRow, days: number) => {
-      const limits = defaultLimits(u.plan);
+  const approvePlanRequest = useCallback(
+    async (user: UserRow, days: number) => {
+      const nextPlan = requestedPlanFor(user);
+      const limits = PLAN_LIMITS[nextPlan];
 
-      patchUser(
-        u.uid,
+      await patchUser(
+        user.uid,
         {
+          plan: nextPlan,
           subscriptionStatus: "active",
-          suspended: false,
           active: true,
+          suspended: false,
           inactiveSince: null,
           currentPeriodStart: serverTimestamp(),
           currentPeriodEnd: Timestamp.fromDate(addDays(days)),
-          maxEvents: u.maxEvents ?? limits.maxEvents,
-          maxProducts: u.maxProducts ?? limits.maxProducts,
+          maxEvents: limits.maxEvents,
+          maxProducts: limits.maxProducts,
+          planRequestStatus: "approved",
+          requestedPlan: null,
+          planRequestType: null,
+          requestedPlanAt: null,
         },
-        t("admin.settings.msg.activated").replace("{days}", String(days))
+        tt(
+          "admin.settings.msg.approved",
+          "Plano aprovado por {days} dias."
+        ).replace("{days}", String(days))
       );
     },
-    [patchUser, t]
+    [patchUser, tt]
   );
 
-  const setCancelled = useCallback(
-    (u: UserRow) =>
-      patchUser(
-        u.uid,
+  const rejectPlanRequest = useCallback(
+    async (user: UserRow) => {
+      await patchUser(
+        user.uid,
+        {
+          planRequestStatus: "rejected",
+          requestedPlan: null,
+          planRequestType: null,
+          requestedPlanAt: null,
+        },
+        tt(
+          "admin.settings.msg.rejected",
+          "Solicitação rejeitada."
+        )
+      );
+    },
+    [patchUser, tt]
+  );
+
+  const renewCurrentPlan = useCallback(
+    async (user: UserRow, days: number) => {
+      const limits = PLAN_LIMITS[user.plan];
+
+      await patchUser(
+        user.uid,
+        {
+          subscriptionStatus: "active",
+          active: true,
+          suspended: false,
+          inactiveSince: null,
+          currentPeriodStart: serverTimestamp(),
+          currentPeriodEnd: Timestamp.fromDate(addDays(days)),
+          maxEvents: limits.maxEvents,
+          maxProducts: limits.maxProducts,
+        },
+        tt(
+          "admin.settings.msg.activated",
+          "Plano ativado por {days} dias."
+        ).replace("{days}", String(days))
+      );
+    },
+    [patchUser, tt]
+  );
+
+  const cancelPlan = useCallback(
+    async (user: UserRow) => {
+      await patchUser(
+        user.uid,
         {
           subscriptionStatus: "cancelled",
           active: false,
           inactiveSince: serverTimestamp(),
+          planRequestStatus:
+            user.planRequestStatus === "pending"
+              ? "cancelled"
+              : user.planRequestStatus ?? null,
+          requestedPlan: null,
+          planRequestType: null,
+          requestedPlanAt: null,
         },
-        t("admin.settings.msg.cancelled")
-      ),
-    [patchUser, t]
+        tt(
+          "admin.settings.msg.cancelled",
+          "Plano cancelado."
+        )
+      );
+    },
+    [patchUser, tt]
   );
 
-  const suspend = useCallback(
-    (u: UserRow) =>
-      patchUser(
-        u.uid,
+  const suspendUser = useCallback(
+    async (user: UserRow) => {
+      await patchUser(
+        user.uid,
         {
           suspended: true,
           active: false,
           inactiveSince: serverTimestamp(),
         },
-        t("admin.settings.msg.suspended")
-      ),
-    [patchUser, t]
+        tt(
+          "admin.settings.msg.suspended",
+          "Usuário suspenso."
+        )
+      );
+    },
+    [patchUser, tt]
   );
 
-  const unsuspend = useCallback(
-    (u: UserRow) =>
-      patchUser(
-        u.uid,
+  const reactivateUser = useCallback(
+    async (user: UserRow) => {
+      await patchUser(
+        user.uid,
         {
           suspended: false,
           active: true,
           inactiveSince: null,
         },
-        t("admin.settings.msg.unsuspended")
-      ),
-    [patchUser, t]
+        tt(
+          "admin.settings.msg.unsuspended",
+          "Usuário reativado."
+        )
+      );
+    },
+    [patchUser, tt]
   );
 
-  const bumpLimits = useCallback(
-    (u: UserRow, maxEvents: number, maxProducts: number) =>
-      patchUser(
-        u.uid,
-        { maxEvents, maxProducts },
-        t("admin.settings.msg.limitsUpdated")
-      ),
-    [patchUser, t]
+  const applyPlanLimits = useCallback(
+    async (user: UserRow, plan: PlanId) => {
+      const limits = PLAN_LIMITS[plan];
+
+      await patchUser(
+        user.uid,
+        {
+          plan,
+          maxEvents: limits.maxEvents,
+          maxProducts: limits.maxProducts,
+        },
+        tt(
+          "admin.settings.msg.limitsUpdated",
+          "Plano e limites atualizados."
+        )
+      );
+    },
+    [patchUser, tt]
   );
 
   return (
-    <main className="max-w-6xl mx-auto p-4 pb-20 space-y-6">
+    <main className="mx-auto max-w-6xl space-y-6 p-4 pb-20">
       <header className="space-y-3">
         <h1 className="text-2xl font-black tracking-tight text-neutral-900 dark:text-white">
-          {t("admin.settings.title")}
+          {tt(
+            "admin.settings.title",
+            "Assinaturas e usuários"
+          )}
         </h1>
 
         <p className="text-sm text-neutral-500">
-          {t("admin.settings.desc")}
+          {tt(
+            "admin.settings.desc",
+            "Aprove solicitações, gerencie vencimentos, limites e suspensões."
+          )}
         </p>
 
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex gap-2 overflow-x-auto no-scrollbar pb-2">
-            <TabPill label={t("admin.settings.tabs.pending")} active={filter === "pending"} onClick={() => setFilter("pending")} />
-            <TabPill label={t("admin.settings.tabs.active")} active={filter === "active"} onClick={() => setFilter("active")} />
-            <TabPill label={t("admin.settings.tabs.suspended")} active={filter === "suspended"} onClick={() => setFilter("suspended")} />
-            <TabPill label={t("admin.settings.tabs.all")} active={filter === "all"} onClick={() => setFilter("all")} />
+          <div className="flex gap-2 overflow-x-auto pb-2">
+            <TabPill
+              label={tt(
+                "admin.settings.tabs.pending",
+                "Pendentes"
+              )}
+              active={filter === "pending"}
+              onClick={() => setFilter("pending")}
+            />
+            <TabPill
+              label={tt(
+                "admin.settings.tabs.active",
+                "Ativos"
+              )}
+              active={filter === "active"}
+              onClick={() => setFilter("active")}
+            />
+            <TabPill
+              label={tt(
+                "admin.settings.tabs.suspended",
+                "Suspensos"
+              )}
+              active={filter === "suspended"}
+              onClick={() => setFilter("suspended")}
+            />
+            <TabPill
+              label={tt("admin.settings.tabs.all", "Todos")}
+              active={filter === "all"}
+              onClick={() => setFilter("all")}
+            />
           </div>
 
           <input
-            value={qText}
-            onChange={(e) => setQText(e.target.value)}
-            placeholder={t("admin.settings.search.placeholder")}
-            className="w-full sm:w-72 rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-4 py-2.5 text-xs font-bold text-neutral-900 dark:text-white outline-none"
+            value={searchText}
+            onChange={(event) =>
+              setSearchText(event.target.value)
+            }
+            placeholder={tt(
+              "admin.settings.search.placeholder",
+              "Buscar usuário..."
+            )}
+            className="w-full rounded-2xl border border-neutral-200 bg-white px-4 py-2.5 text-xs font-bold text-neutral-900 outline-none dark:border-neutral-800 dark:bg-neutral-900 dark:text-white sm:w-72"
           />
         </div>
       </header>
@@ -416,109 +712,299 @@ function AdminSettingsInner() {
       )}
 
       {loading ? (
-        <div className="animate-pulse h-28 bg-neutral-100 dark:bg-neutral-900 rounded-3xl" />
-      ) : filtered.length === 0 ? (
-        <div className="py-20 text-center border-2 border-dashed rounded-3xl dark:border-neutral-800">
-          <p className="text-neutral-500 text-sm">
-            {t("admin.sellers.none")}
+        <div className="h-28 animate-pulse rounded-3xl bg-neutral-100 dark:bg-neutral-900" />
+      ) : filteredUsers.length === 0 ? (
+        <div className="rounded-3xl border-2 border-dashed py-20 text-center dark:border-neutral-800">
+          <p className="text-sm text-neutral-500">
+            {tt(
+              "admin.sellers.none",
+              "Nenhum usuário encontrado."
+            )}
           </p>
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-4">
-          {filtered.map((u) => {
-            const remaining = daysLeft(u.currentPeriodEnd);
-            const busy = busyUid === u.uid;
+          {filteredUsers.map((user) => {
+            const remainingDays = daysLeft(
+              user.currentPeriodEnd
+            );
+            const busy = busyUid === user.uid;
+            const requestedPlan = requestedPlanFor(user);
+            const requestType = inferredRequestType(user);
 
             return (
-              <div
-                key={u.uid}
-                className="bg-white dark:bg-neutral-900 border dark:border-neutral-800 rounded-3xl p-5"
+              <article
+                key={user.uid}
+                className="rounded-3xl border bg-white p-5 dark:border-neutral-800 dark:bg-neutral-900"
               >
-                <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
-                  <div className="min-w-0">
+                <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                  <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
-                      <h3 className="font-black text-neutral-900 dark:text-white truncate">
-                        {u.displayName || t("admin.settings.user.noName")}
+                      <h3 className="truncate font-black text-neutral-900 dark:text-white">
+                        {user.displayName ||
+                          tt(
+                            "admin.settings.user.noName",
+                            "Sem nome"
+                          )}
                       </h3>
 
-                      <span className="text-[10px] font-black px-2 py-1 rounded-md border dark:border-neutral-700 text-neutral-600 dark:text-neutral-200">
-                        {u.role.toUpperCase()}
+                      <span className="rounded-md border px-2 py-1 text-[10px] font-black text-neutral-600 dark:border-neutral-700 dark:text-neutral-200">
+                        {user.role.toUpperCase()}
                       </span>
 
-                      <StatusChip u={u} t={t} />
+                      <StatusChip user={user} tt={tt} />
                     </div>
 
-                    <p className="text-xs text-neutral-500 truncate mt-1">
-                      {u.email || "—"}
+                    <p className="mt-1 truncate text-xs text-neutral-500">
+                      {user.email || "—"}
                     </p>
 
-                    <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-2 text-xs">
-                      <Info label="UID" value={u.uid} mono />
-                      <Info label={t("admin.settings.info.plan")} value={`${u.plan} / ${u.subscriptionStatus}`} />
-                      <Info label={t("admin.settings.info.requested")} value={fmtDate(u.requestedPlanAt)} />
-                      <Info label={t("admin.settings.info.started")} value={fmtDate(u.currentPeriodStart)} />
-                      <Info label={t("admin.settings.info.expires")} value={fmtDate(u.currentPeriodEnd)} />
+                    {user.planRequestStatus === "pending" && (
+                      <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-900/30 dark:bg-amber-950/20">
+                        <p className="text-[10px] font-black uppercase tracking-widest text-amber-700 dark:text-amber-300">
+                          {tt(
+                            "admin.settings.request.title",
+                            "Solicitação de plano"
+                          )}
+                        </p>
+
+                        <p className="mt-1 text-sm font-black text-amber-900 dark:text-amber-200">
+                          {user.plan} → {requestedPlan}
+                        </p>
+
+                        <p className="mt-1 text-xs font-bold text-amber-700 dark:text-amber-300">
+                          {tt(
+                            `admin.settings.request.type.${requestType}`,
+                            requestType
+                          )}
+                        </p>
+                      </div>
+                    )}
+
+                    <div className="mt-3 grid grid-cols-1 gap-2 text-xs md:grid-cols-3">
+                      <Info label="UID" value={user.uid} mono />
+
                       <Info
-                        label={t("admin.settings.info.daysLeft")}
-                        value={remaining === null ? "—" : String(remaining)}
-                        tone={remaining !== null && remaining <= 7 ? "warn" : "neutral"}
+                        label={tt(
+                          "admin.settings.info.plan",
+                          "Plano atual"
+                        )}
+                        value={`${user.plan} / ${user.subscriptionStatus}`}
                       />
+
                       <Info
-                        label={t("admin.settings.info.limits")}
-                        value={t("admin.settings.info.limitsValue")
-                          .replace("{events}", String(u.maxEvents ?? "—"))
-                          .replace("{products}", String(u.maxProducts ?? "—"))}
+                        label={tt(
+                          "admin.settings.info.requestedPlan",
+                          "Plano solicitado"
+                        )}
+                        value={
+                          user.planRequestStatus === "pending"
+                            ? requestedPlan
+                            : "—"
+                        }
+                      />
+
+                      <Info
+                        label={tt(
+                          "admin.settings.info.requested",
+                          "Solicitado em"
+                        )}
+                        value={fmtDate(
+                          user.requestedPlanAt
+                        )}
+                      />
+
+                      <Info
+                        label={tt(
+                          "admin.settings.info.started",
+                          "Início"
+                        )}
+                        value={fmtDate(
+                          user.currentPeriodStart
+                        )}
+                      />
+
+                      <Info
+                        label={tt(
+                          "admin.settings.info.expires",
+                          "Vencimento"
+                        )}
+                        value={fmtDate(
+                          user.currentPeriodEnd
+                        )}
+                      />
+
+                      <Info
+                        label={tt(
+                          "admin.settings.info.daysLeft",
+                          "Dias restantes"
+                        )}
+                        value={
+                          remainingDays === null
+                            ? "—"
+                            : String(remainingDays)
+                        }
+                        tone={
+                          remainingDays !== null &&
+                          remainingDays <= 7
+                            ? "warn"
+                            : "neutral"
+                        }
+                      />
+
+                      <Info
+                        label={tt(
+                          "admin.settings.info.limits",
+                          "Limites"
+                        )}
+                        value={tt(
+                          "admin.settings.info.limitsValue",
+                          "{events} eventos / {products} produtos"
+                        )
+                          .replace(
+                            "{events}",
+                            String(user.maxEvents ?? "—")
+                          )
+                          .replace(
+                            "{products}",
+                            String(user.maxProducts ?? "—")
+                          )}
                       />
                     </div>
                   </div>
 
-                  <div className="flex flex-wrap gap-2 md:justify-end">
-                    {u.subscriptionStatus === "pending" ? (
+                  <div className="flex flex-wrap gap-2 md:max-w-sm md:justify-end">
+                    {user.planRequestStatus === "pending" ? (
                       <>
-                        <ActionBtn disabled={busy} onClick={() => activatePlan(u, 30)} tone="dark">
-                          {t("admin.settings.btn.activate30")}
-                        </ActionBtn>
+                        <ActionButton
+                          disabled={busy}
+                          onClick={() =>
+                            void approvePlanRequest(user, 30)
+                          }
+                          tone="dark"
+                        >
+                          {tt(
+                            "admin.settings.btn.approve30",
+                            "Aprovar 30 dias"
+                          )}
+                        </ActionButton>
 
-                        <ActionBtn disabled={busy} onClick={() => activatePlan(u, 7)}>
-                          {t("admin.settings.btn.activate7")}
-                        </ActionBtn>
+                        <ActionButton
+                          disabled={busy}
+                          onClick={() =>
+                            void approvePlanRequest(user, 7)
+                          }
+                        >
+                          {tt(
+                            "admin.settings.btn.approve7",
+                            "Aprovar 7 dias"
+                          )}
+                        </ActionButton>
 
-                        <ActionBtn disabled={busy} onClick={() => setCancelled(u)} tone="danger">
-                          {t("admin.settings.btn.cancel")}
-                        </ActionBtn>
+                        <ActionButton
+                          disabled={busy}
+                          onClick={() =>
+                            void rejectPlanRequest(user)
+                          }
+                          tone="danger"
+                        >
+                          {tt(
+                            "admin.settings.btn.reject",
+                            "Rejeitar"
+                          )}
+                        </ActionButton>
                       </>
                     ) : (
                       <>
-                        {u.suspended || !u.active ? (
-                          <ActionBtn disabled={busy} onClick={() => unsuspend(u)} tone="dark">
-                            {t("admin.settings.btn.reactivate")}
-                          </ActionBtn>
+                        <ActionButton
+                          disabled={busy}
+                          onClick={() =>
+                            void renewCurrentPlan(user, 30)
+                          }
+                          tone="dark"
+                        >
+                          {tt(
+                            "admin.settings.btn.activate30",
+                            "Ativar 30 dias"
+                          )}
+                        </ActionButton>
+
+                        {user.suspended || !user.active ? (
+                          <ActionButton
+                            disabled={busy}
+                            onClick={() =>
+                              void reactivateUser(user)
+                            }
+                          >
+                            {tt(
+                              "admin.settings.btn.reactivate",
+                              "Reativar"
+                            )}
+                          </ActionButton>
                         ) : (
-                          <ActionBtn disabled={busy} onClick={() => suspend(u)} tone="danger">
-                            {t("admin.settings.btn.suspend")}
-                          </ActionBtn>
+                          <ActionButton
+                            disabled={busy}
+                            onClick={() =>
+                              void suspendUser(user)
+                            }
+                            tone="danger"
+                          >
+                            {tt(
+                              "admin.settings.btn.suspend",
+                              "Suspender"
+                            )}
+                          </ActionButton>
                         )}
 
-                        <ActionBtn disabled={busy} onClick={() => setCancelled(u)}>
-                          {t("admin.settings.btn.cancelPlan")}
-                        </ActionBtn>
+                        <ActionButton
+                          disabled={busy}
+                          onClick={() =>
+                            void cancelPlan(user)
+                          }
+                        >
+                          {tt(
+                            "admin.settings.btn.cancelPlan",
+                            "Cancelar plano"
+                          )}
+                        </ActionButton>
                       </>
                     )}
 
-                    <ActionBtn disabled={busy} onClick={() => bumpLimits(u, 1, 20)}>
-                      {t("admin.settings.btn.limitsStarter")}
-                    </ActionBtn>
+                    <ActionButton
+                      disabled={busy}
+                      onClick={() =>
+                        void applyPlanLimits(
+                          user,
+                          "starter"
+                        )
+                      }
+                    >
+                      Starter
+                    </ActionButton>
 
-                    <ActionBtn disabled={busy} onClick={() => bumpLimits(u, 3, 60)}>
-                      {t("admin.settings.btn.limitsPro")}
-                    </ActionBtn>
+                    <ActionButton
+                      disabled={busy}
+                      onClick={() =>
+                        void applyPlanLimits(user, "pro")
+                      }
+                    >
+                      Pro
+                    </ActionButton>
 
-                    <ActionBtn disabled={busy} onClick={() => bumpLimits(u, 10, 200)}>
-                      {t("admin.settings.btn.limitsBusiness")}
-                    </ActionBtn>
+                    <ActionButton
+                      disabled={busy}
+                      onClick={() =>
+                        void applyPlanLimits(
+                          user,
+                          "business"
+                        )
+                      }
+                    >
+                      Business
+                    </ActionButton>
                   </div>
                 </div>
-              </div>
+              </article>
             );
           })}
         </div>
@@ -527,14 +1013,23 @@ function AdminSettingsInner() {
   );
 }
 
-function TabPill({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
+function TabPill({
+  label,
+  active,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
   return (
     <button
+      type="button"
       onClick={onClick}
-      className={`px-5 py-2 rounded-full text-xs font-black border whitespace-nowrap ${
+      className={`whitespace-nowrap rounded-full border px-5 py-2 text-xs font-black ${
         active
-          ? "bg-black text-white border-black"
-          : "bg-white dark:bg-neutral-900 dark:text-white text-neutral-600 dark:border-neutral-800"
+          ? "border-black bg-black text-white"
+          : "bg-white text-neutral-600 dark:border-neutral-800 dark:bg-neutral-900 dark:text-white"
       }`}
     >
       {label}
@@ -542,46 +1037,74 @@ function TabPill({ label, active, onClick }: { label: string; active: boolean; o
   );
 }
 
-function StatusChip({ u, t }: { u: UserRow; t: (key: string) => string }) {
-  const remaining = daysLeft(u.currentPeriodEnd);
+function StatusChip({
+  user,
+  tt,
+}: {
+  user: UserRow;
+  tt: (key: string, fallback: string) => string;
+}) {
+  const remaining = daysLeft(user.currentPeriodEnd);
 
   if (
-    u.subscriptionStatus === "active" &&
+    user.subscriptionStatus === "active" &&
     remaining !== null &&
     remaining <= 7 &&
     remaining >= 0
   ) {
     return (
-      <span className="text-[9px] font-black px-2 py-1 rounded-md bg-orange-500 text-white">
-        {t("admin.settings.status.expiring").replace("{days}", String(remaining))}
+      <span className="rounded-md bg-orange-500 px-2 py-1 text-[9px] font-black text-white">
+        {tt(
+          "admin.settings.status.expiring",
+          "Vence em {days} dias"
+        ).replace("{days}", String(remaining))}
       </span>
     );
   }
 
   const label =
-    u.suspended || !u.active
-      ? t("admin.settings.status.suspended")
-      : u.subscriptionStatus === "pending"
-        ? t("admin.settings.status.pending")
-        : u.subscriptionStatus === "active"
-          ? t("admin.settings.status.active")
-          : u.subscriptionStatus === "past_due"
-            ? t("admin.settings.status.pastDue")
-            : u.subscriptionStatus === "cancelled"
-              ? t("admin.settings.status.cancelled")
-              : u.subscriptionStatus.toUpperCase();
+    user.suspended || !user.active
+      ? tt(
+          "admin.settings.status.suspended",
+          "Suspenso"
+        )
+      : user.planRequestStatus === "pending"
+        ? tt(
+            "admin.settings.status.pending",
+            "Pendente"
+          )
+        : user.subscriptionStatus === "active"
+          ? tt(
+              "admin.settings.status.active",
+              "Ativo"
+            )
+          : user.subscriptionStatus === "past_due"
+            ? tt(
+                "admin.settings.status.pastDue",
+                "Vencido"
+              )
+            : user.subscriptionStatus === "cancelled"
+              ? tt(
+                  "admin.settings.status.cancelled",
+                  "Cancelado"
+                )
+              : user.subscriptionStatus.toUpperCase();
 
-  const cls =
-    u.suspended || !u.active || u.subscriptionStatus === "past_due"
+  const className =
+    user.suspended ||
+    !user.active ||
+    user.subscriptionStatus === "past_due"
       ? "bg-red-500"
-      : u.subscriptionStatus === "pending"
+      : user.planRequestStatus === "pending"
         ? "bg-amber-400 text-black"
-        : u.subscriptionStatus === "active"
+        : user.subscriptionStatus === "active"
           ? "bg-emerald-500"
           : "bg-neutral-400";
 
   return (
-    <span className={`text-[9px] font-black px-2 py-1 rounded-md text-white ${cls}`}>
+    <span
+      className={`rounded-md px-2 py-1 text-[9px] font-black text-white ${className}`}
+    >
       {label}
     </span>
   );
@@ -590,7 +1113,7 @@ function StatusChip({ u, t }: { u: UserRow; t: (key: string) => string }) {
 function Info({
   label,
   value,
-  mono,
+  mono = false,
   tone = "neutral",
 }: {
   label: string;
@@ -603,42 +1126,48 @@ function Info({
       className={`rounded-2xl border px-3 py-2 ${
         tone === "warn"
           ? "border-orange-200 bg-orange-50 dark:border-orange-900/30 dark:bg-orange-950/10"
-          : "dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-950/40"
+          : "bg-neutral-50 dark:border-neutral-800 dark:bg-neutral-950/40"
       }`}
     >
       <div className="text-[10px] font-black uppercase tracking-widest text-neutral-400">
         {label}
       </div>
-      <div className={`text-xs font-bold text-neutral-900 dark:text-white ${mono ? "font-mono" : ""}`}>
+
+      <div
+        className={`text-xs font-bold text-neutral-900 dark:text-white ${
+          mono ? "font-mono" : ""
+        }`}
+      >
         {value}
       </div>
     </div>
   );
 }
 
-function ActionBtn({
+function ActionButton({
   children,
   onClick,
-  disabled,
+  disabled = false,
   tone = "default",
 }: {
-  children: React.ReactNode;
+  children: ReactNode;
   onClick: () => void;
   disabled?: boolean;
   tone?: "default" | "dark" | "danger";
 }) {
-  const cls =
+  const className =
     tone === "dark"
       ? "bg-black text-white hover:bg-neutral-800"
       : tone === "danger"
-        ? "border text-red-600 border-red-200 dark:border-red-900/30 dark:text-red-200"
+        ? "border border-red-200 text-red-600 dark:border-red-900/30 dark:text-red-200"
         : "border dark:border-neutral-700";
 
   return (
     <button
+      type="button"
       onClick={onClick}
       disabled={disabled}
-      className={`px-4 py-2 rounded-2xl text-xs font-black disabled:opacity-40 ${cls}`}
+      className={`rounded-2xl px-4 py-2 text-xs font-black disabled:opacity-40 ${className}`}
     >
       {children}
     </button>

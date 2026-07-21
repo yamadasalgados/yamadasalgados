@@ -173,7 +173,15 @@ async function fetchEventPublishedProducts(sellerId: string, eventId: string, pr
 }
 
 export default function EventClient({ sellerId, id }: { sellerId: string; id: string }) {
-  const { t } = useI18n();
+
+const { t, lang } = useI18n();
+
+const locale =
+  lang === "pt"
+    ? "pt-BR"
+    : lang === "en"
+      ? "en-US"
+      : "ja-JP";
 
   const tr = useCallback(
     (key: string, fallback: string) => {
@@ -237,9 +245,9 @@ export default function EventClient({ sellerId, id }: { sellerId: string; id: st
     return uniq([...(event.productIds || []), ...(event.productNames || [])]).sort((a, b) => {
       const an = (productsData[a]?.name || a).trim();
       const bn = (productsData[b]?.name || b).trim();
-      return an.localeCompare(bn, "pt-BR");
+      return an.localeCompare(bn, locale);
     });
-  }, [event, productsData]);
+  }, [event, productsData, locale]);
 
   const dynamicCategories = useMemo(() => {
     const set = new Set<string>();
@@ -247,8 +255,8 @@ export default function EventClient({ sellerId, id }: { sellerId: string; id: st
       const c = productsData[pid]?.category;
       if (typeof c === "string" && c.trim()) set.add(c.trim());
     }
-    return Array.from(set).sort((a, b) => a.localeCompare(b, "pt-BR"));
-  }, [sortedProductIds, productsData]);
+return Array.from(set).sort((a, b) => a.localeCompare(b, locale));
+  }, [sortedProductIds, productsData, locale]);
 
   const uncategorized = useMemo(
     () => sortedProductIds.filter((pid) => !productsData[pid]?.category),
@@ -275,14 +283,14 @@ export default function EventClient({ sellerId, id }: { sellerId: string; id: st
 
   const fmtChatTime = useCallback((ts?: Timestamp) => {
     if (!ts) return "";
-    return new Intl.DateTimeFormat("pt-BR", {
+    return new Intl.DateTimeFormat(locale, {
       timeZone: "Asia/Tokyo",
       day: "2-digit",
       month: "2-digit",
       hour: "2-digit",
       minute: "2-digit",
     }).format(ts.toDate());
-  }, []);
+}, [locale]);
 
   const resetOrderForm = useCallback(() => {
     setCustomerName("");
@@ -945,9 +953,11 @@ export default function EventClient({ sellerId, id }: { sellerId: string; id: st
                   className="rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-4 py-3 text-sm text-neutral-900 dark:text-white"
                 >
                   {Array.from({ length: 15 }, (_, i) => i + 8).map((h) => (
-                    <option key={h} value={h}>
-                      {String(h).padStart(2, "0")}h
-                    </option>
+                  <option key={h} value={h}>
+                    {lang === "ja"
+                      ? `${String(h).padStart(2, "0")}時`
+                      : `${String(h).padStart(2, "0")}h`}
+                  </option>
                   ))}
                 </select>
 
@@ -957,9 +967,13 @@ export default function EventClient({ sellerId, id }: { sellerId: string; id: st
                   className="rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-4 py-3 text-sm text-neutral-900 dark:text-white"
                 >
                   {[0, 15, 30, 45].map((m) => (
-                    <option key={m} value={m}>
-                      {String(m).padStart(2, "0")}min
-                    </option>
+                  <option key={m} value={m}>
+                    {lang === "ja"
+                      ? `${String(m).padStart(2, "0")}分`
+                      : lang === "en"
+                        ? `${String(m).padStart(2, "0")} min`
+                        : `${String(m).padStart(2, "0")}min`}
+                  </option>
                   ))}
                 </select>
               </div>

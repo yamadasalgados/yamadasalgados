@@ -338,7 +338,7 @@ const showPlanWarning =
     )}
 
     <Link
-      href="/seller/rent"
+      href="/seller/settings"
       className="inline-block mt-2 rounded-xl bg-black text-white dark:bg-white dark:text-black px-4 py-2 text-xs font-black uppercase"
     >
       {t("dashboard.plan.manage")}
