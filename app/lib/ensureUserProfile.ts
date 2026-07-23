@@ -1,191 +1,426 @@
-import { db } from "@/app/lib/firebase";
 import {
   doc,
   getDoc,
   serverTimestamp,
   setDoc,
-  updateDoc,
+  writeBatch,
   type DocumentData,
 } from "firebase/firestore";
-import type { User } from "firebase/auth";
+import type {
+  User,
+} from "firebase/auth";
 
-export type UserRole = "admin" | "seller";
+import {
+  db,
+} from "@/app/lib/firebase";
+import {
+  normalizeLanguage,
+} from "@/app/lib/regional";
+import type {
+  SupportedLanguage,
+} from "@/app/types/regional";
 
-/**
- * 🔒 Lista de administradores com permissões irrestritas no ecossistema
- */
-const ADMIN_EMAILS: string[] = [
-  "seu-email@exemplo.com", // 👈 Substitua pelo seu email real de administrador
-];
-
-function isAdminEmail(email: string | null | undefined): boolean {
-  if (!email) return false;
-  const sanitizedEmail = email.trim().toLowerCase();
-  return ADMIN_EMAILS.some((admin) => admin.trim().toLowerCase() === sanitizedEmail);
-}
+export type UserRole =
+  | "admin"
+  | "seller";
 
 type EnsureResult = {
   userDoc: DocumentData;
   sellerDoc: DocumentData | null;
 };
 
+type SellerOwnerFields = {
+  ownerUid: string;
+  ownerEmail: string | null;
+  ownerName: string | null;
+  ownerPhotoURL: string | null;
+};
+
+function normalizedTextOrNull(
+  value: unknown,
+): string | null {
+  const normalized =
+    String(value ?? "").trim();
+
+  return normalized || null;
+}
+
+function normalizeStoredRole(
+  value: unknown,
+): UserRole {
+  return value === "admin"
+    ? "admin"
+    : "seller";
+}
+
+function storedLanguage(
+  data: DocumentData,
+  requestedLanguage: SupportedLanguage,
+): SupportedLanguage {
+  return normalizeLanguage(
+    data.locale,
+    requestedLanguage,
+  );
+}
+
 /**
- * Garante a integridade e sincronia do perfil do usuário e do nó de vendas (Tenant) no Firestore.
+ * Garante os documentos mínimos de identidade.
+ *
+ * Regras desta versão:
+ * - nunca concede role admin no cliente;
+ * - nunca redefine plano, assinatura ou limites;
+ * - respeita sellerId já vinculado ao usuário;
+ * - preserva o idioma válido já salvo;
+ * - mantém o schema atual até as regras serem
+ *   versionadas na próxima etapa.
  */
-export async function ensureUserProfile(user: User, initialLang: string = "pt"): Promise<EnsureResult> {
-  if (!user?.uid) throw new Error("Identificação de usuário inválida.");
-
-  const uid = user.uid;
-  const normalizedEmail = (user.email ?? "").trim().toLowerCase() || null;
-  // Sincroniza com a normalização de idioma corrigida para 'ja'
-  const targetLang = initialLang === "jp" ? "ja" : initialLang || "pt";
-
-  const userRef = doc(db, "users", uid);
-  const userSnap = await getDoc(userRef);
-
-  const syncFields = {
-    email: normalizedEmail,
-    displayName: user.displayName ?? null,
-    photoURL: user.photoURL ?? null,
-    locale: targetLang,
-    updatedAt: serverTimestamp(),
-  };
-
-  // -------------------------------------------------------------
-  // 1) Caso o usuário já possua registro: Valida e atualiza delta (Economiza escrita)
-  // -------------------------------------------------------------
-  if (userSnap.exists()) {
-    const data = userSnap.data();
-
-    const hasChanged =
-      data.email !== syncFields.email ||
-      data.displayName !== syncFields.displayName ||
-      data.photoURL !== syncFields.photoURL ||
-      data.locale !== syncFields.locale;
-
-    if (hasChanged) {
-      await updateDocSafe(userRef, syncFields);
-    }
-
-    const role: UserRole = (data.role as UserRole) || "seller";
-    let sellerDoc: DocumentData | null = null;
-
-    if (role === "seller") {
-      sellerDoc = await ensureSellerDoc(uid, {
-        ownerUid: uid,
-        ownerEmail: normalizedEmail,
-        ownerName: syncFields.displayName,
-        ownerPhotoURL: syncFields.photoURL,
-      });
-    }
-
-    return { userDoc: { ...data, ...syncFields }, sellerDoc };
+export async function ensureUserProfile(
+  user: User,
+  requestedLanguage: string = "pt",
+): Promise<EnsureResult> {
+  if (!user?.uid) {
+    throw new Error(
+      "INVALID_USER_IDENTITY",
+    );
   }
 
-  // -------------------------------------------------------------
-  // 2) Primeiro acesso: Instancia perfil raíz com regras de privilégio estritas
-  // -------------------------------------------------------------
-  const role: UserRole = isAdminEmail(normalizedEmail) ? "admin" : "seller";
+  const uid = user.uid;
+  const requested =
+    normalizeLanguage(
+      requestedLanguage,
+      "pt",
+    );
+
+  const email =
+    normalizedTextOrNull(
+      user.email,
+    )?.toLowerCase() ?? null;
+
+  const displayName =
+    normalizedTextOrNull(
+      user.displayName,
+    );
+
+  const photoURL =
+    normalizedTextOrNull(
+      user.photoURL,
+    );
+
+  const userReference =
+    doc(db, "users", uid);
+
+  const userSnapshot =
+    await getDoc(userReference);
+
+  if (!userSnapshot.exists()) {
+    return createFirstProfile({
+      uid,
+      email,
+      displayName,
+      photoURL,
+      language: requested,
+    });
+  }
+
+  const currentUserData =
+    userSnapshot.data();
+
+  const role =
+    normalizeStoredRole(
+      currentUserData.role,
+    );
+
+  const language =
+    storedLanguage(
+      currentUserData,
+      requested,
+    );
+
+  const resolvedSellerId =
+    role === "seller"
+      ? normalizedTextOrNull(
+          currentUserData.sellerId,
+        ) ?? uid
+      : null;
+
+  const userPatch:
+    Record<string, unknown> = {};
+
+  if (
+    currentUserData.email !== email
+  ) {
+    userPatch.email = email;
+  }
+
+  if (
+    currentUserData.displayName !==
+    displayName
+  ) {
+    userPatch.displayName =
+      displayName;
+  }
+
+  if (
+    currentUserData.photoURL !==
+    photoURL
+  ) {
+    userPatch.photoURL = photoURL;
+  }
+
+  if (
+    currentUserData.locale !==
+    language
+  ) {
+    userPatch.locale = language;
+  }
+
+  if (
+    role === "seller" &&
+    currentUserData.sellerId !==
+      resolvedSellerId
+  ) {
+    userPatch.sellerId =
+      resolvedSellerId;
+  }
+
+  if (
+    typeof currentUserData.active !==
+    "boolean"
+  ) {
+    userPatch.active = true;
+  }
+
+  if (
+    Object.keys(userPatch).length > 0
+  ) {
+    userPatch.updatedAt =
+      serverTimestamp();
+
+    await setDoc(
+      userReference,
+      userPatch,
+      {
+        merge: true,
+      },
+    );
+  }
+
+  let sellerDoc:
+    DocumentData | null = null;
+
+  if (
+    role === "seller" &&
+    resolvedSellerId
+  ) {
+    sellerDoc =
+      await ensureSellerDocument(
+        resolvedSellerId,
+        {
+          ownerUid: uid,
+          ownerEmail: email,
+          ownerName: displayName,
+          ownerPhotoURL: photoURL,
+        },
+      );
+  }
+
+  return {
+    userDoc: {
+      ...currentUserData,
+      ...userPatch,
+      role,
+      sellerId:
+        resolvedSellerId,
+      locale: language,
+    },
+    sellerDoc,
+  };
+}
+
+async function createFirstProfile({
+  uid,
+  email,
+  displayName,
+  photoURL,
+  language,
+}: {
+  uid: string;
+  email: string | null;
+  displayName: string | null;
+  photoURL: string | null;
+  language: SupportedLanguage;
+}): Promise<EnsureResult> {
+  const createdAt =
+    serverTimestamp();
 
   const newUser = {
     uid,
-    email: syncFields.email,
-    displayName: syncFields.displayName,
-    photoURL: syncFields.photoURL,
-    role,
+    email,
+    displayName,
+    photoURL,
+
+    // Privilégio administrativo nunca é
+    // concedido pelo navegador.
+    role: "seller" as const,
+
     active: true,
-    sellerId: role === "seller" ? uid : null,
-    regionId: null as string | null,
-    locale: syncFields.locale,
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
+    sellerId: uid,
+    regionId: null,
+
+    locale: language,
+
+    createdAt,
+    updatedAt: createdAt,
     createdBy: uid,
     updatedBy: uid,
   };
 
-  await setDoc(userRef, newUser);
+  const newSeller = {
+    sellerId: uid,
 
-  let sellerDoc: DocumentData | null = null;
-  if (role === "seller") {
-    sellerDoc = await ensureSellerDoc(uid, {
-      ownerUid: uid,
-      ownerEmail: normalizedEmail,
-      ownerName: syncFields.displayName,
-      ownerPhotoURL: syncFields.photoURL,
-    });
-  }
+    ownerUid: uid,
+    ownerEmail: email,
+    ownerName: displayName,
+    ownerPhotoURL: photoURL,
 
-  return { userDoc: newUser, sellerDoc };
-}
-
-/**
- * Garante e isola o documento do Seller (Tenant root de vendas)
- */
-async function ensureSellerDoc(
-  sellerId: string,
-  owner: {
-    ownerUid: string;
-    ownerEmail: string | null;
-    ownerName: string | null;
-    ownerPhotoURL: string | null;
-  }
-) {
-  const sellerRef = doc(db, "sellers", sellerId);
-  const sellerSnap = await getDoc(sellerRef);
-
-  const baseConfig = {
-    ownerUid: owner.ownerUid,
-    ownerEmail: owner.ownerEmail,
-    ownerName: owner.ownerName,
-    ownerPhotoURL: owner.ownerPhotoURL,
     active: true,
     deletedAt: null,
-    plan: "starter",
-    subscriptionStatus: "none",
+
+    plan: "starter" as const,
+    subscriptionStatus:
+      "none" as const,
     suspended: false,
+
     limits: {
       maxEvents: 1,
       maxProducts: 20,
     },
-    regionId: null as string | null,
-    regionName: null as string | null,
-    updatedAt: serverTimestamp(),
+
+    regionId: null,
+    regionName: null,
+
+    createdAt,
+    updatedAt: createdAt,
+    createdBy: uid,
+    updatedBy: uid,
   };
 
-  if (sellerSnap.exists()) {
-    const data = sellerSnap.data();
+  const batch = writeBatch(db);
 
-    const hasChanged =
-      data.ownerEmail !== baseConfig.ownerEmail ||
-      data.ownerName !== baseConfig.ownerName ||
-      data.ownerPhotoURL !== baseConfig.ownerPhotoURL;
+  batch.set(
+    doc(db, "users", uid),
+    newUser,
+  );
 
-    if (hasChanged) {
-      await updateDocSafe(sellerRef, baseConfig);
-    }
+  batch.set(
+    doc(db, "sellers", uid),
+    newSeller,
+  );
 
-    return { ...data, ...baseConfig };
-  }
+  await batch.commit();
 
-  const newSeller = {
-    sellerId,
-    ...baseConfig,
-    createdAt: serverTimestamp(),
-    createdBy: owner.ownerUid,
-    updatedBy: owner.ownerUid,
+  return {
+    userDoc: newUser,
+    sellerDoc: newSeller,
   };
-
-  await setDoc(sellerRef, newSeller);
-  return newSeller;
 }
 
-/**
- * Helper resiliente para mitigar falhas de concorrência ou deleções durante a mutação
- */
-async function updateDocSafe(ref: any, data: any) {
-  try {
-    await updateDoc(ref, data);
-  } catch (err) {
-    console.warn("[Firestore Safe Mutation] Falha silenciosa ao atualizar documento:", err);
+async function ensureSellerDocument(
+  sellerId: string,
+  owner: SellerOwnerFields,
+): Promise<DocumentData> {
+  const sellerReference =
+    doc(db, "sellers", sellerId);
+
+  const sellerSnapshot =
+    await getDoc(sellerReference);
+
+  if (!sellerSnapshot.exists()) {
+    const createdAt =
+      serverTimestamp();
+
+    const newSeller = {
+      sellerId,
+
+      ...owner,
+
+      active: true,
+      deletedAt: null,
+
+      plan: "starter" as const,
+      subscriptionStatus:
+        "none" as const,
+      suspended: false,
+
+      limits: {
+        maxEvents: 1,
+        maxProducts: 20,
+      },
+
+      regionId: null,
+      regionName: null,
+
+      createdAt,
+      updatedAt: createdAt,
+      createdBy: owner.ownerUid,
+      updatedBy: owner.ownerUid,
+    };
+
+    await setDoc(
+      sellerReference,
+      newSeller,
+    );
+
+    return newSeller;
   }
+
+  const currentSellerData =
+    sellerSnapshot.data();
+
+  const sellerPatch:
+    Record<string, unknown> = {};
+
+  for (
+    const [key, value]
+    of Object.entries(owner)
+  ) {
+    if (
+      currentSellerData[key] !== value
+    ) {
+      sellerPatch[key] = value;
+    }
+  }
+
+  if (
+    currentSellerData.sellerId !==
+    sellerId
+  ) {
+    sellerPatch.sellerId =
+      sellerId;
+  }
+
+  if (
+    Object.keys(sellerPatch).length >
+    0
+  ) {
+    sellerPatch.updatedAt =
+      serverTimestamp();
+
+    sellerPatch.updatedBy =
+      owner.ownerUid;
+
+    await setDoc(
+      sellerReference,
+      sellerPatch,
+      {
+        merge: true,
+      },
+    );
+  }
+
+  return {
+    ...currentSellerData,
+    ...sellerPatch,
+    sellerId,
+  };
 }

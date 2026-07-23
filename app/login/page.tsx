@@ -63,7 +63,7 @@ function friendlyAuthError(err: any, tt: (k: string, fallback: string) => string
 
 export default function LoginPage() {
   const router = useRouter();
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
 
   // helper para evitar quebrar caso uma key não exista no dicionário
   const tt = useCallback(
@@ -140,14 +140,14 @@ export default function LoginPage() {
 
       try {
         // garante doc users/{uid} e role default "seller" se ainda não tiver
-        await ensureUserProfile(user, "seller");
+        await ensureUserProfile(user, lang);
         await resolveAfterLogin(user);
       } catch (e: any) {
         didRedirectRef.current = false;
         setError(e?.message || tt("auth.err.validateProfile", "Falha ao validar perfil/plano no Firestore."));
       }
     },
-    [resolveAfterLogin, tt]
+    [lang, resolveAfterLogin, tt]
   );
 
   useEffect(() => {

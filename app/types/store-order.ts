@@ -1,0 +1,100 @@
+import type { Timestamp } from "firebase/firestore";
+
+
+import {
+  ORDER_STATUS,
+  type OrderStatus,
+} from "@/app/lib/order-status";
+
+export const STORE_ORDER_STATUS =
+  ORDER_STATUS;
+
+export type StoreOrderStatus =
+  OrderStatus;
+
+export type StoreOrderErrorCode =
+  | "AUTH_REQUIRED"
+  | "INVALID_ORDER_ID"
+  | "ORDER_NOT_FOUND"
+  | "ORDER_LOAD_FAILED"
+  | "STATUS_UPDATE_FAILED";
+
+export interface StoreOrderTimestampLike {
+  toDate: () => Date;
+}
+
+export type StoreOrderDate =
+  | Timestamp
+  | StoreOrderTimestampLike
+  | Date
+  | string
+  | number
+  | null;
+
+export type StoreOrderDeliveryMode =
+  | "pickup"
+  | "delivery"
+  | "none";
+
+export interface StoreOrderOption {
+  id?: string;
+  name: string;
+  price?: number;
+}
+
+export interface StoreOrderItem {
+  id?: string;
+  productId?: string;
+  sku?: string;
+  name: string;
+  qty: number;
+  price?: number;
+  subtotal: number;
+  category?: string;
+  imageUrl?: string;
+  note?: string;
+  options?: StoreOrderOption[];
+}
+
+export interface StoreOrderHistory {
+  status: StoreOrderStatus;
+  createdAt?: StoreOrderDate;
+  updatedBy?: string;
+  note?: string;
+}
+
+export interface StoreOrder {
+  id: string;
+
+  customerName?: string;
+  customerPhone?: string;
+  customerEmail?: string;
+  customerPhoto?: string;
+
+  note?: string;
+
+  deliveryMode?: StoreOrderDeliveryMode;
+  deliveryDate?: string;
+  deliveryTimeSlot?: string;
+  locationLink?: string;
+  address?: string;
+
+  paymentMethod?: string;
+  paymentStatus?: string;
+
+  subtotal?: number;
+  discount?: number;
+  deliveryFee?: number;
+  totalAmount: number;
+
+  createdAt?: StoreOrderDate;
+  updatedAt?: StoreOrderDate;
+  sellerReadAt?: StoreOrderDate;
+
+  sellerUnread?: boolean;
+  updatedBy?: string;
+
+  status: StoreOrderStatus;
+  items: StoreOrderItem[];
+  history: StoreOrderHistory[];
+}
