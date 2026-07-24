@@ -1,39 +1,54 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { auth, db } from "@/app/lib/firebase";
 import { onAuthStateChanged, type User } from "firebase/auth";
 import {
-  addDoc,
   collection,
   deleteDoc,
   doc,
-  onSnapshot,
-  query,
-  updateDoc,
-  serverTimestamp,
-  orderBy,
-  Timestamp,
   limit,
+  onSnapshot,
+  orderBy,
+  query,
+  serverTimestamp,
   setDoc,
+  Timestamp,
+  updateDoc,
 } from "firebase/firestore";
+import { Plus } from "lucide-react";
+
+import { auth, db } from "@/app/lib/firebase";
 import { ensureUserProfile } from "@/app/lib/ensureUserProfile";
+import { useI18n } from "@/app/lib/i18n";
 import { formatMoneyMajor } from "@/app/lib/money";
 import type {
   RegionalLocale,
   SupportedCurrency,
 } from "@/app/types/regional";
-import { useI18n } from "@/app/lib/i18n";
-import { getApp } from "firebase/app";
-import { getStorage, ref as storageRef, uploadBytes, getDownloadURL } from "firebase/storage";
+
+import ProductModal from "./ProductModal";
+import {
+  categoryKey,
+  mergeCategoryLabels,
+  normalizeCategoryLabel,
+  slugify,
+} from "./product-catalog-utils";
+import type {
+  PlanId,
+  ProductDoc,
+  ProductSaveResult,
+  ProductStatus,
+} from "./product-types";
 
 // --- 📝 Interfaces de Tipagem Estrita (TypeScript) ---
 
-type CategoryId = string;
-type ProductStatus = "active" | "inactive";
-type PlanId = "starter" | "pro" | "business";
-type SubscriptionStatus = "none" | "pending" | "active" | "past_due" | "cancelled";
+type SubscriptionStatus =
+  | "none"
+  | "pending"
+  | "active"
+  | "past_due"
+  | "cancelled";
 
 type UserDoc = {
   role?: "seller" | "admin";
@@ -56,29 +71,10 @@ type SellerCategoryDoc = {
   updatedAt?: Timestamp;
 };
 
-type ProductDoc = {
-  id: string;
-  createdAt?: Timestamp;
-  updatedAt?: Timestamp;
-  ownerUid: string;
-  sellerId: string;
-  sellerEmail?: string | null;
-  category: CategoryId;
-  name: string;
-  costPrice: number;
-  sellPrice: number;
-  quantity: number;
-  stockQty: number;
-  lowStockThreshold: number;
-  status: ProductStatus;
-  imageUrl: string;
-  extraImageUrls?: string[];
-};
-
 interface ProductCardProps {
   product: ProductDoc;
   canManage: boolean;
-  onEdit: (p: ProductDoc) => void;
+  onEdit: (product: ProductDoc) => void;
   onDelete: (id: string) => void;
   onToggleStatus: (id: string, next: ProductStatus) => void;
   badgeLabelActive: string;
@@ -87,133 +83,8 @@ interface ProductCardProps {
   btnDelete: string;
   btnActivate: string;
   btnDeactivate: string;
-  yen: (n: number) => string;
+  yen: (value: number) => string;
   lang: string;
-}
-
-interface FormFieldsProps {
-  t: (key: string) => string;
-  lang: string;
-  currency: SupportedCurrency;
-  categories: string[];
-  category: string;
-  setCategory: (v: string) => void;
-  creatingCategory: boolean;
-  setCreatingCategory: (v: boolean) => void;
-  newCategoryName: string;
-  setNewCategoryName: (v: string) => void;
-  onCreateCategory: () => void;
-  sellerHasAnyCategory: boolean;
-  name: string;
-  setName: (v: string) => void;
-  costPrice: string;
-  setCostPrice: (v: string) => void;
-  sellPrice: string;
-  setSellPrice: (v: string) => void;
-  quantity: string;
-  setQuantity: (v: string) => void;
-  stockQty: string;
-  setStockQty: (v: string) => void;
-  status: ProductStatus;
-  setStatus: (v: ProductStatus) => void;
-  existingImageUrl: string;
-  existingExtraUrls: string[];
-  mainPreview: string;
-  extraPreviews: string[];
-  onPickMain: (file: File | null) => void;
-  onPickExtras: (files: FileList | null) => void;
-  removeExistingExtra: (url: string) => void;
-  clearSelectedExtras: () => void;
-}
-
-// --- 🛠️ Funções Utilitárias Core ---
-
-function toNum(input: any): number {
-  const s = String(input ?? "").trim().replace(",", ".");
-  const n = Number(s);
-  return Number.isFinite(n) ? n : NaN;
-}
-
-function safeExtFromType(type: string) {
-  const t = String(type || "").toLowerCase();
-  if (t.includes("png")) return "png";
-  if (t.includes("webp")) return "webp";
-  if (t.includes("gif")) return "gif";
-  return "jpg";
-}
-
-async function uploadImageFile(params: { uid: string; productIdLike: string; file: File }): Promise<string> {
-  const { uid, productIdLike, file } = params;
-  const app = getApp();
-  const storage = getStorage(app);
-  const ext = safeExtFromType(file.type);
-  const ts = Date.now();
-  const cleanName = String(file.name || "image")
-    .replace(/[^\w.\-]+/g, "_")
-    .slice(0, 80);
-
-  const path = `sellers/${uid}/products/${productIdLike}/${ts}_${cleanName}.${ext}`;
-  const r = storageRef(storage, path);
-  await uploadBytes(r, file);
-  return getDownloadURL(r);
-}
-
-function hashText(input: string) {
-  let hash = 2166136261;
-
-  for (let index = 0; index < input.length; index += 1) {
-    hash ^= input.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-
-  return (hash >>> 0).toString(36);
-}
-
-function slugify(input: string) {
-  const normalized = String(input || "")
-    .trim()
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "");
-
-  const asciiSlug = normalized
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 50);
-
-  if (asciiSlug) return asciiSlug;
-
-  return `category-${hashText(normalized || "category")}`;
-}
-
-function normalizeCategoryLabel(input: string) {
-  return String(input || "")
-    .trim()
-    .replace(/\s+/g, " ")
-    .slice(0, 60);
-}
-
-function categoryKey(input: string) {
-  return normalizeCategoryLabel(input)
-    .normalize("NFKC")
-    .toLocaleLowerCase();
-}
-
-function mergeCategoryLabels(...groups: string[][]) {
-  const result = new Map<string, string>();
-
-  for (const group of groups) {
-    for (const rawName of group) {
-      const label = normalizeCategoryLabel(rawName);
-      const key = categoryKey(label);
-
-      if (label && key && !result.has(key)) {
-        result.set(key, label);
-      }
-    }
-  }
-
-  return Array.from(result.values());
 }
 
 // --- 🚀 Componente Principal da Página ---
@@ -253,8 +124,6 @@ export default function ProductsCatalogPage() {
             clearFilters: "フィルター解除",
             noResults: "条件に一致する商品はありません。",
             visibleProducts: "表示中",
-            categoryHelp:
-              "既存商品のカテゴリーも自動的に候補へ追加されます。",
           }
         : lang === "en"
           ? {
@@ -285,8 +154,6 @@ export default function ProductsCatalogPage() {
               clearFilters: "Clear filters",
               noResults: "No products match the selected filters.",
               visibleProducts: "Showing",
-              categoryHelp:
-                "Categories already used by products are included automatically.",
             }
           : {
               subtitle:
@@ -316,13 +183,9 @@ export default function ProductsCatalogPage() {
               clearFilters: "Limpar filtros",
               noResults: "Nenhum produto corresponde aos filtros selecionados.",
               visibleProducts: "Exibindo",
-              categoryHelp:
-                "Categorias já usadas nos produtos também entram automaticamente na lista.",
             },
     [lang]
   );
-
-  const formRef = useRef<HTMLDivElement | null>(null);
 
   const [checkingAuth, setCheckingAuth] = useState(true);
   const [authUser, setAuthUser] = useState<User | null>(null);
@@ -333,9 +196,6 @@ export default function ProductsCatalogPage() {
 
   const [ownProducts, setOwnProducts] = useState<ProductDoc[]>([]);
   const [sellerCategories, setSellerCategories] = useState<SellerCategoryDoc[]>([]);
-  const [creatingCategory, setCreatingCategory] = useState(false);
-  const [newCategoryName, setNewCategoryName] = useState("");
-
   const [searchQuery, setSearchQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState<"all" | ProductStatus>("all");
@@ -345,26 +205,11 @@ export default function ProductsCatalogPage() {
   const [syncingCategories, setSyncingCategories] = useState(false);
   const categorySyncRef = useRef("");
 
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [name, setName] = useState("");
-  const [category, setCategory] = useState<CategoryId>("");
-  const [status, setStatus] = useState<ProductStatus>("active");
-  const [costPrice, setCostPrice] = useState("");
-  const [sellPrice, setSellPrice] = useState("");
-  const [quantity, setQuantity] = useState("1");
-  const [stockQty, setStockQty] = useState("0");
-
-  const [existingImageUrl, setExistingImageUrl] = useState<string>("");
-  const [existingExtraUrls, setExistingExtraUrls] = useState<string[]>([]);
-  const [mainFile, setMainFile] = useState<File | null>(null);
-  const [mainPreview, setMainPreview] = useState<string>("");
-  const [extraFiles, setExtraFiles] = useState<File[]>([]);
-  const [extraPreviews, setExtraPreviews] = useState<string[]>([]);
-
-  const [uploading, setUploading] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [errMsg, setErrMsg] = useState<string>("");
-  const [successMsg, setSuccessMsg] = useState<string>("");
+  const [productModalOpen, setProductModalOpen] = useState(false);
+  const [selectedProduct, setSelectedProduct] = useState<ProductDoc | null>(null);
+  const [toastMessage, setToastMessage] = useState("");
+  const [errMsg, setErrMsg] = useState("");
+  const [successMsg, setSuccessMsg] = useState("");
 
   const inactive = profile?.active === false;
   const maxProducts = Number.isFinite(profile?.maxProducts as any) ? Number(profile?.maxProducts) : 0;
@@ -487,6 +332,8 @@ export default function ProductsCatalogPage() {
   const ownCount = ownProducts.length;
   const remaining = useMemo(() => Math.max(0, maxProducts - ownCount), [maxProducts, ownCount]);
   const profileReady = !!profile && !profileMissing;
+  const canCreateProduct =
+    maxProducts <= 0 || ownCount < maxProducts;
 
   useEffect(() => {
     if (!authUser || !sellerId || !profileReady || inactive) return;
@@ -515,7 +362,6 @@ export default function ProductsCatalogPage() {
           .filter((item) => item.name);
 
         setSellerCategories(list);
-        setCategory((current) => current || list[0]?.name || "");
         setCategoryWarning("");
       },
       (error) => {
@@ -571,235 +417,99 @@ export default function ProductsCatalogPage() {
     );
   }, [authUser, sellerId, profileReady, inactive, t]);
 
-  const resetImages = () => {
-    try {
-      if (mainPreview) URL.revokeObjectURL(mainPreview);
-      extraPreviews.forEach(URL.revokeObjectURL);
-    } catch {}
-    setExistingImageUrl("");
-    setExistingExtraUrls([]);
-    setMainFile(null);
-    setMainPreview("");
-    setExtraFiles([]);
-    setExtraPreviews([]);
-  };
-
-  const resetForm = () => {
-    setEditingId(null);
-    setName("");
-    setCostPrice("");
-    setSellPrice("");
-    setQuantity("1");
-    setStockQty("0");
-    setCategory(sellerCategories[0]?.name || "");
-    setStatus("active");
+  const openCreateProduct = useCallback(() => {
+    setSelectedProduct(null);
+    setProductModalOpen(true);
     setErrMsg("");
-    setSuccessMsg("");
-    setCreatingCategory(false);
-    setNewCategoryName("");
-    resetImages();
-  };
+  }, []);
 
-  const createSellerCategory = useCallback(
-    async (rawName: string) => {
-      if (!authUser || !sellerId) return;
-      const nameClean = normalizeCategoryLabel(rawName);
-      const slug = slugify(nameClean);
+  const openEditProduct = useCallback((product: ProductDoc) => {
+    setSelectedProduct(product);
+    setProductModalOpen(true);
+    setErrMsg("");
+  }, []);
 
-      if (!nameClean || !slug) {
-        setErrMsg(t("products.categories.err.invalid"));
-        return;
-      }
+  const closeProductModal = useCallback(() => {
+    setProductModalOpen(false);
+    setSelectedProduct(null);
+  }, []);
 
-      setSaving(true);
-      try {
-        await setDoc(doc(db, "sellers", sellerId, "categories", slug), {
-          ownerUid: authUser.uid,
-          name: nameClean,
-          slug,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        }, { merge: true });
+  const handleProductSaved = useCallback(
+    (result: ProductSaveResult) => {
+      setOwnProducts((current) => {
+        const withoutSaved = current.filter(
+          (item) => item.id !== result.product.id,
+        );
 
-        setCategory(nameClean);
-        setSuccessMsg(t("products.categories.msg.created"));
-      } catch {
-        setErrMsg(t("products.categories.err.create"));
-      } finally {
-        setSaving(false);
-        setCreatingCategory(false);
-        setNewCategoryName("");
-      }
+        return [result.product, ...withoutSaved];
+      });
+
+      const message =
+        lang === "ja"
+          ? result.mode === "created"
+            ? "商品を作成しました。"
+            : "商品を更新しました。"
+          : lang === "en"
+            ? result.mode === "created"
+              ? "Product created successfully."
+              : "Product updated successfully."
+            : result.mode === "created"
+              ? "Produto criado com sucesso."
+              : "Produto atualizado com sucesso.";
+
+      setToastMessage(message);
+      setSuccessMsg("");
+      setErrMsg("");
     },
-    [authUser, sellerId, t]
+    [lang],
   );
 
-  const handleSave = async () => {
-    if (!authUser || !sellerId || inactive) return;
+  useEffect(() => {
+    if (!toastMessage) return;
 
-    const cp = costPrice === "" ? 0 : toNum(costPrice);
-    const sp = sellPrice === "" ? 0 : toNum(sellPrice);
-    const qtyRaw = toNum(quantity);
-    const stockRaw = toNum(stockQty);
+    const timer = window.setTimeout(() => {
+      setToastMessage("");
+    }, 3500);
 
-    if (!name.trim()) return setErrMsg(t("products.err.invalidName"));
-    if (Number.isNaN(cp) || cp < 0) return setErrMsg(lang === "ja" ? "無効な原価です。" : lang === "en" ? "Invalid cost price." : "Preço de custo inválido.");
-    if (Number.isNaN(sp) || sp <= 0) return setErrMsg(lang === "ja" ? "無効な販売価格です。" : lang === "en" ? "Invalid sale price." : "Preço de venda inválido.");
-    if (Number.isNaN(qtyRaw) || qtyRaw < 1) return setErrMsg(lang === "ja" ? "販売単位は1以上で入力してください。" : lang === "en" ? "Units per sale must be at least 1." : "As unidades por venda devem ser pelo menos 1.");
-    if (Number.isNaN(stockRaw) || stockRaw < 0) return setErrMsg(lang === "ja" ? "在庫数は0以上で入力してください。" : lang === "en" ? "Stock must be zero or greater." : "O estoque deve ser zero ou maior.");
+    return () => window.clearTimeout(timer);
+  }, [toastMessage]);
 
-    const qty = Math.floor(qtyRaw);
-    const stock = Math.floor(stockRaw);
-
-    const cat = String(category || "").trim();
-    if (!cat || cat === "__create__") return setErrMsg(t("products.categories.err.pick"));
-
-    if (!editingId && maxProducts > 0 && ownCount >= maxProducts) {
-      return setErrMsg(t("products.err.limitReached").replace("{max}", String(maxProducts)).replace("{plan}", String(plan)));
-    }
-
-    setSaving(true);
-    try {
-      const tempId = editingId || `tmp_${Date.now()}`;
-      let nextMainUrl = existingImageUrl;
-      let nextExtraUrls = [...existingExtraUrls];
-
-      if (mainFile) {
-        setUploading(true);
-        nextMainUrl = await uploadImageFile({ uid: authUser.uid, productIdLike: tempId, file: mainFile });
-      }
-
-      if (extraFiles.length > 0) {
-        setUploading(true);
-        const uploadedExtras = [];
-        for (const f of extraFiles) {
-          uploadedExtras.push(await uploadImageFile({ uid: authUser.uid, productIdLike: tempId, file: f }));
-        }
-        nextExtraUrls = Array.from(new Set([...nextExtraUrls, ...uploadedExtras]));
-      }
-
-      setUploading(false);
-      if (!nextMainUrl) return setErrMsg(t("products.select.image"));
+  const handleDeleteOwn = useCallback(
+    async (id: string) => {
+      if (!window.confirm(t("products.confirm.delete"))) return;
 
       try {
-        const categoryName = normalizeCategoryLabel(cat);
-        const categorySlug = slugify(categoryName);
-
-        await setDoc(
-          doc(
-            db,
-            "sellers",
-            sellerId,
-            "categories",
-            categorySlug
-          ),
-          {
-            ownerUid: authUser.uid,
-            name: categoryName,
-            slug: categorySlug,
-            updatedAt: serverTimestamp(),
-          },
-          { merge: true }
-        );
-      } catch (categoryError) {
-        console.warn(
-          "[ProductsCatalog] Produto será salvo, mas a categoria não pôde ser sincronizada:",
-          categoryError
-        );
+        if (!authUser || !sellerId) return;
+        await deleteDoc(doc(db, "sellers", sellerId, "products", id));
+        setSuccessMsg(t("products.msg.deleted"));
+        setErrMsg("");
+      } catch {
+        setErrMsg(t("products.err.delete"));
       }
+    },
+    [authUser, sellerId, t],
+  );
 
-      const payload = {
-        ownerUid: authUser.uid,
-        sellerId,
-        sellerEmail: authUser.email ?? null,
-        category: cat,
-        name: name.trim(),
-        costPrice: cp,
-        sellPrice: sp,
-        shadowCost: cp,
-        shadowSell: sp,
-        quantity: qty,
-        stockQty: stock,
-        status,
-        imageUrl: nextMainUrl,
-        extraImageUrls: nextExtraUrls,
-        updatedAt: serverTimestamp(),
-      };
-
-      if (editingId) {
-        await updateDoc(doc(db, "sellers", sellerId, "products", editingId), payload);
-      } else {
-        await addDoc(collection(db, "sellers", sellerId, "products"), { ...payload, createdAt: serverTimestamp() });
+  const handleToggleStatusOwn = useCallback(
+    async (id: string, next: ProductStatus) => {
+      try {
+        if (!authUser || !sellerId) return;
+        await updateDoc(doc(db, "sellers", sellerId, "products", id), {
+          status: next,
+          updatedAt: serverTimestamp(),
+        });
+        setSuccessMsg(
+          next === "active"
+            ? t("products.msg.activated")
+            : t("products.msg.deactivated"),
+        );
+        setErrMsg("");
+      } catch {
+        setErrMsg(t("products.err.status"));
       }
-
-      resetForm();
-      setSuccessMsg(t("products.msg.saved"));
-    } catch {
-      setErrMsg(t("products.err.save"));
-    } finally {
-      setUploading(false);
-      setSaving(false);
-    }
-  };
-
-  const handleEditOwn = (p: ProductDoc) => {
-    resetImages();
-    setEditingId(p.id);
-    setName(p.name);
-    setCategory(p.category || sellerCategories[0]?.name || "");
-    setStatus(p.status);
-    setCostPrice(String(p.costPrice || ""));
-    setSellPrice(String(p.sellPrice || ""));
-    setQuantity(String(p.quantity || 1));
-    setStockQty(String(p.stockQty || 0));
-    setExistingImageUrl(p.imageUrl);
-    setExistingExtraUrls(p.extraImageUrls || []);
-    formRef.current?.scrollIntoView({ behavior: "smooth" });
-  };
-
-  const handleDeleteOwn = async (id: string) => {
-    if (!confirm(t("products.confirm.delete"))) return;
-    try {
-      if (!authUser || !sellerId) return;
-      await deleteDoc(doc(db, "sellers", sellerId, "products", id));
-      setSuccessMsg(t("products.msg.deleted"));
-    } catch {
-      setErrMsg(t("products.err.delete"));
-    }
-  };
-
-  const handleToggleStatusOwn = async (id: string, next: ProductStatus) => {
-    try {
-      if (!authUser || !sellerId) return;
-      await updateDoc(doc(db, "sellers", sellerId, "products", id), { status: next, updatedAt: serverTimestamp() });
-      setSuccessMsg(next === "active" ? t("products.msg.activated") : t("products.msg.deactivated"));
-    } catch {
-      setErrMsg(t("products.err.status"));
-    }
-  };
-
-  const onPickMain = (file: File | null) => {
-    try { if (mainPreview) URL.revokeObjectURL(mainPreview); } catch {}
-    setMainFile(file);
-    setMainPreview(file ? URL.createObjectURL(file) : "");
-  };
-
-  const onPickExtras = (files: FileList | null) => {
-    try { extraPreviews.forEach(URL.revokeObjectURL); } catch {}
-    const arr = files ? Array.from(files) : [];
-    setExtraFiles(arr);
-    setExtraPreviews(arr.map((f) => URL.createObjectURL(f)));
-  };
-
-  const removeExistingExtra = (url: string) => {
-    setExistingExtraUrls((prev) => prev.filter((x) => x !== url));
-  };
-
-  const clearSelectedExtras = () => {
-    try { extraPreviews.forEach(URL.revokeObjectURL); } catch {}
-    setExtraFiles([]);
-    setExtraPreviews([]);
-  };
+    },
+    [authUser, sellerId, t],
+  );
 
   const categoriesFromCollection = useMemo(
     () =>
@@ -939,19 +649,6 @@ export default function ProductsCatalogPage() {
     syncCategoriesFromProducts,
   ]);
 
-  useEffect(() => {
-    if (category) return;
-
-    const firstCategory =
-      categoriesForSellerSelect[0];
-
-    if (firstCategory) {
-      setCategory(firstCategory);
-    }
-  }, [
-    category,
-    categoriesForSellerSelect,
-  ]);
 
   const catalogStats = useMemo(
     () => ({
@@ -1140,8 +837,23 @@ export default function ProductsCatalogPage() {
               </p>
             </div>
 
-            <div className="w-full rounded-2xl border border-neutral-200 bg-neutral-50 p-4 dark:border-neutral-700 dark:bg-neutral-950/50 sm:max-w-sm">
-              <div className="flex items-center justify-between gap-4">
+            <div className="w-full space-y-3 sm:max-w-sm">
+              <button
+                type="button"
+                onClick={openCreateProduct}
+                disabled={!canCreateProduct}
+                className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl bg-black px-5 text-sm font-black text-white shadow-lg transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40 dark:bg-white dark:text-black"
+              >
+                <Plus className="h-5 w-5" />
+                {lang === "ja"
+                  ? "商品を追加"
+                  : lang === "en"
+                    ? "Add Product"
+                    : "Adicionar Produto"}
+              </button>
+
+              <div className="rounded-2xl border border-neutral-200 bg-neutral-50 p-4 dark:border-neutral-700 dark:bg-neutral-950/50">
+                <div className="flex items-center justify-between gap-4">
                 <span className="text-xs font-black uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
                   {String(plan).toUpperCase()}
                 </span>
@@ -1170,13 +882,14 @@ export default function ProductsCatalogPage() {
                 </div>
               )}
 
-              <p className="mt-3 text-xs font-bold text-neutral-500 dark:text-neutral-400">
-                {t("products.planLimitLine")
-                  .replace("{plan}", String(plan))
-                  .replace("{max}", String(maxProducts || 0))
-                  .replace("{used}", String(ownCount))
-                  .replace("{remain}", String(remaining))}
-              </p>
+                <p className="mt-3 text-xs font-bold text-neutral-500 dark:text-neutral-400">
+                  {t("products.planLimitLine")
+                    .replace("{plan}", String(plan))
+                    .replace("{max}", String(maxProducts || 0))
+                    .replace("{used}", String(ownCount))
+                    .replace("{remain}", String(remaining))}
+                </p>
+              </div>
             </div>
           </div>
         </header>
@@ -1263,101 +976,8 @@ export default function ProductsCatalogPage() {
           </section>
         )}
 
-        <section
-          ref={formRef}
-          className="space-y-6 rounded-[2rem] border border-neutral-200 bg-white p-5 shadow-sm dark:border-neutral-800 dark:bg-neutral-900 sm:p-7"
-        >
-          <div className="flex flex-col gap-3 border-b border-neutral-200 pb-5 dark:border-neutral-800 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <h2 className="text-lg font-black">
-                {editingId
-                  ? t("products.form.editOwn")
-                  : t("products.form.newOwn")}
-              </h2>
-
-              <p className="mt-1 text-xs font-medium text-neutral-500 dark:text-neutral-400">
-                {catalogText.categoryHelp}
-              </p>
-            </div>
-
-            {editingId && (
-              <button
-                type="button"
-                onClick={resetForm}
-                className="rounded-xl border border-neutral-300 px-4 py-2 text-xs font-black text-neutral-700 transition hover:bg-neutral-100 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
-              >
-                {t("products.form.cancelEdit")}
-              </button>
-            )}
-          </div>
-
-          <FormFields
-            t={t}
-            lang={lang}
-            currency={currency}
-            categories={categoriesForSellerSelect}
-            category={category}
-            setCategory={setCategory}
-            creatingCategory={
-              creatingCategory ||
-              categoriesForSellerSelect.length === 0
-            }
-            setCreatingCategory={setCreatingCategory}
-            newCategoryName={newCategoryName}
-            setNewCategoryName={setNewCategoryName}
-            onCreateCategory={() =>
-              createSellerCategory(newCategoryName)
-            }
-            sellerHasAnyCategory={
-              categoriesForSellerSelect.length > 0
-            }
-            name={name}
-            setName={setName}
-            costPrice={costPrice}
-            setCostPrice={setCostPrice}
-            sellPrice={sellPrice}
-            setSellPrice={setSellPrice}
-            quantity={quantity}
-            setQuantity={setQuantity}
-            stockQty={stockQty}
-            setStockQty={setStockQty}
-            status={status}
-            setStatus={setStatus}
-            existingImageUrl={existingImageUrl}
-            existingExtraUrls={existingExtraUrls}
-            mainPreview={mainPreview}
-            extraPreviews={extraPreviews}
-            onPickMain={onPickMain}
-            onPickExtras={onPickExtras}
-            removeExistingExtra={removeExistingExtra}
-            clearSelectedExtras={clearSelectedExtras}
-          />
-
-          <div className="flex flex-col gap-4 border-t border-neutral-200 pt-5 dark:border-neutral-800 sm:flex-row sm:items-center sm:justify-between">
-            <span className="text-xs font-bold text-neutral-400">
-              {t("products.limitLine")
-                .replace("{used}", String(ownCount))
-                .replace("{max}", String(maxProducts || 0))
-                .replace("{remain}", String(remaining))}
-            </span>
-
-            <button
-              type="button"
-              onClick={handleSave}
-              disabled={saving || uploading}
-              className="inline-flex min-h-12 items-center justify-center rounded-xl bg-black px-7 py-3 text-sm font-black text-white shadow-md transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40 dark:bg-white dark:text-black"
-            >
-              {saving || uploading
-                ? t("common.saving")
-                : editingId
-                  ? t("products.form.update")
-                  : t("products.form.add")}
-            </button>
-          </div>
-        </section>
-
         <section className="space-y-5">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
             <div>
               <h2 className="text-2xl font-black">
                 {catalogText.catalogTitle}
@@ -1369,6 +989,20 @@ export default function ProductsCatalogPage() {
                   : `${catalogText.visibleProducts}: ${filteredProducts.length}/${ownProducts.length}`}
               </p>
             </div>
+
+            <button
+              type="button"
+              onClick={openCreateProduct}
+              disabled={!canCreateProduct}
+              className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-black px-5 text-sm font-black text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40 dark:bg-white dark:text-black"
+            >
+              <Plus className="h-4 w-4" />
+              {lang === "ja"
+                ? "商品を追加"
+                : lang === "en"
+                  ? "Add Product"
+                  : "Adicionar Produto"}
+            </button>
           </div>
 
           <div className="grid gap-3 rounded-3xl border border-neutral-200 bg-white p-4 shadow-sm dark:border-neutral-800 dark:bg-neutral-900 md:grid-cols-2 xl:grid-cols-[minmax(240px,1fr)_220px_180px_180px_auto]">
@@ -1466,6 +1100,20 @@ export default function ProductsCatalogPage() {
               <p className="mt-1 text-xs text-neutral-400">
                 {t("products.empty.own")}
               </p>
+
+              <button
+                type="button"
+                onClick={openCreateProduct}
+                disabled={!canCreateProduct}
+                className="mt-5 inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-black px-5 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-40 dark:bg-white dark:text-black"
+              >
+                <Plus className="h-4 w-4" />
+                {lang === "ja"
+                  ? "最初の商品を追加"
+                  : lang === "en"
+                    ? "Add first product"
+                    : "Adicionar primeiro produto"}
+              </button>
             </div>
           ) : filteredProducts.length === 0 ? (
             <div className="rounded-[2rem] border border-dashed border-neutral-300 bg-white p-10 text-center dark:border-neutral-700 dark:bg-neutral-900">
@@ -1508,7 +1156,7 @@ export default function ProductsCatalogPage() {
                       key={product.id}
                       product={product}
                       canManage
-                      onEdit={handleEditOwn}
+                      onEdit={openEditProduct}
                       onDelete={handleDeleteOwn}
                       onToggleStatus={handleToggleStatusOwn}
                       badgeLabelActive={t("products.badge.active")}
@@ -1530,6 +1178,34 @@ export default function ProductsCatalogPage() {
           )}
         </section>
       </div>
+
+      {authUser && sellerId && (
+        <ProductModal
+          open={productModalOpen}
+          product={selectedProduct}
+          authUser={authUser}
+          sellerId={sellerId}
+          categories={categoriesForSellerSelect}
+          ownCount={ownCount}
+          maxProducts={maxProducts}
+          plan={plan}
+          currency={currency}
+          lang={lang}
+          t={t}
+          onClose={closeProductModal}
+          onSaved={handleProductSaved}
+        />
+      )}
+
+      {toastMessage && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="fixed bottom-[calc(1rem+env(safe-area-inset-bottom))] left-4 right-4 z-[90] mx-auto max-w-sm rounded-2xl border border-emerald-200 bg-white px-4 py-3 text-sm font-black text-emerald-700 shadow-2xl dark:border-emerald-900/60 dark:bg-neutral-900 dark:text-emerald-300 sm:left-auto sm:right-6"
+        >
+          {toastMessage}
+        </div>
+      )}
     </main>
   );
 }
@@ -1775,170 +1451,5 @@ function ProductCard({
         )}
       </div>
     </article>
-  );
-}
-
-function FormFields({
-  t,
-  lang,
-  currency,
-  categories,
-  category,
-  setCategory,
-  creatingCategory,
-  setCreatingCategory,
-  newCategoryName,
-  setNewCategoryName,
-  onCreateCategory,
-  sellerHasAnyCategory,
-  name,
-  setName,
-  costPrice,
-  setCostPrice,
-  sellPrice,
-  setSellPrice,
-  quantity,
-  setQuantity,
-  stockQty,
-  setStockQty,
-  status,
-  setStatus,
-  existingImageUrl,
-  existingExtraUrls,
-  mainPreview,
-  extraPreviews,
-  onPickMain,
-  onPickExtras,
-  removeExistingExtra,
-  clearSelectedExtras,
-}: FormFieldsProps) {
-  return (
-    <div className="grid gap-4 sm:grid-cols-2">
-      <div className="space-y-1">
-        <label className="text-xs font-black text-neutral-700 dark:text-neutral-300 uppercase tracking-wider">{t("products.form.name")}</label>
-        <input value={name} onChange={(e) => setName(e.target.value)} className="w-full border border-neutral-200 dark:border-neutral-800 rounded-xl px-3 py-2.5 text-sm bg-white dark:bg-neutral-900 text-neutral-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white" />
-      </div>
-
-      <div className="space-y-1">
-        <label className="text-xs font-black text-neutral-700 dark:text-neutral-300 uppercase tracking-wider">{t("products.form.category")}</label>
-        <select value={creatingCategory ? "__create__" : category} onChange={(e) => e.target.value === "__create__" ? setCreatingCategory(true) : (setCreatingCategory(false), setCategory(e.target.value))} className="w-full border border-neutral-200 dark:border-neutral-800 rounded-xl px-3 py-2.5 text-sm bg-white dark:bg-neutral-900 text-neutral-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white h-[46px]">
-          {!sellerHasAnyCategory && <option value="__create__">{t("products.categories.createFirst")}</option>}
-          {categories.map((c: string) => <option key={c} value={c}>{c}</option>)}
-          <option value="__create__">{t("products.categories.createNew")}</option>
-        </select>
-
-        {creatingCategory && (
-          <div className="mt-2 flex gap-2 animate-fade-in">
-            <input value={newCategoryName} onChange={(e) => setNewCategoryName(e.target.value)} placeholder={t("products.categories.placeholder")} className="flex-1 border border-neutral-200 dark:border-neutral-800 rounded-xl px-3 py-2 text-sm bg-white dark:bg-neutral-900 text-neutral-900 dark:text-white focus:outline-none" />
-            <button type="button" onClick={onCreateCategory} className="rounded-xl bg-black dark:bg-white text-white dark:text-black text-xs font-black px-4 py-2">{t("products.categories.btnCreate")}</button>
-          </div>
-        )}
-      </div>
-
-      <div className="space-y-1">
-        <label className="text-xs font-black text-neutral-700 dark:text-neutral-300 uppercase tracking-wider">
-          {lang === "ja"
-            ? `原価 (${currency})`
-            : lang === "en"
-              ? `Cost price (${currency})`
-              : `Preço de custo (${currency})`}
-        </label>
-        <input value={costPrice} onChange={(e) => setCostPrice(e.target.value)} inputMode="decimal" className="w-full border border-neutral-200 dark:border-neutral-800 rounded-xl px-3 py-2.5 text-sm bg-white dark:bg-neutral-900 text-neutral-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white" />
-      </div>
-
-      <div className="space-y-1">
-        <label className="text-xs font-black text-neutral-700 dark:text-neutral-300 uppercase tracking-wider">
-          {lang === "ja"
-            ? `販売価格 (${currency})`
-            : lang === "en"
-              ? `Sale price (${currency})`
-              : `Preço de venda (${currency})`}
-        </label>
-        <input value={sellPrice} onChange={(e) => setSellPrice(e.target.value)} inputMode="decimal" className="w-full border border-neutral-200 dark:border-neutral-800 rounded-xl px-3 py-2.5 text-sm bg-white dark:bg-neutral-900 text-neutral-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white" />
-      </div>
-
-      <div className="space-y-1">
-        <label className="text-xs font-black text-neutral-700 dark:text-neutral-300 uppercase tracking-wider">
-          {lang === "ja" ? "販売単位" : lang === "en" ? "Units per sale" : "Unidades por venda"}
-        </label>
-        <input value={quantity} onChange={(e) => setQuantity(e.target.value)} inputMode="numeric" className="w-full border border-neutral-200 dark:border-neutral-800 rounded-xl px-3 py-2.5 text-sm bg-white dark:bg-neutral-900 text-neutral-900 dark:text-white focus:outline-none" />
-      </div>
-
-      <div className="space-y-1">
-        <label className="text-xs font-black text-neutral-700 dark:text-neutral-300 uppercase tracking-wider">
-          {lang === "ja" ? "利用可能な総在庫" : lang === "en" ? "Total available stock" : "Estoque total disponível"}
-        </label>
-        <input value={stockQty} onChange={(e) => setStockQty(e.target.value)} inputMode="numeric" className="w-full border border-neutral-200 dark:border-neutral-800 rounded-xl px-3 py-2.5 text-sm bg-white dark:bg-neutral-900 text-neutral-900 dark:text-white focus:outline-none" />
-      </div>
-
-      <div className="space-y-1 sm:col-span-2">
-        <label className="text-xs font-black text-neutral-700 dark:text-neutral-300 uppercase tracking-wider">{t("products.form.status")}</label>
-        <select value={status} onChange={(e) => setStatus(e.target.value as ProductStatus)} className="w-full border border-neutral-200 dark:border-neutral-800 rounded-xl px-3 py-2.5 text-sm bg-white dark:bg-neutral-900 text-neutral-900 dark:text-white focus:outline-none h-[46px]">
-          <option value="active">{t("products.badge.active")}</option>
-          <option value="inactive">{t("products.badge.inactive")}</option>
-        </select>
-      </div>
-
-      <div className="sm:col-span-2 space-y-3">
-        <label className="text-xs font-black text-neutral-700 dark:text-neutral-300 uppercase tracking-wider">
-          {lang === "ja" ? "商品のメインメディア" : lang === "en" ? "Main Product Media" : "Mídia Principal do Produto"}
-        </label>
-        <div className="flex flex-col sm:flex-row items-center gap-4 bg-white dark:bg-neutral-900 p-4 border border-neutral-200 dark:border-neutral-800 rounded-2xl">
-          <div className="h-24 w-32 rounded-xl bg-neutral-100 dark:bg-neutral-800 overflow-hidden border border-neutral-200 dark:border-neutral-700 flex items-center justify-center flex-shrink-0">
-            {mainPreview || existingImageUrl ? (
-              <img src={mainPreview || existingImageUrl} alt="preview" className="h-full w-full object-cover" />
-            ) : (
-              <span className="text-[10px] font-bold text-neutral-400 uppercase tracking-tight">{t("products.select.image")}</span>
-            )}
-          </div>
-          <div className="space-y-1 w-full">
-            <input type="file" accept="image/*" onChange={(e) => onPickMain(e.target.files?.[0] || null)} className="text-xs" />
-            <p className="text-[10px] font-medium text-neutral-400 leading-tight">{t("products.form.imageHint")}</p>
-          </div>
-        </div>
-      </div>
-
-      <div className="sm:col-span-2 space-y-3">
-        <label className="text-xs font-black text-neutral-700 dark:text-neutral-300 uppercase tracking-wider">
-          {lang === "ja" ? "追加画像のギャラリー" : lang === "en" ? "Extra Images Gallery" : "Galeria de Imagens Extras"}
-        </label>
-        <div className="bg-white dark:bg-neutral-900 p-4 border border-neutral-200 dark:border-neutral-800 rounded-2xl space-y-4">
-          <input type="file" accept="image/*" multiple onChange={(e) => onPickExtras(e.target.files)} className="text-xs" />
-          
-          {existingExtraUrls.length > 0 && (
-            <div className="space-y-1.5">
-              <p className="text-[10px] font-black uppercase text-neutral-400 tracking-wider">
-                {lang === "ja" ? "現在のメディア (クリックして削除):" : lang === "en" ? "Current Media (Click to remove):" : "Mídias Atuais (Clique para remover):"}
-              </p>
-              <div className="flex gap-2 flex-wrap">
-                {existingExtraUrls.map((u: string) => (
-                  <button key={u} type="button" onClick={() => removeExistingExtra(u)} className="h-12 w-12 rounded-xl border border-neutral-200 dark:border-neutral-700 overflow-hidden hover:opacity-50 transition">
-                    <img src={u} alt="extra" className="h-full w-full object-cover" />
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {extraPreviews.length > 0 && (
-            <div className="space-y-1.5 border-t border-neutral-100 dark:border-neutral-800 pt-3">
-              <div className="flex items-center justify-between">
-                <p className="text-[10px] font-black uppercase text-neutral-400 tracking-wider">
-                  {lang === "ja" ? "アップロードキュー" : lang === "en" ? "Upload Queue" : "Fila de Upload"} ({extraPreviews.length}):
-                </p>
-                <button type="button" onClick={clearSelectedExtras} className="text-[10px] font-black uppercase text-red-500 underline">{t("common.clear")}</button>
-              </div>
-              <div className="flex gap-2 flex-wrap">
-                {extraPreviews.map((p: string) => (
-                  <div key={p} className="h-12 w-12 rounded-xl border border-neutral-200 dark:border-neutral-700 overflow-hidden">
-                    <img src={p} alt="selected" className="h-full w-full object-cover" />
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
   );
 }
