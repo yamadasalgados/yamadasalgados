@@ -81,6 +81,10 @@ type Language =
   | "en"
   | "ja";
 
+type ProductAvailabilityStatus =
+  | "active"
+  | "made_to_order";
+
 type CheckoutStep =
   | "products"
   | "customer"
@@ -112,6 +116,7 @@ type Product = {
   extraImageUrls: string[];
   price: number;
   priceMinor: number;
+  availabilityStatus: ProductAvailabilityStatus;
   stock?: number;
   stockField?:
     | "stockQty"
@@ -245,6 +250,12 @@ const TEXT = {
       "A oferta selecionada não está mais disponível.",
     subtotal: "Subtotal",
     discount: "Desconto",
+    availableProductsTitle: "Produtos disponíveis",
+    availableProductsHelp: "Itens para compra normal conforme o estoque atual.",
+    madeToOrderTitle: "Itens sob encomenda",
+    madeToOrderHelp: "Reserve com antecedência para garantir a produção e a entrega.",
+    madeToOrderBadge: "Sob encomenda",
+    madeToOrderNotice: "Produzido mediante reserva antecipada",
   },
 
   en: {
@@ -346,6 +357,12 @@ const TEXT = {
       "The selected offer is no longer available.",
     subtotal: "Subtotal",
     discount: "Discount",
+    availableProductsTitle: "Available products",
+    availableProductsHelp: "Items available for normal purchase based on current stock.",
+    madeToOrderTitle: "Made-to-order items",
+    madeToOrderHelp: "Order in advance to secure production and delivery.",
+    madeToOrderBadge: "Made to order",
+    madeToOrderNotice: "Prepared by advance reservation",
   },
 
   ja: {
@@ -450,6 +467,12 @@ const TEXT = {
       "選択したオファーは利用できません。",
     subtotal: "小計",
     discount: "割引",
+    availableProductsTitle: "通常商品",
+    availableProductsHelp: "現在の在庫から通常購入できる商品です。",
+    madeToOrderTitle: "受注生産の商品",
+    madeToOrderHelp: "製造と受け取りを確実にするため、事前にご予約ください。",
+    madeToOrderBadge: "受注生産",
+    madeToOrderNotice: "事前予約後に製造します",
   },
 } as const;
 
@@ -549,6 +572,11 @@ function normalizeProduct(
     asString(raw.status)
       .toLowerCase();
 
+  const availabilityStatus: ProductAvailabilityStatus =
+    status === "made_to_order" || status === "preorder"
+      ? "made_to_order"
+      : "active";
+
   if (
     status === "inactive" ||
     status === "archived" ||
@@ -644,6 +672,11 @@ function normalizeProduct(
     }
   }
 
+  if (availabilityStatus === "made_to_order") {
+    stock = undefined;
+    stockField = undefined;
+  }
+
   const imageUrl =
     asString(raw.imageUrl) ||
     asString(raw.image) ||
@@ -676,6 +709,7 @@ function normalizeProduct(
     extraImageUrls,
     price,
     priceMinor,
+    availabilityStatus,
     stock,
     stockField,
   };
@@ -783,6 +817,12 @@ function cleanOrderItem(
     subtotal:
       item.qty *
       currentProduct.price,
+    availabilityStatus:
+      currentProduct.availabilityStatus,
+    productionMode:
+      currentProduct.availabilityStatus === "made_to_order"
+        ? "made_to_order"
+        : "stock",
   };
 
   if (
@@ -1306,8 +1346,8 @@ const categorySummaries =
         );
 
       const available =
-        typeof product.stock !==
-          "number" ||
+        product.availabilityStatus === "made_to_order" ||
+        typeof product.stock !== "number" ||
         product.stock > 0;
 
       if (current) {
@@ -1368,15 +1408,6 @@ const visibleProducts =
     return products.filter(
       (product) => {
         if (
-          selectedOffer &&
-          !selectedOffer.eligibleProductIds.includes(
-            product.id,
-          )
-        ) {
-          return false;
-        }
-
-        if (
           selectedCategory &&
           product.category !==
             selectedCategory
@@ -1407,13 +1438,31 @@ const visibleProducts =
     products,
     search,
     selectedCategory,
-    selectedOffer,
   ]);
 
 const showingProducts =
   selectedCategory !== null ||
-  search.trim().length > 0 ||
-  selectedOffer !== null;
+  search.trim().length > 0;
+
+  const normalProducts = useMemo(
+    () => products.filter((product) => product.availabilityStatus === "active"),
+    [products],
+  );
+
+  const madeToOrderProducts = useMemo(
+    () => products.filter((product) => product.availabilityStatus === "made_to_order"),
+    [products],
+  );
+
+  const visibleNormalProducts = useMemo(
+    () => visibleProducts.filter((product) => product.availabilityStatus === "active"),
+    [visibleProducts],
+  );
+
+  const visibleMadeToOrderProducts = useMemo(
+    () => visibleProducts.filter((product) => product.availabilityStatus === "made_to_order"),
+    [visibleProducts],
+  );
 
   const cartItems =
     useMemo<CartItem[]>(() => {
@@ -1510,14 +1559,11 @@ const showingProducts =
         const safeQty =
           Math.max(
             0,
-            typeof product.stock ===
-              "number"
+            product.availabilityStatus !== "made_to_order" &&
+            typeof product.stock === "number"
               ? Math.min(
                   requestedQty,
-                  Math.max(
-                    0,
-                    product.stock,
-                  ),
+                  Math.max(0, product.stock),
                 )
               : requestedQty,
           );
@@ -1713,10 +1759,9 @@ const showingProducts =
             }
 
             if (
-              typeof currentProduct.stock ===
-                "number" &&
-              currentProduct.stock <
-                productRead.item.qty
+              currentProduct.availabilityStatus !== "made_to_order" &&
+              typeof currentProduct.stock === "number" &&
+              currentProduct.stock < productRead.item.qty
             ) {
               throw new Error(
                 "PRODUCT_UNAVAILABLE",
@@ -2122,8 +2167,6 @@ const showingProducts =
       text={text}
       onSelect={(offerId) => {
         setSelectedOfferId(offerId);
-        setSelectedCategory(null);
-        setSearch("");
       }}
     />
 
@@ -2262,6 +2305,37 @@ const showingProducts =
             )}
           </section>
         )}
+
+        <StoreProductGrid
+          title={text.availableProductsTitle}
+          help={text.availableProductsHelp}
+          products={normalProducts}
+          cart={cart}
+          text={text}
+          locale={storeProfile.regionalLocale}
+          currency={storeProfile.currency}
+          onOpen={(product) => {
+            setSelectedProduct(product);
+            setSelectedImageIndex(0);
+          }}
+          onSetQuantity={setQuantity}
+        />
+
+        <StoreProductGrid
+          title={text.madeToOrderTitle}
+          help={text.madeToOrderHelp}
+          products={madeToOrderProducts}
+          cart={cart}
+          text={text}
+          locale={storeProfile.regionalLocale}
+          currency={storeProfile.currency}
+          madeToOrder
+          onOpen={(product) => {
+            setSelectedProduct(product);
+            setSelectedImageIndex(0);
+          }}
+          onSetQuantity={setQuantity}
+        />
       </>
     ) : (
       <>
@@ -2291,7 +2365,6 @@ const showingProducts =
               setSelectedCategory(
                 null,
               );
-              setSelectedOfferId("");
               setSearch("");
               window.scrollTo({
                 top: 0,
@@ -2310,172 +2383,43 @@ const showingProducts =
           </button>
         </section>
 
-        {visibleProducts.length ===
-        0 ? (
+        {visibleProducts.length === 0 ? (
           <EmptyState
-            icon={
-              <Search
-                size={40}
-              />
-            }
-            message={
-              text.emptySearch
-            }
+            icon={<Search size={40} />}
+            message={text.emptySearch}
           />
         ) : (
-          <section className="mt-6 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-            {visibleProducts.map(
-              (product) => {
-                const qty =
-                  cart[
-                    product.id
-                  ] ?? 0;
-
-                const soldOut =
-                  typeof product.stock ===
-                    "number" &&
-                  product.stock <= 0;
-
-                return (
-                  <article
-                    key={
-                      product.id
-                    }
-                    className="overflow-hidden rounded-3xl border border-neutral-200 bg-white shadow-sm dark:border-neutral-800 dark:bg-neutral-900"
-                  >
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSelectedProduct(
-                          product,
-                        );
-                        setSelectedImageIndex(
-                          0,
-                        );
-                      }}
-                      className="relative block aspect-[4/3] w-full bg-neutral-100 text-left dark:bg-neutral-800"
-                    >
-                      {product.imageUrl ? (
-                        <img
-                          src={
-                            product.imageUrl
-                          }
-                          alt={
-                            product.name
-                          }
-                          loading="lazy"
-                          className="h-full w-full object-cover"
-                        />
-                      ) : (
-                        <div className="flex h-full items-center justify-center">
-                          <ImageIcon
-                            className="text-neutral-400"
-                            size={44}
-                          />
-                        </div>
-                      )}
-
-                      {product.extraImageUrls
-                        .length >
-                        0 && (
-                        <span className="absolute bottom-3 right-3 rounded-full bg-black/70 px-3 py-1 text-xs font-bold text-white">
-                          +
-                          {
-                            product.extraImageUrls
-                              .length
-                          }
-                        </span>
-                      )}
-                    </button>
-
-                    <div className="p-5">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <p className="text-xs font-bold uppercase text-orange-700 dark:text-orange-300">
-                            {
-                              product.category
-                            }
-                          </p>
-
-                          <h2 className="mt-1 break-words text-lg font-black">
-                            {
-                              product.name
-                            }
-                          </h2>
-                        </div>
-
-                        <p className="shrink-0 text-lg font-black">
-                          {formatCurrency(
-                            product.price,
-                            storeProfile.regionalLocale,
-                            storeProfile.currency,
-                          )}
-                        </p>
-                      </div>
-
-                      {product.description && (
-                        <p className="mt-3 line-clamp-3 text-sm text-neutral-600 dark:text-neutral-300">
-                          {
-                            product.description
-                          }
-                        </p>
-                      )}
-
-                      {typeof product.stock ===
-                        "number" && (
-                        <p className="mt-3 text-xs font-semibold text-neutral-500 dark:text-neutral-400">
-                          {text.stock}:{" "}
-                          {
-                            product.stock
-                          }
-                        </p>
-                      )}
-
-                      {soldOut ? (
-                        <div className="mt-5 rounded-xl bg-neutral-100 px-4 py-3 text-center font-bold text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">
-                          {
-                            text.outOfStock
-                          }
-                        </div>
-                      ) : qty > 0 ? (
-                        <QuantitySelector
-                          qty={qty}
-                          onDecrease={() =>
-                            setQuantity(
-                              product,
-                              qty - 1,
-                            )
-                          }
-                          onIncrease={() =>
-                            setQuantity(
-                              product,
-                              qty + 1,
-                            )
-                          }
-                        />
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setQuantity(
-                              product,
-                              1,
-                            )
-                          }
-                          className="mt-5 inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-neutral-950 px-4 py-3 font-bold text-white transition hover:bg-neutral-800 dark:bg-white dark:text-neutral-950 dark:hover:bg-neutral-200"
-                        >
-                          <Plus
-                            size={18}
-                          />
-                          {text.add}
-                        </button>
-                      )}
-                    </div>
-                  </article>
-                );
-              },
-            )}
-          </section>
+          <>
+            <StoreProductGrid
+              title={text.availableProductsTitle}
+              help={text.availableProductsHelp}
+              products={visibleNormalProducts}
+              cart={cart}
+              text={text}
+              locale={storeProfile.regionalLocale}
+              currency={storeProfile.currency}
+              onOpen={(product) => {
+                setSelectedProduct(product);
+                setSelectedImageIndex(0);
+              }}
+              onSetQuantity={setQuantity}
+            />
+            <StoreProductGrid
+              title={text.madeToOrderTitle}
+              help={text.madeToOrderHelp}
+              products={visibleMadeToOrderProducts}
+              cart={cart}
+              text={text}
+              locale={storeProfile.regionalLocale}
+              currency={storeProfile.currency}
+              madeToOrder
+              onOpen={(product) => {
+                setSelectedProduct(product);
+                setSelectedImageIndex(0);
+              }}
+              onSetQuantity={setQuantity}
+            />
+          </>
         )}
       </>
     )}
@@ -3085,6 +3029,153 @@ function Field({
   );
 }
 
+function StoreProductGrid({
+  title,
+  help,
+  products,
+  cart,
+  text,
+  locale,
+  currency,
+  madeToOrder = false,
+  onOpen,
+  onSetQuantity,
+}: {
+  title: string;
+  help: string;
+  products: Product[];
+  cart: Record<string, number>;
+  text: (typeof TEXT)[Language];
+  locale: RegionalLocale;
+  currency: SupportedCurrency;
+  madeToOrder?: boolean;
+  onOpen: (product: Product) => void;
+  onSetQuantity: (product: Product, quantity: number) => void;
+}) {
+  if (products.length === 0) return null;
+
+  return (
+    <section className="mt-8">
+      <div className="mb-4">
+        <h2 className="text-2xl font-black sm:text-3xl">{title}</h2>
+        <p className="mt-2 text-sm text-neutral-600 dark:text-neutral-300">{help}</p>
+      </div>
+
+      <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+        {products.map((product) => {
+          const qty = cart[product.id] ?? 0;
+          const soldOut =
+            !madeToOrder &&
+            typeof product.stock === "number" &&
+            product.stock <= 0;
+
+          return (
+            <article
+              key={product.id}
+              className={[
+                "overflow-hidden rounded-3xl border bg-white shadow-sm dark:bg-neutral-900",
+                madeToOrder
+                  ? "border-violet-200 dark:border-violet-900/60"
+                  : "border-neutral-200 dark:border-neutral-800",
+              ].join(" ")}
+            >
+              <button
+                type="button"
+                onClick={() => onOpen(product)}
+                className="relative block aspect-[4/3] w-full bg-neutral-100 text-left dark:bg-neutral-800"
+              >
+                {product.imageUrl ? (
+                  <img
+                    src={product.imageUrl}
+                    alt={product.name}
+                    loading="lazy"
+                    className="h-full w-full object-cover"
+                  />
+                ) : (
+                  <div className="flex h-full items-center justify-center">
+                    <ImageIcon className="text-neutral-400" size={44} />
+                  </div>
+                )}
+
+                {madeToOrder && (
+                  <span className="absolute left-3 top-3 rounded-full bg-violet-600 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-white shadow-lg">
+                    {text.madeToOrderBadge}
+                  </span>
+                )}
+
+                {product.extraImageUrls.length > 0 && (
+                  <span className="absolute bottom-3 right-3 rounded-full bg-black/70 px-3 py-1 text-xs font-bold text-white">
+                    +{product.extraImageUrls.length}
+                  </span>
+                )}
+              </button>
+
+              <div className="p-5">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className={[
+                      "text-xs font-bold uppercase",
+                      madeToOrder
+                        ? "text-violet-700 dark:text-violet-300"
+                        : "text-orange-700 dark:text-orange-300",
+                    ].join(" ")}>{product.category}</p>
+                    <h3 className="mt-1 break-words text-lg font-black">{product.name}</h3>
+                  </div>
+                  <p className="shrink-0 text-lg font-black">
+                    {formatMoneyMajor(product.price, currency, locale)}
+                  </p>
+                </div>
+
+                {product.description && (
+                  <p className="mt-3 line-clamp-3 text-sm text-neutral-600 dark:text-neutral-300">
+                    {product.description}
+                  </p>
+                )}
+
+                {madeToOrder ? (
+                  <p className="mt-3 rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-xs font-bold text-violet-700 dark:border-violet-900/50 dark:bg-violet-950/20 dark:text-violet-300">
+                    {text.madeToOrderNotice}
+                  </p>
+                ) : typeof product.stock === "number" ? (
+                  <p className="mt-3 text-xs font-semibold text-neutral-500 dark:text-neutral-400">
+                    {text.stock}: {product.stock}
+                  </p>
+                ) : null}
+
+                {soldOut ? (
+                  <div className="mt-5 rounded-xl bg-neutral-100 px-4 py-3 text-center font-bold text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">
+                    {text.outOfStock}
+                  </div>
+                ) : qty > 0 ? (
+                  <QuantitySelector
+                    qty={qty}
+                    onDecrease={() => onSetQuantity(product, qty - 1)}
+                    onIncrease={() => onSetQuantity(product, qty + 1)}
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => onSetQuantity(product, 1)}
+                    className={[
+                      "mt-5 inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl px-4 py-3 font-bold text-white transition",
+                      madeToOrder
+                        ? "bg-violet-600 hover:bg-violet-700"
+                        : "bg-neutral-950 hover:bg-neutral-800 dark:bg-white dark:text-neutral-950 dark:hover:bg-neutral-200",
+                    ].join(" ")}
+                  >
+                    <Plus size={18} />
+                    {text.add}
+                  </button>
+                )}
+              </div>
+            </article>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 function StoreOffersSection({
   offers,
   selectedOfferId,
@@ -3128,7 +3219,7 @@ function StoreOffersSection({
         </p>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="flex snap-x snap-mandatory gap-4 overflow-x-auto pb-2 scrollbar-none">
         {offers.map((offer) => {
           const localized =
             resolveLocalizedOfferText(
@@ -3197,7 +3288,7 @@ function StoreOffersSection({
             <article
               key={offer.id}
               className={[
-                "overflow-hidden rounded-3xl border bg-white shadow-sm transition dark:bg-neutral-900",
+                "min-w-[min(88vw,420px)] snap-start overflow-hidden rounded-3xl border bg-white shadow-sm transition dark:bg-neutral-900",
                 selected
                   ? "border-orange-500 ring-2 ring-orange-500/20"
                   : "border-neutral-200 dark:border-neutral-800",

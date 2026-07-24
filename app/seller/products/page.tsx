@@ -80,6 +80,7 @@ interface ProductCardProps {
   onToggleStatus: (id: string, next: ProductStatus) => void;
   badgeLabelActive: string;
   badgeLabelInactive: string;
+  badgeLabelMadeToOrder: string;
   btnEdit: string;
   btnDelete: string;
   btnActivate: string;
@@ -117,6 +118,7 @@ export default function ProductsCatalogPage() {
             allCategories: "すべてのカテゴリー",
             allStatuses: "すべての状態",
             active: "販売中",
+            madeToOrder: "受注生産",
             inactive: "停止中",
             allStock: "すべての在庫",
             inStock: "在庫あり",
@@ -147,6 +149,7 @@ export default function ProductsCatalogPage() {
               allCategories: "All categories",
               allStatuses: "All statuses",
               active: "Active",
+              madeToOrder: "Made to order",
               inactive: "Inactive",
               allStock: "All stock",
               inStock: "In stock",
@@ -176,6 +179,7 @@ export default function ProductsCatalogPage() {
               allCategories: "Todas as categorias",
               allStatuses: "Todos os status",
               active: "Ativos",
+              madeToOrder: "Sob encomenda",
               inactive: "Inativos",
               allStock: "Todos os estoques",
               inStock: "Com estoque",
@@ -413,7 +417,13 @@ export default function ProductsCatalogPage() {
             inventory: normalizeInventory(data.inventory, data.stockQty ?? data.stock, data.lowStockThreshold),
             stockQty: normalizeInventory(data.inventory, data.stockQty ?? data.stock, data.lowStockThreshold).quantity,
             lowStockThreshold: normalizeInventory(data.inventory, data.stockQty ?? data.stock, data.lowStockThreshold).lowStockThreshold,
-            status: (data.status === "inactive" ? "inactive" : "active") as ProductStatus,
+            status: (
+              data.status === "inactive"
+                ? "inactive"
+                : data.status === "made_to_order" || data.status === "preorder"
+                  ? "made_to_order"
+                  : "active"
+            ) as ProductStatus,
             imageUrl: String(data.imageUrl || data.image || ""),
             extraImageUrls: Array.isArray(data.extraImageUrls) ? data.extraImageUrls.filter(Boolean) : [],
           };
@@ -667,10 +677,11 @@ export default function ProductsCatalogPage() {
       total: ownProducts.length,
       active: ownProducts.filter(
         (product) =>
-          product.status === "active"
+          product.status !== "inactive"
       ).length,
       outOfStock: ownProducts.filter(
         (product) =>
+          product.status !== "made_to_order" &&
           product.stockQty <= 0
       ).length,
       categories:
@@ -720,6 +731,7 @@ export default function ProductsCatalogPage() {
 
         if (
           stockFilter === "available" &&
+          product.status !== "made_to_order" &&
           product.stockQty <= 0
         ) {
           return false;
@@ -728,6 +740,7 @@ export default function ProductsCatalogPage() {
         if (
           stockFilter === "low" &&
           !(
+            product.status !== "made_to_order" &&
             product.stockQty > 0 &&
             product.stockQty <=
               product.lowStockThreshold
@@ -738,7 +751,7 @@ export default function ProductsCatalogPage() {
 
         if (
           stockFilter === "out" &&
-          product.stockQty > 0
+          (product.status === "made_to_order" || product.stockQty > 0)
         ) {
           return false;
         }
@@ -1056,6 +1069,9 @@ export default function ProductsCatalogPage() {
               <option value="active">
                 {catalogText.active}
               </option>
+              <option value="made_to_order">
+                {catalogText.madeToOrder}
+              </option>
               <option value="inactive">
                 {catalogText.inactive}
               </option>
@@ -1173,6 +1189,7 @@ export default function ProductsCatalogPage() {
                       onToggleStatus={handleToggleStatusOwn}
                       badgeLabelActive={t("products.badge.active")}
                       badgeLabelInactive={t("products.badge.inactive")}
+                      badgeLabelMadeToOrder={catalogText.madeToOrder}
                       btnEdit={t("products.btn.edit")}
                       btnDelete={t("products.btn.delete")}
                       btnActivate={
@@ -1270,6 +1287,7 @@ function ProductCard({
   onToggleStatus,
   badgeLabelActive,
   badgeLabelInactive,
+  badgeLabelMadeToOrder,
   btnEdit,
   btnDelete,
   btnActivate,
@@ -1294,14 +1312,19 @@ function ProductCard({
   const mainImage =
     allImages[currentIndex] || "";
 
+  const madeToOrder = product.status === "made_to_order";
+
   const lowStock =
+    !madeToOrder &&
     product.stockQty > 0 &&
     product.stockQty <=
       product.lowStockThreshold;
 
   const stockClass =
-    product.stockQty <= 0
-      ? "border-red-200 bg-red-50 text-red-700 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-300"
+    madeToOrder
+      ? "border-violet-200 bg-violet-50 text-violet-700 dark:border-violet-900/50 dark:bg-violet-950/30 dark:text-violet-300"
+      : product.stockQty <= 0
+        ? "border-red-200 bg-red-50 text-red-700 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-300"
       : lowStock
         ? "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-300"
         : "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/50 dark:bg-emerald-950/30 dark:text-emerald-300";
@@ -1331,12 +1354,16 @@ function ProductCard({
               className={`rounded-full border border-white/20 px-2.5 py-1 text-[10px] font-black uppercase tracking-wider text-white backdrop-blur-md ${
                 product.status === "active"
                   ? "bg-emerald-600/90"
-                  : "bg-neutral-700/90"
+                  : product.status === "made_to_order"
+                    ? "bg-violet-600/90"
+                    : "bg-neutral-700/90"
               }`}
             >
               {product.status === "active"
                 ? badgeLabelActive
-                : badgeLabelInactive}
+                : product.status === "made_to_order"
+                  ? badgeLabelMadeToOrder
+                  : badgeLabelInactive}
             </span>
 
             <span className="max-w-[65%] truncate rounded-full bg-black/65 px-2.5 py-1 text-[10px] font-black uppercase tracking-wide text-white backdrop-blur-md">
@@ -1384,12 +1411,16 @@ function ProductCard({
           </div>
 
           <div className={`rounded-xl border px-3 py-2 text-xs font-black ${stockClass}`}>
-            {lang === "ja"
-              ? "在庫: "
-              : lang === "en"
-                ? "Stock: "
-                : "Estoque: "}
-            {product.stockQty}
+            {madeToOrder
+              ? badgeLabelMadeToOrder
+              : <>
+                  {lang === "ja"
+                    ? "在庫: "
+                    : lang === "en"
+                      ? "Stock: "
+                      : "Estoque: "}
+                  {product.stockQty}
+                </>}
           </div>
 
           <div className="grid grid-cols-2 gap-2 text-[11px] font-bold text-neutral-500 dark:text-neutral-400">
@@ -1438,14 +1469,14 @@ function ProductCard({
               onClick={() =>
                 onToggleStatus(
                   product.id,
-                  product.status === "active"
+                  product.status !== "inactive"
                     ? "inactive"
                     : "active"
                 )
               }
               className="min-h-11 border-x border-neutral-100 px-2 text-xs font-black text-neutral-600 transition hover:bg-neutral-50 dark:border-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-800"
             >
-              {product.status === "active"
+              {product.status !== "inactive"
                 ? btnDeactivate
                 : btnActivate}
             </button>

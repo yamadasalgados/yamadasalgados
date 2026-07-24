@@ -2,7 +2,7 @@ import type { Timestamp } from "firebase/firestore";
 import type { ProductContent } from "@/app/lib/product-schema";
 
 export type CategoryId = string;
-export type ProductStatus = "active" | "inactive";
+export type ProductStatus = "active" | "made_to_order" | "inactive";
 export type PlanId = "starter" | "pro" | "business";
 
 export type ProductInventory = {

@@ -1,0 +1,36 @@
+{
+  "name": "yamada-catalog-02b1-store-flow-made-to-order",
+  "destructive": false,
+  "files": [
+    {
+      "path": "INSTALL-02B1.md",
+      "sha256": "9de939641094eefa4246135dde3a3d5a6db56021a39c4e571adf4251b6b623c2",
+      "sizeBytes": 1648
+    },
+    {
+      "path": "VALIDATION-02B1.md",
+      "sha256": "327f40af943f193cac09f30c5e1eb1de1c2f62d6e0c929292337646f3115b24b",
+      "sizeBytes": 376
+    },
+    {
+      "path": "app/seller/products/ProductForm.tsx",
+      "sha256": "67e8c0ecccde1f817b63f616c28da81c1d8e17fe384d325ae9c604da14bc6778",
+      "sizeBytes": 14179
+    },
+    {
+      "path": "app/seller/products/page.tsx",
+      "sha256": "381f582419ce552db989a2ecaf7c234cee878eadcca6feeff166b37dbdb82309",
+      "sizeBytes": 50257
+    },
+    {
+      "path": "app/seller/products/product-types.ts",
+      "sha256": "fcbb1facb3b47e0540147c6a7aa8d9cccb98cadd4c6977bf969a4c0ad3f6a23d",
+      "sizeBytes": 1292
+    },
+    {
+      "path": "app/store/[sellerId]/StoreClient.tsx",
+      "sha256": "9b5d1217ba57cbe3db1dd0fe8b7c8ae6a9c8a2c94fe7342d41a395ac6b406701",
+      "sizeBytes": 98331
+    }
+  ]
+}
