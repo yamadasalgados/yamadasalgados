@@ -1,0 +1,269 @@
+import {
+  Package,
+} from "lucide-react";
+
+import {
+  formatStoreOrderCurrency,
+  getStoreOrderText,
+} from "@/app/lib/store-order-ui";
+
+import type {
+  StoreOrder,
+} from "@/app/types/store-order";
+
+type Props = {
+  order?: StoreOrder | null;
+  locale: string;
+};
+
+export default function ItemsCard({
+  order,
+  locale,
+}: Props) {
+  const text =
+    getStoreOrderText(locale);
+
+  const items =
+    Array.isArray(order?.items)
+      ? order.items
+      : [];
+
+  const totalItems =
+    items.reduce(
+      (sum, item) =>
+        sum +
+        Math.max(
+          0,
+          Number(item.qty) || 0,
+        ),
+      0,
+    );
+
+  const itemsSubtotal =
+    items.reduce(
+      (sum, item) =>
+        sum +
+        (Number(item.subtotal) ||
+          0),
+      0,
+    );
+
+  const subtotal =
+    order?.subtotal ??
+    itemsSubtotal;
+
+  const discount =
+    order?.discount ?? 0;
+
+  const deliveryFee =
+    order?.deliveryFee ?? 0;
+
+  const total =
+    order?.totalAmount ??
+    Math.max(
+      0,
+      subtotal +
+        deliveryFee -
+        discount,
+    );
+
+  return (
+    <section className="rounded-3xl border border-neutral-200 bg-white p-6 text-neutral-950 shadow-sm dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-100">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <Package
+            className="text-orange-600 dark:text-orange-300"
+            size={25}
+          />
+
+          <h2 className="text-2xl font-black">
+            {text.products}
+          </h2>
+        </div>
+
+        <span className="rounded-full bg-neutral-100 px-3 py-1 text-sm font-bold dark:bg-neutral-800">
+          {totalItems}{" "}
+          {totalItems === 1
+            ? text.item
+            : text.items}
+        </span>
+      </div>
+
+      {items.length === 0 ? (
+        <p className="mt-7 rounded-2xl bg-neutral-50 p-6 text-center text-sm text-neutral-500 dark:bg-neutral-950/50 dark:text-neutral-400">
+          {text.noItems}
+        </p>
+      ) : (
+        <div className="mt-7 divide-y divide-neutral-200 dark:divide-neutral-800">
+          {items.map(
+            (
+              item,
+              index,
+            ) => {
+              const subtotalValue =
+                Number(
+                  item.subtotal,
+                ) ||
+                Math.max(
+                  0,
+                  Number(item.qty) ||
+                    0,
+                ) *
+                  (Number(
+                    item.price,
+                  ) || 0);
+
+              return (
+                <article
+                  key={
+                    item.id ??
+                    item.productId ??
+                    `${item.name}-${index}`
+                  }
+                  className="flex gap-4 py-5 first:pt-0 last:pb-0"
+                >
+                  {item.imageUrl ? (
+                    <img
+                      src={item.imageUrl}
+                      alt={item.name}
+                      className="h-16 w-16 shrink-0 rounded-xl border border-neutral-200 object-cover dark:border-neutral-700"
+                      loading="lazy"
+                    />
+                  ) : (
+                    <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-xl bg-neutral-100 dark:bg-neutral-800">
+                      <Package
+                        size={22}
+                        className="text-neutral-400"
+                      />
+                    </div>
+                  )}
+
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="min-w-0">
+                        <h3 className="break-words font-black">
+                          {item.qty}×{" "}
+                          {item.name}
+                        </h3>
+
+                        {item.category && (
+                          <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
+                            {item.category}
+                          </p>
+                        )}
+                      </div>
+
+                      <p className="shrink-0 font-black">
+                        {formatStoreOrderCurrency(
+                          subtotalValue,
+                          locale,
+                        )}
+                      </p>
+                    </div>
+
+                    {item.options &&
+                      item.options.length >
+                        0 && (
+                        <ul className="mt-2 space-y-1 text-sm text-neutral-600 dark:text-neutral-300">
+                          {item.options.map(
+                            (
+                              option,
+                              optionIndex,
+                            ) => (
+                              <li
+                                key={
+                                  option.id ??
+                                  `${option.name}-${optionIndex}`
+                                }
+                              >
+                                +{" "}
+                                {option.name}
+                                {typeof option.price ===
+                                "number"
+                                  ? ` (${formatStoreOrderCurrency(
+                                      option.price,
+                                      locale,
+                                    )})`
+                                  : ""}
+                              </li>
+                            ),
+                          )}
+                        </ul>
+                      )}
+
+                    {item.note && (
+                      <p className="mt-2 whitespace-pre-wrap break-words rounded-lg bg-yellow-50 p-2 text-sm text-neutral-900 dark:bg-yellow-950/30 dark:text-yellow-100">
+                        {item.note}
+                      </p>
+                    )}
+                  </div>
+                </article>
+              );
+            },
+          )}
+        </div>
+      )}
+
+      <div className="mt-7 space-y-3 border-t border-neutral-200 pt-5 dark:border-neutral-800">
+        <SummaryRow
+          label={text.subtotal}
+          value={formatStoreOrderCurrency(
+            subtotal,
+            locale,
+          )}
+        />
+
+        {discount > 0 && (
+          <SummaryRow
+            label={text.discount}
+            value={`- ${formatStoreOrderCurrency(
+              discount,
+              locale,
+            )}`}
+          />
+        )}
+
+        {deliveryFee > 0 && (
+          <SummaryRow
+            label={text.deliveryFee}
+            value={formatStoreOrderCurrency(
+              deliveryFee,
+              locale,
+            )}
+          />
+        )}
+
+        <div className="flex items-center justify-between border-t border-neutral-200 pt-4 text-xl font-black dark:border-neutral-800">
+          <span>{text.total}</span>
+
+          <span>
+            {formatStoreOrderCurrency(
+              total,
+              locale,
+            )}
+          </span>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function SummaryRow({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-4 text-sm">
+      <span className="text-neutral-500 dark:text-neutral-400">
+        {label}
+      </span>
+
+      <span className="font-bold">
+        {value}
+      </span>
+    </div>
+  );
+}

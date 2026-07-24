@@ -1,3 +1,6 @@
+import type {
+  User,
+} from "firebase/auth";
 import {
   doc,
   getDoc,
@@ -6,16 +9,20 @@ import {
   writeBatch,
   type DocumentData,
 } from "firebase/firestore";
-import type {
-  User,
-} from "firebase/auth";
 
 import {
   db,
 } from "@/app/lib/firebase";
 import {
+  getPlanLimits,
+  normalizePlanId,
+} from "@/app/lib/plan-catalog";
+import {
   normalizeLanguage,
 } from "@/app/lib/regional";
+import {
+  hasCompleteSellerOnboarding,
+} from "@/app/lib/seller-regional-profile";
 import type {
   SupportedLanguage,
 } from "@/app/types/regional";
@@ -24,7 +31,7 @@ export type UserRole =
   | "admin"
   | "seller";
 
-type EnsureResult = {
+export type EnsureResult = {
   userDoc: DocumentData;
   sellerDoc: DocumentData | null;
 };
@@ -58,21 +65,40 @@ function storedLanguage(
   requestedLanguage: SupportedLanguage,
 ): SupportedLanguage {
   return normalizeLanguage(
-    data.locale,
+    data.preferredLanguage ??
+      data.locale,
     requestedLanguage,
   );
 }
 
+function isStoredSubscriptionStatus(
+  value: unknown,
+): boolean {
+  return value === "none" ||
+    value === "pending" ||
+    value === "active" ||
+    value === "past_due" ||
+    value === "cancelled";
+}
+
+function finiteNumber(
+  value: unknown,
+): number | null {
+  return Number.isFinite(value)
+    ? Number(value)
+    : null;
+}
+
 /**
- * Garante os documentos mínimos de identidade.
+ * Garante os documentos mínimos de identidade e comércio.
  *
- * Regras desta versão:
+ * Regras:
  * - nunca concede role admin no cliente;
- * - nunca redefine plano, assinatura ou limites;
+ * - nunca redefine plano, assinatura ou suspensão existentes;
  * - respeita sellerId já vinculado ao usuário;
- * - preserva o idioma válido já salvo;
- * - mantém o schema atual até as regras serem
- *   versionadas na próxima etapa.
+ * - mantém sellers antigos em onboarding pendente até escolherem país;
+ * - `sellers/{sellerId}` é a fonte comercial canônica;
+ * - campos comerciais em `users/{uid}` são apenas espelho temporário.
  */
 export async function ensureUserProfile(
   user: User,
@@ -143,68 +169,6 @@ export async function ensureUserProfile(
         ) ?? uid
       : null;
 
-  const userPatch:
-    Record<string, unknown> = {};
-
-  if (
-    currentUserData.email !== email
-  ) {
-    userPatch.email = email;
-  }
-
-  if (
-    currentUserData.displayName !==
-    displayName
-  ) {
-    userPatch.displayName =
-      displayName;
-  }
-
-  if (
-    currentUserData.photoURL !==
-    photoURL
-  ) {
-    userPatch.photoURL = photoURL;
-  }
-
-  if (
-    currentUserData.locale !==
-    language
-  ) {
-    userPatch.locale = language;
-  }
-
-  if (
-    role === "seller" &&
-    currentUserData.sellerId !==
-      resolvedSellerId
-  ) {
-    userPatch.sellerId =
-      resolvedSellerId;
-  }
-
-  if (
-    typeof currentUserData.active !==
-    "boolean"
-  ) {
-    userPatch.active = true;
-  }
-
-  if (
-    Object.keys(userPatch).length > 0
-  ) {
-    userPatch.updatedAt =
-      serverTimestamp();
-
-    await setDoc(
-      userReference,
-      userPatch,
-      {
-        merge: true,
-      },
-    );
-  }
-
   let sellerDoc:
     DocumentData | null = null;
 
@@ -221,20 +185,145 @@ export async function ensureUserProfile(
           ownerName: displayName,
           ownerPhotoURL: photoURL,
         },
+        language,
       );
   }
 
-  return {
-    userDoc: {
+  const compatibilityView =
+    role === "seller" &&
+    sellerDoc
+      ? buildCompatibilityView(
+          currentUserData,
+          sellerDoc,
+        )
+      : {};
+
+  /*
+   * Importante:
+   * o login de uma conta existente não deve tentar "migrar" campos
+   * administrativos em users/{uid}.
+   *
+   * Campos como role, active, plan, subscriptionStatus, suspended e limites
+   * pertencem ao fluxo administrativo/backend. Além disso, locale e
+   * onboardingComplete só podem ser persistidos juntos com o perfil regional
+   * completo no onboarding.
+   *
+   * Mantemos os fallbacks abaixo apenas em memória. A gravação regional
+   * definitiva acontece em /seller/onboarding.
+   */
+  const normalizedUserDoc:
+    DocumentData = {
       ...currentUserData,
-      ...userPatch,
+      ...compatibilityView,
+
       role,
-      sellerId:
-        resolvedSellerId,
+      sellerId: resolvedSellerId,
+
+      email:
+        currentUserData.email ??
+        email,
+      displayName:
+        currentUserData.displayName ??
+        displayName,
+      photoURL:
+        currentUserData.photoURL ??
+        photoURL,
+
       locale: language,
-    },
+      preferredLanguage: language,
+
+      active:
+        typeof currentUserData.active ===
+        "boolean"
+          ? currentUserData.active
+          : true,
+    };
+
+  return {
+    userDoc: normalizedUserDoc,
     sellerDoc,
   };
+}
+
+function buildCompatibilityView(
+  currentUserData: DocumentData,
+  sellerDoc: DocumentData,
+): Record<string, unknown> {
+  const compatibility:
+    Record<string, unknown> = {};
+
+  const plan =
+    normalizePlanId(
+      currentUserData.plan ??
+        sellerDoc.plan,
+    );
+
+  const limits =
+    sellerDoc.limits &&
+    typeof sellerDoc.limits === "object"
+      ? sellerDoc.limits as Record<
+          string,
+          unknown
+        >
+      : {};
+
+  const defaultLimits =
+    getPlanLimits(plan);
+
+  compatibility.plan = plan;
+
+  compatibility.subscriptionStatus =
+    isStoredSubscriptionStatus(
+      currentUserData.subscriptionStatus,
+    )
+      ? currentUserData.subscriptionStatus
+      : isStoredSubscriptionStatus(
+          sellerDoc.subscriptionStatus,
+        )
+        ? sellerDoc.subscriptionStatus
+        : "none";
+
+  compatibility.maxEvents =
+    finiteNumber(
+      currentUserData.maxEvents,
+    ) ??
+    finiteNumber(limits.maxEvents) ??
+    finiteNumber(sellerDoc.maxEvents) ??
+    defaultLimits.maxEvents;
+
+  compatibility.maxProducts =
+    finiteNumber(
+      currentUserData.maxProducts,
+    ) ??
+    finiteNumber(limits.maxProducts) ??
+    finiteNumber(sellerDoc.maxProducts) ??
+    defaultLimits.maxProducts;
+
+  compatibility.suspended =
+    typeof currentUserData.suspended ===
+    "boolean"
+      ? currentUserData.suspended
+      : sellerDoc.suspended === true;
+
+  compatibility.onboardingComplete =
+    hasCompleteSellerOnboarding(
+      sellerDoc,
+    );
+
+  for (const key of [
+    "storeName",
+    "operatingCountry",
+    "currency",
+    "regionalLocale",
+    "timeZone",
+  ] as const) {
+    compatibility[key] =
+      sellerDoc[key] ??
+      currentUserData[key] ??
+      null;
+  }
+
+  return compatibility;
 }
 
 async function createFirstProfile({
@@ -253,21 +342,38 @@ async function createFirstProfile({
   const createdAt =
     serverTimestamp();
 
+  const plan = "starter" as const;
+  const limits =
+    getPlanLimits(plan);
+
   const newUser = {
     uid,
     email,
     displayName,
     photoURL,
 
-    // Privilégio administrativo nunca é
-    // concedido pelo navegador.
     role: "seller" as const,
-
     active: true,
     sellerId: uid,
     regionId: null,
 
     locale: language,
+    preferredLanguage: language,
+
+    onboardingComplete: false,
+    storeName: null,
+    operatingCountry: null,
+    currency: null,
+    regionalLocale: null,
+    timeZone: null,
+
+    // Espelho temporário para páginas legadas.
+    plan,
+    subscriptionStatus:
+      "none" as const,
+    suspended: false,
+    maxEvents: limits.maxEvents,
+    maxProducts: limits.maxProducts,
 
     createdAt,
     updatedAt: createdAt,
@@ -283,18 +389,24 @@ async function createFirstProfile({
     ownerName: displayName,
     ownerPhotoURL: photoURL,
 
+    storeName: null,
+    defaultLanguage: language,
+
+    onboardingComplete: false,
+    regionalVersion: 0,
+    operatingCountry: null,
+    currency: null,
+    regionalLocale: null,
+    timeZone: null,
+
     active: true,
     deletedAt: null,
 
-    plan: "starter" as const,
+    plan,
     subscriptionStatus:
       "none" as const,
     suspended: false,
-
-    limits: {
-      maxEvents: 1,
-      maxProducts: 20,
-    },
+    limits,
 
     regionId: null,
     regionName: null,
@@ -328,6 +440,7 @@ async function createFirstProfile({
 async function ensureSellerDocument(
   sellerId: string,
   owner: SellerOwnerFields,
+  language: SupportedLanguage,
 ): Promise<DocumentData> {
   const sellerReference =
     doc(db, "sellers", sellerId);
@@ -339,23 +452,30 @@ async function ensureSellerDocument(
     const createdAt =
       serverTimestamp();
 
+    const plan = "starter" as const;
+
     const newSeller = {
       sellerId,
-
       ...owner,
+
+      storeName: null,
+      defaultLanguage: language,
+
+      onboardingComplete: false,
+      regionalVersion: 0,
+      operatingCountry: null,
+      currency: null,
+      regionalLocale: null,
+      timeZone: null,
 
       active: true,
       deletedAt: null,
 
-      plan: "starter" as const,
+      plan,
       subscriptionStatus:
         "none" as const,
       suspended: false,
-
-      limits: {
-        maxEvents: 1,
-        maxProducts: 20,
-      },
+      limits: getPlanLimits(plan),
 
       regionId: null,
       regionName: null,
@@ -395,8 +515,30 @@ async function ensureSellerDocument(
     currentSellerData.sellerId !==
     sellerId
   ) {
-    sellerPatch.sellerId =
-      sellerId;
+    sellerPatch.sellerId = sellerId;
+  }
+
+  if (
+    typeof currentSellerData.onboardingComplete !==
+    "boolean"
+  ) {
+    sellerPatch.onboardingComplete =
+      false;
+  }
+
+  if (
+    !Number.isFinite(
+      currentSellerData.regionalVersion,
+    )
+  ) {
+    sellerPatch.regionalVersion = 0;
+  }
+
+  if (
+    !currentSellerData.defaultLanguage
+  ) {
+    sellerPatch.defaultLanguage =
+      language;
   }
 
   if (

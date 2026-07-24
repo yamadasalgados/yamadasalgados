@@ -1,0 +1,9 @@
+{
+  "name": "yamada-export-legacy-event",
+  "destructive": false,
+  "files": [
+    "scripts/export-legacy-event-orders.cjs",
+    "scripts/list-legacy-events.cjs",
+    "README.md"
+  ]
+}

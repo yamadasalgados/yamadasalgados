@@ -171,3 +171,111 @@ export function countryForCurrency(
       return "JP";
   }
 }
+export const TIME_ZONE_LABELS: Record<
+  string,
+  Record<SupportedLanguage, string>
+> = {
+  "Asia/Tokyo": {
+    pt: "Japão (Tóquio)",
+    en: "Japan (Tokyo)",
+    ja: "日本（東京）",
+  },
+  "America/Sao_Paulo": {
+    pt: "Brasília / São Paulo",
+    en: "Brasília / São Paulo",
+    ja: "ブラジリア／サンパウロ",
+  },
+  "America/Manaus": {
+    pt: "Manaus",
+    en: "Manaus",
+    ja: "マナウス",
+  },
+  "America/Cuiaba": {
+    pt: "Cuiabá",
+    en: "Cuiabá",
+    ja: "クイアバ",
+  },
+  "America/Rio_Branco": {
+    pt: "Rio Branco",
+    en: "Rio Branco",
+    ja: "リオブランコ",
+  },
+  "America/Noronha": {
+    pt: "Fernando de Noronha",
+    en: "Fernando de Noronha",
+    ja: "フェルナンド・デ・ノローニャ",
+  },
+  "America/New_York": {
+    pt: "Leste (Nova York)",
+    en: "Eastern (New York)",
+    ja: "東部（ニューヨーク）",
+  },
+  "America/Chicago": {
+    pt: "Central (Chicago)",
+    en: "Central (Chicago)",
+    ja: "中部（シカゴ）",
+  },
+  "America/Denver": {
+    pt: "Montanha (Denver)",
+    en: "Mountain (Denver)",
+    ja: "山岳部（デンバー）",
+  },
+  "America/Los_Angeles": {
+    pt: "Pacífico (Los Angeles)",
+    en: "Pacific (Los Angeles)",
+    ja: "太平洋（ロサンゼルス）",
+  },
+  "America/Anchorage": {
+    pt: "Alasca (Anchorage)",
+    en: "Alaska (Anchorage)",
+    ja: "アラスカ（アンカレッジ）",
+  },
+  "Pacific/Honolulu": {
+    pt: "Havaí (Honolulu)",
+    en: "Hawaii (Honolulu)",
+    ja: "ハワイ（ホノルル）",
+  },
+};
+
+export function isAllowedTimeZone(
+  country: OperatingCountry,
+  timeZone: string,
+): boolean {
+  return getCountryDefinition(country)
+    .allowedTimeZones.includes(timeZone);
+}
+
+export function countryFromTimeZone(
+  timeZone: string,
+): OperatingCountry | null {
+  const normalized =
+    String(timeZone || "").trim();
+
+  for (const country of [
+    "JP",
+    "BR",
+    "US",
+  ] as const) {
+    if (
+      isAllowedTimeZone(
+        country,
+        normalized,
+      )
+    ) {
+      return country;
+    }
+  }
+
+  return null;
+}
+
+export function getTimeZoneLabel(
+  timeZone: string,
+  language: SupportedLanguage,
+): string {
+  return (
+    TIME_ZONE_LABELS[timeZone]?.[language] ||
+    timeZone
+  );
+}
+

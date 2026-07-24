@@ -2,6 +2,7 @@
 
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { DICTS, type Lang } from "./i18n.messages";
+import { languageToHtmlLang } from "@/app/lib/regional";
 
 type I18nContextValue = {
   lang: Lang;
@@ -23,6 +24,9 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
       
       if (saved && validLangs.includes(saved)) {
         setLangState(saved);
+        document.documentElement.lang = languageToHtmlLang(saved);
+      } else {
+        document.documentElement.lang = languageToHtmlLang("pt");
       }
     } catch (e) {
       console.warn("[i18n] Falha ao acessar localStorage:", e);
@@ -33,6 +37,11 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
 
   const setLang = useCallback((l: Lang) => {
     setLangState(l);
+
+    if (typeof document !== "undefined") {
+      document.documentElement.lang = languageToHtmlLang(l);
+    }
+
     try {
       localStorage.setItem("yamada_lang", l);
     } catch (e) {

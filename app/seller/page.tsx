@@ -20,6 +20,8 @@ import {
 } from "firebase/firestore";
 import { ensureUserProfile } from "@/app/lib/ensureUserProfile";
 import { useI18n } from "@/app/lib/i18n";
+import StoreOrdersCard from "@/app/store/StoreOrdersCard";
+import EventOrdersAlerts from "@/app/seller/events/EventOrdersAlerts";
 
 type EventStatus = "active" | "closed" | "cancelled";
 type PlanId = "starter" | "pro" | "business";
@@ -57,6 +59,83 @@ type Stats = {
 export default function SellerDashboardPage() {
   const router = useRouter();
   const { t, lang } = useI18n();
+
+
+const dashboardText =
+  lang === "ja"
+    ? {
+        identitySynced:
+          "店舗情報を同期しました",
+        statsActive:
+          "開催中のイベント",
+        statsActiveHint:
+          "現在受付中のイベント数",
+        statsClosed:
+          "終了したイベント",
+        statsClosedHint:
+          "終了済みイベントの合計",
+        statsRevenue:
+          "イベント売上",
+        statsRevenueHint:
+          "終了したイベントの確定売上",
+        storeOrdersTitle:
+          "店舗注文",
+        storeOrdersDesc:
+          "常設店舗の注文一覧を開きます。",
+        publicStoreTitle:
+          "公開店舗",
+        publicStoreDesc:
+          "お客様向けの店舗ページを開きます。",
+      }
+    : lang === "en"
+      ? {
+          identitySynced:
+            "Store identity synchronized",
+          statsActive:
+            "Active events",
+          statsActiveHint:
+            "Events currently accepting orders",
+          statsClosed:
+            "Closed events",
+          statsClosedHint:
+            "Total completed events",
+          statsRevenue:
+            "Event revenue",
+          statsRevenueHint:
+            "Confirmed revenue from closed events",
+          storeOrdersTitle:
+            "Store orders",
+          storeOrdersDesc:
+            "Open orders from the permanent store.",
+          publicStoreTitle:
+            "Public store",
+          publicStoreDesc:
+            "Open the storefront customers access.",
+        }
+      : {
+          identitySynced:
+            "Identidade da loja sincronizada",
+          statsActive:
+            "Eventos ativos",
+          statsActiveHint:
+            "Eventos recebendo pedidos agora",
+          statsClosed:
+            "Eventos encerrados",
+          statsClosedHint:
+            "Total de eventos já finalizados",
+          statsRevenue:
+            "Faturamento dos eventos",
+          statsRevenueHint:
+            "Receita confirmada dos eventos encerrados",
+          storeOrdersTitle:
+            "Pedidos da Loja",
+          storeOrdersDesc:
+            "Abra os pedidos do catálogo permanente.",
+          publicStoreTitle:
+            "Loja pública",
+          publicStoreDesc:
+            "Abra a vitrine acessada pelos clientes.",
+        };
 
   const [checkingAuth, setCheckingAuth] = useState(true);
   const [authUser, setAuthUser] = useState<User | null>(null);
@@ -296,18 +375,27 @@ const showPlanWarning =
 
           {autoFixedIds && (
             <div className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-emerald-50 text-emerald-700 dark:bg-emerald-900/10 dark:text-emerald-400 px-3 py-1 text-[10px] font-black uppercase tracking-wider">
-              ✨ Identidade sincronizada
+              ✨ {dashboardText.identitySynced}
             </div>
           )}
         </div>
 
-        <div className="flex gap-2 flex-wrap">
+        <div className="flex flex-wrap gap-2">
+
           <Link
             href="/seller/events/new"
-            className="rounded-2xl bg-black dark:bg-white dark:text-black text-white text-xs font-black px-5 py-3.5 transition-all hover:scale-[1.02] active:scale-[0.98] shadow-md uppercase tracking-wider"
+            className="rounded-2xl bg-black px-5 py-3.5 text-xs font-black uppercase tracking-wider text-white shadow-md transition-all hover:scale-[1.02] active:scale-[0.98] dark:bg-white dark:text-black"
           >
             {t("dashboard.create_event")}
           </Link>
+
+          <button
+            type="button"
+            onClick={handleLogout}
+            className="rounded-2xl border border-neutral-200 bg-white px-5 py-3.5 text-xs font-black uppercase tracking-wider text-neutral-700 transition-all hover:border-black hover:text-black active:scale-[0.98] dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:border-white dark:hover:text-white"
+          >
+            {t("common.logout")}
+          </button>
         </div>
       </header>
 
@@ -354,17 +442,99 @@ const showPlanWarning =
         </div>
       )}
 
-      {/* Seção de Acessos Rápidos (Ações Modulares) */}
-      <section className="rounded-[2.5rem] border border-neutral-200 dark:border-neutral-800 bg-neutral-50/50 dark:bg-neutral-900/30 p-6 space-y-4">
+
+{stats && (
+  <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+    <Card
+      title={dashboardText.statsActive}
+      value={String(stats.activeEvents)}
+      hint={dashboardText.statsActiveHint}
+      tone="good"
+      href="/seller/events"
+    />
+
+    <Card
+      title={dashboardText.statsClosed}
+      value={String(stats.closedEvents)}
+      hint={dashboardText.statsClosedHint}
+      tone="neutral"
+      href="/seller/reports"
+    />
+
+    <Card
+      title={dashboardText.statsRevenue}
+      value={yen(stats.revenueClosedSum)}
+      hint={dashboardText.statsRevenueHint}
+      tone="neutral"
+      href="/seller/reports"
+    />
+  </section>
+)}
+
+
+{canLoad && sellerId && (
+  <section className="space-y-5">
+    <StoreOrdersCard
+      sellerId={sellerId}
+    />
+
+    <EventOrdersAlerts
+      sellerId={sellerId}
+    />
+  </section>
+)}
+
+{/* Seção de Acessos Rápidos (Ações Modulares) */}
+<section className="rounded-[2.5rem] border border-neutral-200 dark:border-neutral-800 bg-neutral-50/50 dark:bg-neutral-900/30 p-6 space-y-4">
         <h2 className="text-xs font-black uppercase tracking-widest text-neutral-400 dark:text-neutral-500">
           {t("dashboard.quick.title")}
         </h2>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <Action title={t("dashboard.quick.events")} desc={t("dashboard.quick.events_desc")} href="/seller/events" icon="📅" />
-          <Action title={t("dashboard.quick.products")} desc={t("dashboard.quick.products_desc")} href="/seller/products" icon="📦" />
-          <Action title={t("dashboard.quick.reports")} desc={t("dashboard.quick.reports_desc")} href="/seller/reports" icon="📊" />
-          <Action title={t("dashboard.quick.settings")} desc={t("dashboard.quick.settings_desc")} href="/seller/settings" icon="⚙️" />
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+          <Action
+            title={t("dashboard.quick.events")}
+            desc={t("dashboard.quick.events_desc")}
+            href="/seller/events"
+            icon="📅"
+          />
+
+          <Action
+            title={t("dashboard.quick.products")}
+            desc={t("dashboard.quick.products_desc")}
+            href="/seller/products"
+            icon="📦"
+          />
+
+          <Action
+            title={dashboardText.storeOrdersTitle}
+            desc={dashboardText.storeOrdersDesc}
+            href="/seller/store-orders"
+            icon="🛒"
+          />
+
+          {sellerId && (
+            <Action
+              title={dashboardText.publicStoreTitle}
+              desc={dashboardText.publicStoreDesc}
+              href={`/store/${encodeURIComponent(sellerId)}`}
+              icon="🏪"
+              external
+            />
+          )}
+
+          <Action
+            title={t("dashboard.quick.reports")}
+            desc={t("dashboard.quick.reports_desc")}
+            href="/seller/reports"
+            icon="📊"
+          />
+
+          <Action
+            title={t("dashboard.quick.settings")}
+            desc={t("dashboard.quick.settings_desc")}
+            href="/seller/settings"
+            icon="⚙️"
+          />
         </div>
       </section>
     </main>
@@ -401,16 +571,44 @@ function Card({
   );
 }
 
-function Action({ title, desc, href, icon }: { title: string; desc: string; href: string; icon: string }) {
+function Action({
+  title,
+  desc,
+  href,
+  icon,
+  external = false,
+}: {
+  title: string;
+  desc: string;
+  href: string;
+  icon: string;
+  external?: boolean;
+}) {
   return (
     <Link
       href={href}
-      className="group rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-5 hover:border-black dark:hover:border-white transition-all flex flex-col justify-between min-h-[120px] shadow-sm hover:shadow-md"
+      target={external ? "_blank" : undefined}
+      rel={external ? "noopener noreferrer" : undefined}
+      className="group flex min-h-[120px] flex-col justify-between rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm transition-all hover:border-black hover:shadow-md dark:border-neutral-800 dark:bg-neutral-900 dark:hover:border-white"
     >
-      <div className="text-lg">{icon}</div>
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-lg">{icon}</span>
+
+        {external && (
+          <span className="text-xs font-black text-neutral-400 transition group-hover:text-neutral-700 dark:group-hover:text-neutral-200">
+            ↗
+          </span>
+        )}
+      </div>
+
       <div className="mt-4">
-        <p className="text-sm font-black text-neutral-900 dark:text-white tracking-tight">{title}</p>
-        <p className="text-xs text-neutral-400 dark:text-neutral-500 font-medium mt-1 leading-relaxed">{desc}</p>
+        <p className="text-sm font-black tracking-tight text-neutral-900 dark:text-white">
+          {title}
+        </p>
+
+        <p className="mt-1 text-xs font-medium leading-relaxed text-neutral-400 dark:text-neutral-500">
+          {desc}
+        </p>
       </div>
     </Link>
   );

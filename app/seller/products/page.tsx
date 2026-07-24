@@ -63,6 +63,7 @@ type ProductDoc = {
   sellPrice: number;
   quantity: number;
   stockQty: number;
+  lowStockThreshold: number;
   status: ProductStatus;
   imageUrl: string;
   extraImageUrls?: string[];
@@ -150,22 +151,62 @@ async function uploadImageFile(params: { uid: string; productIdLike: string; fil
   return getDownloadURL(r);
 }
 
+function hashText(input: string) {
+  let hash = 2166136261;
+
+  for (let index = 0; index < input.length; index += 1) {
+    hash ^= input.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+
+  return (hash >>> 0).toString(36);
+}
+
 function slugify(input: string) {
-  return String(input || "")
+  const normalized = String(input || "")
     .trim()
     .toLowerCase()
     .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[\u0300-\u036f]/g, "");
+
+  const asciiSlug = normalized
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
-    .slice(0, 60);
+    .slice(0, 50);
+
+  if (asciiSlug) return asciiSlug;
+
+  return `category-${hashText(normalized || "category")}`;
 }
 
 function normalizeCategoryLabel(input: string) {
   return String(input || "")
     .trim()
     .replace(/\s+/g, " ")
-    .slice(0, 40);
+    .slice(0, 60);
+}
+
+function categoryKey(input: string) {
+  return normalizeCategoryLabel(input)
+    .normalize("NFKC")
+    .toLocaleLowerCase();
+}
+
+function mergeCategoryLabels(...groups: string[][]) {
+  const result = new Map<string, string>();
+
+  for (const group of groups) {
+    for (const rawName of group) {
+      const label = normalizeCategoryLabel(rawName);
+      const key = categoryKey(label);
+
+      if (label && key && !result.has(key)) {
+        result.set(key, label);
+      }
+    }
+  }
+
+  return Array.from(result.values());
 }
 
 // --- 🚀 Componente Principal da Página ---
@@ -173,6 +214,107 @@ function normalizeCategoryLabel(input: string) {
 export default function ProductsCatalogPage() {
   const router = useRouter();
   const { t, lang } = useI18n();
+
+  const catalogText = useMemo(
+    () =>
+      lang === "ja"
+        ? {
+            subtitle:
+              "商品、カテゴリー、価格、在庫を一か所で管理します。",
+            statsTotal: "商品数",
+            statsActive: "販売中",
+            statsOut: "在庫切れ",
+            statsCategories: "カテゴリー",
+            legacyTitle: "既存カテゴリーを検出しました",
+            legacyBody:
+              "商品に登録されているカテゴリーを選択欄へ自動的に統合しています。",
+            syncCategories: "カテゴリーを同期",
+            syncingCategories: "同期中...",
+            syncedCategories: "カテゴリーを同期しました。",
+            categoryReadWarning:
+              "カテゴリー一覧を読み込めませんでしたが、商品に保存済みのカテゴリーは利用できます。",
+            catalogTitle: "商品一覧",
+            searchPlaceholder: "商品名またはカテゴリーで検索",
+            allCategories: "すべてのカテゴリー",
+            allStatuses: "すべての状態",
+            active: "販売中",
+            inactive: "停止中",
+            allStock: "すべての在庫",
+            inStock: "在庫あり",
+            lowStock: "在庫わずか",
+            outOfStock: "在庫切れ",
+            clearFilters: "フィルター解除",
+            noResults: "条件に一致する商品はありません。",
+            visibleProducts: "表示中",
+            categoryHelp:
+              "既存商品のカテゴリーも自動的に候補へ追加されます。",
+          }
+        : lang === "en"
+          ? {
+              subtitle:
+                "Manage products, categories, prices, and stock in one place.",
+              statsTotal: "Products",
+              statsActive: "Active",
+              statsOut: "Out of stock",
+              statsCategories: "Categories",
+              legacyTitle: "Existing categories detected",
+              legacyBody:
+                "Categories already saved in products are automatically merged into the selector.",
+              syncCategories: "Sync categories",
+              syncingCategories: "Syncing...",
+              syncedCategories: "Categories synchronized.",
+              categoryReadWarning:
+                "The category collection could not be loaded, but categories saved in products remain available.",
+              catalogTitle: "Product catalog",
+              searchPlaceholder: "Search by product or category",
+              allCategories: "All categories",
+              allStatuses: "All statuses",
+              active: "Active",
+              inactive: "Inactive",
+              allStock: "All stock",
+              inStock: "In stock",
+              lowStock: "Low stock",
+              outOfStock: "Out of stock",
+              clearFilters: "Clear filters",
+              noResults: "No products match the selected filters.",
+              visibleProducts: "Showing",
+              categoryHelp:
+                "Categories already used by products are included automatically.",
+            }
+          : {
+              subtitle:
+                "Gerencie produtos, categorias, preços e estoque em um só lugar.",
+              statsTotal: "Produtos",
+              statsActive: "Ativos",
+              statsOut: "Sem estoque",
+              statsCategories: "Categorias",
+              legacyTitle: "Categorias existentes detectadas",
+              legacyBody:
+                "As categorias já salvas nos produtos são incorporadas automaticamente à seleção.",
+              syncCategories: "Sincronizar categorias",
+              syncingCategories: "Sincronizando...",
+              syncedCategories: "Categorias sincronizadas.",
+              categoryReadWarning:
+                "A coleção de categorias não pôde ser carregada, mas as categorias salvas nos produtos continuam disponíveis.",
+              catalogTitle: "Catálogo de produtos",
+              searchPlaceholder: "Buscar por produto ou categoria",
+              allCategories: "Todas as categorias",
+              allStatuses: "Todos os status",
+              active: "Ativos",
+              inactive: "Inativos",
+              allStock: "Todos os estoques",
+              inStock: "Com estoque",
+              lowStock: "Estoque baixo",
+              outOfStock: "Sem estoque",
+              clearFilters: "Limpar filtros",
+              noResults: "Nenhum produto corresponde aos filtros selecionados.",
+              visibleProducts: "Exibindo",
+              categoryHelp:
+                "Categorias já usadas nos produtos também entram automaticamente na lista.",
+            },
+    [lang]
+  );
+
   const formRef = useRef<HTMLDivElement | null>(null);
 
   const [checkingAuth, setCheckingAuth] = useState(true);
@@ -186,6 +328,15 @@ export default function ProductsCatalogPage() {
   const [sellerCategories, setSellerCategories] = useState<SellerCategoryDoc[]>([]);
   const [creatingCategory, setCreatingCategory] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState("");
+
+  const [searchQuery, setSearchQuery] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState<"all" | ProductStatus>("all");
+  const [stockFilter, setStockFilter] = useState<"all" | "available" | "low" | "out">("all");
+
+  const [categoryWarning, setCategoryWarning] = useState("");
+  const [syncingCategories, setSyncingCategories] = useState(false);
+  const categorySyncRef = useRef("");
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [name, setName] = useState("");
@@ -216,16 +367,17 @@ export default function ProductsCatalogPage() {
     return fromProfile || authUser?.uid || "";
   }, [profile?.sellerId, authUser?.uid]);
 
+  const locale = lang === "pt" ? "pt-BR" : lang === "en" ? "en-US" : "ja-JP";
+
   const yen = useCallback(
     (n: number) => {
-      const locale = lang === "pt" ? "pt-BR" : lang === "en" ? "en-US" : "ja-JP";
       return new Intl.NumberFormat(locale, {
         style: "currency",
         currency: "JPY",
         maximumFractionDigits: 0,
       }).format(Math.round(n || 0));
     },
-    [lang]
+    [locale]
   );
 
   useEffect(() => {
@@ -293,25 +445,46 @@ export default function ProductsCatalogPage() {
   useEffect(() => {
     if (!authUser || !sellerId || !profileReady || inactive) return;
 
+    setCategoryWarning("");
+
     return onSnapshot(
-      query(collection(db, "sellers", sellerId, "categories"), orderBy("name", "asc"), limit(500)),
+      query(
+        collection(db, "sellers", sellerId, "categories"),
+        orderBy("name", "asc"),
+        limit(500)
+      ),
       (snap) => {
-        const list = snap.docs.map((d) => {
-          const data = d.data();
-          return {
-            id: d.id,
-            ownerUid: String(data.ownerUid || authUser.uid),
-            name: String(data.name || ""),
-            slug: String(data.slug || d.id || ""),
-          };
-        }).filter((c) => c.name);
+        const list = snap.docs
+          .map((categoryDoc) => {
+            const data = categoryDoc.data();
+            const categoryName = normalizeCategoryLabel(data.name);
+
+            return {
+              id: categoryDoc.id,
+              ownerUid: String(data.ownerUid || authUser.uid),
+              name: categoryName,
+              slug: String(data.slug || categoryDoc.id || ""),
+            };
+          })
+          .filter((item) => item.name);
 
         setSellerCategories(list);
-        if (list.length > 0 && !category) setCategory(list[0].name);
+        setCategory((current) => current || list[0]?.name || "");
+        setCategoryWarning("");
       },
-      (err) => console.error(err)
+      (error) => {
+        console.error("[ProductsCatalog] Falha ao carregar categorias:", error);
+        setSellerCategories([]);
+        setCategoryWarning(catalogText.categoryReadWarning);
+      }
     );
-  }, [authUser, sellerId, profileReady, inactive, category]);
+  }, [
+    authUser,
+    sellerId,
+    profileReady,
+    inactive,
+    catalogText.categoryReadWarning,
+  ]);
 
   useEffect(() => {
     if (!authUser || !sellerId || !profileReady || inactive) return;
@@ -334,7 +507,8 @@ export default function ProductsCatalogPage() {
             costPrice: Number(data.costPrice ?? data.shadowCost ?? 0),
             sellPrice: Number(data.sellPrice ?? data.price ?? data.shadowSell ?? 0),
             quantity: Number(data.quantity ?? 1),
-            stockQty: Number(data.stockQty ?? 0),
+            stockQty: Math.max(0, Number(data.stockQty ?? data.stock ?? 0)),
+            lowStockThreshold: Math.max(0, Number(data.lowStockThreshold ?? 5)),
             status: (data.status === "inactive" ? "inactive" : "active") as ProductStatus,
             imageUrl: String(data.imageUrl || data.image || ""),
             extraImageUrls: Array.isArray(data.extraImageUrls) ? data.extraImageUrls.filter(Boolean) : [],
@@ -419,12 +593,17 @@ export default function ProductsCatalogPage() {
 
     const cp = costPrice === "" ? 0 : toNum(costPrice);
     const sp = sellPrice === "" ? 0 : toNum(sellPrice);
-    const qty = Math.max(1, Math.floor(toNum(quantity)));
-    const stock = Math.max(0, Math.floor(toNum(stockQty)));
+    const qtyRaw = toNum(quantity);
+    const stockRaw = toNum(stockQty);
 
     if (!name.trim()) return setErrMsg(t("products.err.invalidName"));
     if (Number.isNaN(cp) || cp < 0) return setErrMsg(lang === "ja" ? "無効な原価です。" : lang === "en" ? "Invalid cost price." : "Preço de custo inválido.");
     if (Number.isNaN(sp) || sp <= 0) return setErrMsg(lang === "ja" ? "無効な販売価格です。" : lang === "en" ? "Invalid sale price." : "Preço de venda inválido.");
+    if (Number.isNaN(qtyRaw) || qtyRaw < 1) return setErrMsg(lang === "ja" ? "販売単位は1以上で入力してください。" : lang === "en" ? "Units per sale must be at least 1." : "As unidades por venda devem ser pelo menos 1.");
+    if (Number.isNaN(stockRaw) || stockRaw < 0) return setErrMsg(lang === "ja" ? "在庫数は0以上で入力してください。" : lang === "en" ? "Stock must be zero or greater." : "O estoque deve ser zero ou maior.");
+
+    const qty = Math.floor(qtyRaw);
+    const stock = Math.floor(stockRaw);
 
     const cat = String(category || "").trim();
     if (!cat || cat === "__create__") return setErrMsg(t("products.categories.err.pick"));
@@ -455,6 +634,33 @@ export default function ProductsCatalogPage() {
 
       setUploading(false);
       if (!nextMainUrl) return setErrMsg(t("products.select.image"));
+
+      try {
+        const categoryName = normalizeCategoryLabel(cat);
+        const categorySlug = slugify(categoryName);
+
+        await setDoc(
+          doc(
+            db,
+            "sellers",
+            sellerId,
+            "categories",
+            categorySlug
+          ),
+          {
+            ownerUid: authUser.uid,
+            name: categoryName,
+            slug: categorySlug,
+            updatedAt: serverTimestamp(),
+          },
+          { merge: true }
+        );
+      } catch (categoryError) {
+        console.warn(
+          "[ProductsCatalog] Produto será salvo, mas a categoria não pôde ser sincronizada:",
+          categoryError
+        );
+      }
 
       const payload = {
         ownerUid: authUser.uid,
@@ -549,17 +755,292 @@ export default function ProductsCatalogPage() {
     setExtraPreviews([]);
   };
 
-  const categoriesForSellerSelect = useMemo(() => Array.from(new Set(sellerCategories.map((c) => c.name).filter(Boolean))), [sellerCategories]);
-  const categoriesFromProductsOwn = useMemo(() => Array.from(new Set(ownProducts.map((p) => String(p.category || "").trim()).filter(Boolean))).sort(), [ownProducts]);
-  const orderedCategoriesForOwnGrid = useMemo(() => [...categoriesForSellerSelect, ...categoriesFromProductsOwn.filter((c) => !categoriesForSellerSelect.includes(c))], [categoriesForSellerSelect, categoriesFromProductsOwn]);
+  const categoriesFromCollection = useMemo(
+    () =>
+      mergeCategoryLabels(
+        sellerCategories.map((item) => item.name)
+      ),
+    [sellerCategories]
+  );
+
+  const categoriesFromProductsOwn = useMemo(
+    () =>
+      mergeCategoryLabels(
+        ownProducts.map((product) => product.category)
+      ),
+    [ownProducts]
+  );
+
+  /*
+   * A seleção não depende apenas da subcoleção categories.
+   * Categorias legadas existentes nos documentos de produtos entram
+   * automaticamente na lista e depois são sincronizadas em background.
+   */
+  const categoriesForSellerSelect = useMemo(
+    () =>
+      mergeCategoryLabels(
+        categoriesFromCollection,
+        categoriesFromProductsOwn
+      ).sort((a, b) => a.localeCompare(b, locale)),
+    [
+      categoriesFromCollection,
+      categoriesFromProductsOwn,
+      locale,
+    ]
+  );
+
+  const missingCategoryNames = useMemo(() => {
+    const savedKeys = new Set(
+      categoriesFromCollection.map(categoryKey)
+    );
+
+    return categoriesFromProductsOwn.filter(
+      (name) => !savedKeys.has(categoryKey(name))
+    );
+  }, [
+    categoriesFromCollection,
+    categoriesFromProductsOwn,
+  ]);
+
+  const syncCategoriesFromProducts = useCallback(
+    async (showFeedback = true) => {
+      if (
+        !authUser ||
+        !sellerId ||
+        missingCategoryNames.length === 0 ||
+        syncingCategories
+      ) {
+        return;
+      }
+
+      setSyncingCategories(true);
+
+      try {
+        await Promise.all(
+          missingCategoryNames.map((rawName) => {
+            const cleanName = normalizeCategoryLabel(rawName);
+            const slug = slugify(cleanName);
+
+            return setDoc(
+              doc(
+                db,
+                "sellers",
+                sellerId,
+                "categories",
+                slug
+              ),
+              {
+                ownerUid: authUser.uid,
+                name: cleanName,
+                slug,
+                updatedAt: serverTimestamp(),
+                createdAt: serverTimestamp(),
+              },
+              { merge: true }
+            );
+          })
+        );
+
+        if (showFeedback) {
+          setSuccessMsg(catalogText.syncedCategories);
+          setErrMsg("");
+        }
+      } catch (error) {
+        console.warn(
+          "[ProductsCatalog] Falha ao sincronizar categorias legadas:",
+          error
+        );
+
+        if (showFeedback) {
+          setErrMsg(t("products.categories.err.create"));
+        }
+      } finally {
+        setSyncingCategories(false);
+      }
+    },
+    [
+      authUser,
+      sellerId,
+      missingCategoryNames,
+      syncingCategories,
+      catalogText.syncedCategories,
+      t,
+    ]
+  );
+
+  useEffect(() => {
+    if (
+      !sellerId ||
+      missingCategoryNames.length === 0
+    ) {
+      return;
+    }
+
+    const syncKey = `${sellerId}:${missingCategoryNames
+      .map(categoryKey)
+      .sort()
+      .join("|")}`;
+
+    if (categorySyncRef.current === syncKey) {
+      return;
+    }
+
+    categorySyncRef.current = syncKey;
+    void syncCategoriesFromProducts(false);
+  }, [
+    sellerId,
+    missingCategoryNames,
+    syncCategoriesFromProducts,
+  ]);
+
+  useEffect(() => {
+    if (category) return;
+
+    const firstCategory =
+      categoriesForSellerSelect[0];
+
+    if (firstCategory) {
+      setCategory(firstCategory);
+    }
+  }, [
+    category,
+    categoriesForSellerSelect,
+  ]);
+
+  const catalogStats = useMemo(
+    () => ({
+      total: ownProducts.length,
+      active: ownProducts.filter(
+        (product) =>
+          product.status === "active"
+      ).length,
+      outOfStock: ownProducts.filter(
+        (product) =>
+          product.stockQty <= 0
+      ).length,
+      categories:
+        categoriesForSellerSelect.length,
+    }),
+    [
+      ownProducts,
+      categoriesForSellerSelect.length,
+    ]
+  );
+
+  const filteredProducts = useMemo(() => {
+    const normalizedSearch =
+      searchQuery
+        .trim()
+        .toLocaleLowerCase(locale);
+
+    return ownProducts.filter(
+      (product) => {
+        if (
+          normalizedSearch &&
+          ![
+            product.name,
+            product.category,
+          ]
+            .join(" ")
+            .toLocaleLowerCase(locale)
+            .includes(normalizedSearch)
+        ) {
+          return false;
+        }
+
+        if (
+          categoryFilter !== "all" &&
+          categoryKey(product.category) !==
+            categoryKey(categoryFilter)
+        ) {
+          return false;
+        }
+
+        if (
+          statusFilter !== "all" &&
+          product.status !== statusFilter
+        ) {
+          return false;
+        }
+
+        if (
+          stockFilter === "available" &&
+          product.stockQty <= 0
+        ) {
+          return false;
+        }
+
+        if (
+          stockFilter === "low" &&
+          !(
+            product.stockQty > 0 &&
+            product.stockQty <=
+              product.lowStockThreshold
+          )
+        ) {
+          return false;
+        }
+
+        if (
+          stockFilter === "out" &&
+          product.stockQty > 0
+        ) {
+          return false;
+        }
+
+        return true;
+      }
+    );
+  }, [
+    ownProducts,
+    searchQuery,
+    categoryFilter,
+    statusFilter,
+    stockFilter,
+    locale,
+  ]);
 
   const groupedOwn = useMemo(() => {
-    const used = new Set(orderedCategoriesForOwnGrid);
-    const groups = orderedCategoriesForOwnGrid.map((cat) => ({ cat, items: ownProducts.filter((p) => p.category === cat) }));
-    const remainingCats = Array.from(new Set(ownProducts.map((p) => String(p.category || "").trim()).filter((c) => c && !used.has(c)))).sort();
-    remainingCats.forEach((cat) => groups.push({ cat, items: ownProducts.filter((p) => p.category === cat) }));
-    return groups;
-  }, [ownProducts, orderedCategoriesForOwnGrid]);
+    const groups = new Map<
+      string,
+      ProductDoc[]
+    >();
+
+    for (const product of filteredProducts) {
+      const categoryName =
+        normalizeCategoryLabel(
+          product.category
+        ) || "Sem categoria";
+
+      const current =
+        groups.get(categoryName) ?? [];
+
+      current.push(product);
+      groups.set(categoryName, current);
+    }
+
+    return Array.from(groups.entries())
+      .map(([cat, items]) => ({
+        cat,
+        items,
+      }))
+      .sort((a, b) =>
+        a.cat.localeCompare(
+          b.cat,
+          locale
+        )
+      );
+  }, [
+    filteredProducts,
+    locale,
+  ]);
+
+  const hasActiveFilters =
+    searchQuery.trim() !== "" ||
+    categoryFilter !== "all" ||
+    statusFilter !== "all" ||
+    stockFilter !== "all";
+
 
   if (checkingAuth || (authUser && !profile && !profileMissing)) {
     return (
@@ -595,124 +1076,454 @@ export default function ProductsCatalogPage() {
   }
 
   return (
-    <main className="p-4 sm:p-6 space-y-8 bg-white dark:bg-neutral-950 min-h-screen transition-colors animate-fade-in">
-      <header className="space-y-3 border-b border-neutral-200 dark:border-neutral-800 pb-6">
-        <h1 className="text-3xl font-black tracking-tight text-neutral-900 dark:text-white">{t("products.title")}</h1>
-        <p className="text-xs font-black uppercase tracking-wider text-neutral-400 dark:text-neutral-500">
-          {t("products.planLimitLine")
-            .replace("{plan}", String(plan))
-            .replace("{max}", String(maxProducts || 0))
-            .replace("{used}", String(ownCount))
-            .replace("{remain}", String(remaining))}
-        </p>
-      </header>
+    <main className="min-h-screen bg-neutral-50 text-neutral-950 transition-colors dark:bg-neutral-950 dark:text-neutral-100">
+      <div className="mx-auto w-full max-w-7xl space-y-8 p-4 sm:p-6 lg:p-8">
+        <header className="overflow-hidden rounded-[2rem] border border-neutral-200 bg-white shadow-sm dark:border-neutral-800 dark:bg-neutral-900">
+          <div className="flex flex-col gap-6 p-6 sm:flex-row sm:items-end sm:justify-between sm:p-8">
+            <div className="min-w-0">
+              <p className="text-xs font-black uppercase tracking-[0.2em] text-orange-600 dark:text-orange-300">
+                Yamada Seller
+              </p>
 
-      {(errMsg || successMsg) && (
-        <div className={`rounded-2xl border border-neutral-200 dark:border-neutral-800 px-4 py-3.5 text-xs font-black uppercase tracking-wider ${errMsg ? "border-red-200 bg-red-50 text-red-700 dark:border-red-900/30 dark:bg-red-950/20 dark:text-red-400" : "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/30 dark:bg-emerald-950/20 dark:text-emerald-400"}`}>
-          {errMsg || successMsg}
-        </div>
-      )}
+              <h1 className="mt-2 text-3xl font-black tracking-tight sm:text-4xl">
+                {t("products.title")}
+              </h1>
 
-      <section ref={formRef} className="bg-neutral-50 dark:bg-neutral-900/40 border border-neutral-200 dark:border-neutral-800 rounded-[2.5rem] p-6 space-y-6">
-        <div className="flex items-center justify-between">
-          <h2 className="text-sm font-black uppercase tracking-widest text-neutral-400 dark:text-neutral-500">
-            {editingId ? t("products.form.editOwn") : t("products.form.newOwn")}
-          </h2>
-          {editingId && (
-            <button onClick={resetForm} className="rounded-full border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-xs font-black text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition">
-              {t("products.form.cancelEdit")}
-            </button>
-          )}
-        </div>
+              <p className="mt-2 max-w-2xl text-sm font-medium leading-relaxed text-neutral-500 dark:text-neutral-400">
+                {catalogText.subtitle}
+              </p>
+            </div>
 
-        <FormFields
-          t={t}
-          lang={lang}
-          categories={categoriesForSellerSelect}
-          category={category}
-          setCategory={setCategory}
-          creatingCategory={creatingCategory || categoriesForSellerSelect.length === 0}
-          setCreatingCategory={setCreatingCategory}
-          newCategoryName={newCategoryName}
-          setNewCategoryName={setNewCategoryName}
-          onCreateCategory={() => createSellerCategory(newCategoryName)}
-          sellerHasAnyCategory={categoriesForSellerSelect.length > 0}
-          name={name}
-          setName={setName}
-          costPrice={costPrice}
-          setCostPrice={setCostPrice}
-          sellPrice={sellPrice}
-          setSellPrice={setSellPrice}
-          quantity={quantity}
-          setQuantity={setQuantity}
-          stockQty={stockQty}
-          setStockQty={setStockQty}
-          status={status}
-          setStatus={setStatus}
-          existingImageUrl={existingImageUrl}
-          existingExtraUrls={existingExtraUrls}
-          mainPreview={mainPreview}
-          extraPreviews={extraPreviews}
-          onPickMain={onPickMain}
-          onPickExtras={onPickExtras}
-          removeExistingExtra={removeExistingExtra}
-          clearSelectedExtras={clearSelectedExtras}
-        />
+            <div className="w-full rounded-2xl border border-neutral-200 bg-neutral-50 p-4 dark:border-neutral-700 dark:bg-neutral-950/50 sm:max-w-sm">
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-xs font-black uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
+                  {String(plan).toUpperCase()}
+                </span>
 
-        <div className="flex items-center justify-between gap-4 pt-4 border-t border-neutral-200 dark:border-neutral-800">
-          <span className="text-xs font-bold text-neutral-400">
-            {t("products.limitLine").replace("{used}", String(ownCount)).replace("{max}", String(maxProducts || 0)).replace("{remain}", String(remaining))}
-          </span>
-          <button
-            onClick={handleSave}
-            disabled={saving || uploading}
-            className="rounded-2xl bg-black dark:bg-white text-white dark:text-black text-xs font-black px-6 py-3.5 hover:opacity-90 shadow-md transition disabled:opacity-40"
-          >
-            {saving || uploading ? t("common.saving") : editingId ? t("products.form.update") : t("products.form.add")}
-          </button>
-        </div>
-      </section>
+                <span className="text-sm font-black">
+                  {maxProducts > 0
+                    ? `${ownCount}/${maxProducts}`
+                    : ownCount}
+                </span>
+              </div>
 
-      <section className="space-y-8">
-        <div className="flex items-center justify-between border-b border-neutral-200 dark:border-neutral-800 pb-2">
-          <h2 className="text-sm font-black uppercase tracking-widest text-neutral-400 dark:text-neutral-500">{t("products.section.own")}</h2>
-          <span className="text-xs font-bold text-neutral-400">{listening ? t("products.updating") : t("products.total").replace("{n}", String(ownProducts.length))}</span>
-        </div>
-
-        {ownProducts.length === 0 ? (
-          <div className="rounded-[2rem] border border-neutral-200 dark:border-neutral-800 p-8 text-center bg-neutral-50/50 dark:bg-neutral-900/20">
-            <p className="text-sm font-black text-neutral-700 dark:text-neutral-300">{t("products.empty.title")}</p>
-            <p className="text-xs text-neutral-400 mt-1">{t("products.empty.own")}</p>
-          </div>
-        ) : (
-          groupedOwn.map(({ cat, items }) => items.length > 0 && (
-            <div key={cat} className="space-y-4 animate-fade-in">
-              <h3 className="text-xs font-black uppercase tracking-wider text-neutral-400 bg-neutral-100 dark:bg-neutral-900/60 px-3 py-1 rounded-md inline-block">{cat}</h3>
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                {items.map((p) => (
-                  <ProductCard
-                    key={p.id}
-                    product={p}
-                    canManage={true}
-                    onEdit={handleEditOwn}
-                    onDelete={handleDeleteOwn}
-                    onToggleStatus={handleToggleStatusOwn}
-                    badgeLabelActive={t("products.badge.active")}
-                    badgeLabelInactive={t("products.badge.inactive")}
-                    btnEdit={t("products.btn.edit")}
-                    btnDelete={t("products.btn.delete")}
-                    btnActivate={t("products.btn.active") || t("products.btn.activate")}
-                    btnDeactivate={t("products.btn.deactivate")}
-                    yen={yen}
-                    lang={lang}
+              {maxProducts > 0 && (
+                <div className="mt-3 h-2 overflow-hidden rounded-full bg-neutral-200 dark:bg-neutral-800">
+                  <div
+                    className="h-full rounded-full bg-orange-500 transition-all"
+                    style={{
+                      width: `${Math.min(
+                        100,
+                        Math.max(
+                          0,
+                          (ownCount / maxProducts) * 100
+                        )
+                      )}%`,
+                    }}
                   />
+                </div>
+              )}
+
+              <p className="mt-3 text-xs font-bold text-neutral-500 dark:text-neutral-400">
+                {t("products.planLimitLine")
+                  .replace("{plan}", String(plan))
+                  .replace("{max}", String(maxProducts || 0))
+                  .replace("{used}", String(ownCount))
+                  .replace("{remain}", String(remaining))}
+              </p>
+            </div>
+          </div>
+        </header>
+
+        {(errMsg || successMsg) && (
+          <div
+            role="status"
+            className={`rounded-2xl border px-4 py-3.5 text-sm font-bold ${
+              errMsg
+                ? "border-red-200 bg-red-50 text-red-700 dark:border-red-900/40 dark:bg-red-950/20 dark:text-red-300"
+                : "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-950/20 dark:text-emerald-300"
+            }`}
+          >
+            {errMsg || successMsg}
+          </div>
+        )}
+
+        {categoryWarning && (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3.5 text-sm font-bold text-amber-800 dark:border-amber-900/40 dark:bg-amber-950/20 dark:text-amber-200">
+            {categoryWarning}
+          </div>
+        )}
+
+        <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <CatalogMetric
+            label={catalogText.statsTotal}
+            value={catalogStats.total}
+            icon="📦"
+          />
+
+          <CatalogMetric
+            label={catalogText.statsActive}
+            value={catalogStats.active}
+            icon="✅"
+          />
+
+          <CatalogMetric
+            label={catalogText.statsOut}
+            value={catalogStats.outOfStock}
+            icon="⚠️"
+            alert={catalogStats.outOfStock > 0}
+          />
+
+          <CatalogMetric
+            label={catalogText.statsCategories}
+            value={catalogStats.categories}
+            icon="🗂️"
+          />
+        </section>
+
+        {missingCategoryNames.length > 0 && (
+          <section className="flex flex-col gap-4 rounded-3xl border border-blue-200 bg-blue-50 p-5 dark:border-blue-900/50 dark:bg-blue-950/20 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className="font-black text-blue-950 dark:text-blue-100">
+                {catalogText.legacyTitle}
+              </h2>
+
+              <p className="mt-1 text-sm text-blue-800 dark:text-blue-200">
+                {catalogText.legacyBody}
+              </p>
+
+              <div className="mt-3 flex flex-wrap gap-2">
+                {missingCategoryNames.map((item) => (
+                  <span
+                    key={item}
+                    className="rounded-full bg-white px-3 py-1 text-xs font-black text-blue-800 shadow-sm dark:bg-blue-950/60 dark:text-blue-100"
+                  >
+                    {item}
+                  </span>
                 ))}
               </div>
             </div>
-          ))
+
+            <button
+              type="button"
+              onClick={() => void syncCategoriesFromProducts(true)}
+              disabled={syncingCategories}
+              className="inline-flex min-h-11 shrink-0 items-center justify-center rounded-xl bg-blue-900 px-5 py-2.5 text-sm font-black text-white transition hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-blue-200 dark:text-blue-950 dark:hover:bg-blue-100"
+            >
+              {syncingCategories
+                ? catalogText.syncingCategories
+                : catalogText.syncCategories}
+            </button>
+          </section>
         )}
-      </section>
+
+        <section
+          ref={formRef}
+          className="space-y-6 rounded-[2rem] border border-neutral-200 bg-white p-5 shadow-sm dark:border-neutral-800 dark:bg-neutral-900 sm:p-7"
+        >
+          <div className="flex flex-col gap-3 border-b border-neutral-200 pb-5 dark:border-neutral-800 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className="text-lg font-black">
+                {editingId
+                  ? t("products.form.editOwn")
+                  : t("products.form.newOwn")}
+              </h2>
+
+              <p className="mt-1 text-xs font-medium text-neutral-500 dark:text-neutral-400">
+                {catalogText.categoryHelp}
+              </p>
+            </div>
+
+            {editingId && (
+              <button
+                type="button"
+                onClick={resetForm}
+                className="rounded-xl border border-neutral-300 px-4 py-2 text-xs font-black text-neutral-700 transition hover:bg-neutral-100 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+              >
+                {t("products.form.cancelEdit")}
+              </button>
+            )}
+          </div>
+
+          <FormFields
+            t={t}
+            lang={lang}
+            categories={categoriesForSellerSelect}
+            category={category}
+            setCategory={setCategory}
+            creatingCategory={
+              creatingCategory ||
+              categoriesForSellerSelect.length === 0
+            }
+            setCreatingCategory={setCreatingCategory}
+            newCategoryName={newCategoryName}
+            setNewCategoryName={setNewCategoryName}
+            onCreateCategory={() =>
+              createSellerCategory(newCategoryName)
+            }
+            sellerHasAnyCategory={
+              categoriesForSellerSelect.length > 0
+            }
+            name={name}
+            setName={setName}
+            costPrice={costPrice}
+            setCostPrice={setCostPrice}
+            sellPrice={sellPrice}
+            setSellPrice={setSellPrice}
+            quantity={quantity}
+            setQuantity={setQuantity}
+            stockQty={stockQty}
+            setStockQty={setStockQty}
+            status={status}
+            setStatus={setStatus}
+            existingImageUrl={existingImageUrl}
+            existingExtraUrls={existingExtraUrls}
+            mainPreview={mainPreview}
+            extraPreviews={extraPreviews}
+            onPickMain={onPickMain}
+            onPickExtras={onPickExtras}
+            removeExistingExtra={removeExistingExtra}
+            clearSelectedExtras={clearSelectedExtras}
+          />
+
+          <div className="flex flex-col gap-4 border-t border-neutral-200 pt-5 dark:border-neutral-800 sm:flex-row sm:items-center sm:justify-between">
+            <span className="text-xs font-bold text-neutral-400">
+              {t("products.limitLine")
+                .replace("{used}", String(ownCount))
+                .replace("{max}", String(maxProducts || 0))
+                .replace("{remain}", String(remaining))}
+            </span>
+
+            <button
+              type="button"
+              onClick={handleSave}
+              disabled={saving || uploading}
+              className="inline-flex min-h-12 items-center justify-center rounded-xl bg-black px-7 py-3 text-sm font-black text-white shadow-md transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40 dark:bg-white dark:text-black"
+            >
+              {saving || uploading
+                ? t("common.saving")
+                : editingId
+                  ? t("products.form.update")
+                  : t("products.form.add")}
+            </button>
+          </div>
+        </section>
+
+        <section className="space-y-5">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <h2 className="text-2xl font-black">
+                {catalogText.catalogTitle}
+              </h2>
+
+              <p className="mt-1 text-sm font-medium text-neutral-500 dark:text-neutral-400">
+                {listening
+                  ? t("products.updating")
+                  : `${catalogText.visibleProducts}: ${filteredProducts.length}/${ownProducts.length}`}
+              </p>
+            </div>
+          </div>
+
+          <div className="grid gap-3 rounded-3xl border border-neutral-200 bg-white p-4 shadow-sm dark:border-neutral-800 dark:bg-neutral-900 md:grid-cols-2 xl:grid-cols-[minmax(240px,1fr)_220px_180px_180px_auto]">
+            <input
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder={catalogText.searchPlaceholder}
+              className="min-h-11 rounded-xl border border-neutral-200 bg-neutral-50 px-4 text-sm font-medium outline-none transition focus:border-black dark:border-neutral-700 dark:bg-neutral-950 dark:focus:border-white"
+            />
+
+            <select
+              value={categoryFilter}
+              onChange={(event) => setCategoryFilter(event.target.value)}
+              className="min-h-11 rounded-xl border border-neutral-200 bg-neutral-50 px-3 text-sm font-bold outline-none dark:border-neutral-700 dark:bg-neutral-950"
+            >
+              <option value="all">
+                {catalogText.allCategories}
+              </option>
+
+              {categoriesForSellerSelect.map((item) => (
+                <option key={item} value={item}>
+                  {item}
+                </option>
+              ))}
+            </select>
+
+            <select
+              value={statusFilter}
+              onChange={(event) =>
+                setStatusFilter(
+                  event.target.value as "all" | ProductStatus
+                )
+              }
+              className="min-h-11 rounded-xl border border-neutral-200 bg-neutral-50 px-3 text-sm font-bold outline-none dark:border-neutral-700 dark:bg-neutral-950"
+            >
+              <option value="all">
+                {catalogText.allStatuses}
+              </option>
+              <option value="active">
+                {catalogText.active}
+              </option>
+              <option value="inactive">
+                {catalogText.inactive}
+              </option>
+            </select>
+
+            <select
+              value={stockFilter}
+              onChange={(event) =>
+                setStockFilter(
+                  event.target.value as
+                    | "all"
+                    | "available"
+                    | "low"
+                    | "out"
+                )
+              }
+              className="min-h-11 rounded-xl border border-neutral-200 bg-neutral-50 px-3 text-sm font-bold outline-none dark:border-neutral-700 dark:bg-neutral-950"
+            >
+              <option value="all">
+                {catalogText.allStock}
+              </option>
+              <option value="available">
+                {catalogText.inStock}
+              </option>
+              <option value="low">
+                {catalogText.lowStock}
+              </option>
+              <option value="out">
+                {catalogText.outOfStock}
+              </option>
+            </select>
+
+            <button
+              type="button"
+              onClick={() => {
+                setSearchQuery("");
+                setCategoryFilter("all");
+                setStatusFilter("all");
+                setStockFilter("all");
+              }}
+              disabled={!hasActiveFilters}
+              className="min-h-11 rounded-xl border border-neutral-200 px-4 text-sm font-black transition hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-40 dark:border-neutral-700 dark:hover:bg-neutral-800"
+            >
+              {catalogText.clearFilters}
+            </button>
+          </div>
+
+          {ownProducts.length === 0 ? (
+            <div className="rounded-[2rem] border border-dashed border-neutral-300 bg-white p-10 text-center dark:border-neutral-700 dark:bg-neutral-900">
+              <p className="text-sm font-black text-neutral-700 dark:text-neutral-300">
+                {t("products.empty.title")}
+              </p>
+
+              <p className="mt-1 text-xs text-neutral-400">
+                {t("products.empty.own")}
+              </p>
+            </div>
+          ) : filteredProducts.length === 0 ? (
+            <div className="rounded-[2rem] border border-dashed border-neutral-300 bg-white p-10 text-center dark:border-neutral-700 dark:bg-neutral-900">
+              <p className="text-sm font-black text-neutral-700 dark:text-neutral-300">
+                {catalogText.noResults}
+              </p>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setSearchQuery("");
+                  setCategoryFilter("all");
+                  setStatusFilter("all");
+                  setStockFilter("all");
+                }}
+                className="mt-4 rounded-xl border border-neutral-200 px-4 py-2 text-xs font-black dark:border-neutral-700"
+              >
+                {catalogText.clearFilters}
+              </button>
+            </div>
+          ) : (
+            groupedOwn.map(({ cat, items }) => (
+              <div
+                key={cat}
+                className="space-y-4 animate-fade-in"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <h3 className="inline-flex rounded-full bg-neutral-200 px-3 py-1 text-xs font-black uppercase tracking-wider text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200">
+                    {cat}
+                  </h3>
+
+                  <span className="text-xs font-bold text-neutral-400">
+                    {items.length}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                  {items.map((product) => (
+                    <ProductCard
+                      key={product.id}
+                      product={product}
+                      canManage
+                      onEdit={handleEditOwn}
+                      onDelete={handleDeleteOwn}
+                      onToggleStatus={handleToggleStatusOwn}
+                      badgeLabelActive={t("products.badge.active")}
+                      badgeLabelInactive={t("products.badge.inactive")}
+                      btnEdit={t("products.btn.edit")}
+                      btnDelete={t("products.btn.delete")}
+                      btnActivate={
+                        t("products.btn.active") ||
+                        t("products.btn.activate")
+                      }
+                      btnDeactivate={t("products.btn.deactivate")}
+                      yen={yen}
+                      lang={lang}
+                    />
+                  ))}
+                </div>
+              </div>
+            ))
+          )}
+        </section>
+      </div>
     </main>
+  );
+}
+
+function CatalogMetric({
+  label,
+  value,
+  icon,
+  alert = false,
+}: {
+  label: string;
+  value: number;
+  icon: string;
+  alert?: boolean;
+}) {
+  return (
+    <div
+      className={`rounded-2xl border bg-white p-4 shadow-sm dark:bg-neutral-900 ${
+        alert
+          ? "border-red-200 dark:border-red-900/50"
+          : "border-neutral-200 dark:border-neutral-800"
+      }`}
+    >
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-xl">{icon}</span>
+
+        <span
+          className={`text-2xl font-black ${
+            alert
+              ? "text-red-600 dark:text-red-300"
+              : "text-neutral-950 dark:text-white"
+          }`}
+        >
+          {value}
+        </span>
+      </div>
+
+      <p className="mt-3 text-xs font-black uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
+        {label}
+      </p>
+    </div>
   );
 }
 
@@ -729,65 +1540,194 @@ function ProductCard({
   btnActivate,
   btnDeactivate,
   yen,
-  lang
+  lang,
 }: ProductCardProps) {
   const [currentIndex, setCurrentIndex] = useState(0);
-  const allImages = useMemo(() => [product.imageUrl, ...(product.extraImageUrls || [])].filter(Boolean), [product.imageUrl, product.extraImageUrls]);
-  const mainImage = allImages[currentIndex] || "";
+
+  const allImages = useMemo(
+    () =>
+      [
+        product.imageUrl,
+        ...(product.extraImageUrls || []),
+      ].filter(Boolean),
+    [
+      product.imageUrl,
+      product.extraImageUrls,
+    ]
+  );
+
+  const mainImage =
+    allImages[currentIndex] || "";
+
+  const lowStock =
+    product.stockQty > 0 &&
+    product.stockQty <=
+      product.lowStockThreshold;
+
+  const stockClass =
+    product.stockQty <= 0
+      ? "border-red-200 bg-red-50 text-red-700 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-300"
+      : lowStock
+        ? "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-300"
+        : "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/50 dark:bg-emerald-950/30 dark:text-emerald-300";
 
   return (
-    <div className="border border-neutral-200 dark:border-neutral-800 rounded-3xl bg-white dark:bg-neutral-900 overflow-hidden flex flex-col hover:shadow-xl transition-all duration-300 animate-fade-in">
-      <div className="w-full bg-neutral-100 dark:bg-neutral-800 relative aspect-[4/3] overflow-hidden group">
-        {mainImage ? (
-          <img src={mainImage} alt={product.name} className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105" />
-        ) : (
-          <div className="h-full w-full flex items-center justify-center text-xs text-neutral-400 font-bold">{lang === "ja" ? "画像なし" : lang === "en" ? "No image" : "Sem imagem"}</div>
-        )}
-        <div className="absolute top-3 left-3">
-          <span className={`text-[10px] font-black uppercase tracking-wider px-2.5 py-1 rounded-full border border-neutral-200/20 backdrop-blur-md ${product.status === "active" ? "bg-emerald-500 text-white" : "bg-neutral-500 text-white"}`}>
-            {product.status === "active" ? badgeLabelActive : badgeLabelInactive}
-          </span>
-        </div>
-      </div>
+    <article className="flex overflow-hidden rounded-3xl border border-neutral-200 bg-white shadow-sm transition-all duration-300 hover:-translate-y-0.5 hover:shadow-xl dark:border-neutral-800 dark:bg-neutral-900">
+      <div className="flex w-full flex-col">
+        <div className="group relative aspect-[4/3] w-full overflow-hidden bg-neutral-100 dark:bg-neutral-800">
+          {mainImage ? (
+            <img
+              src={mainImage}
+              alt={product.name}
+              className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
+            />
+          ) : (
+            <div className="flex h-full w-full items-center justify-center text-xs font-bold text-neutral-400">
+              {lang === "ja"
+                ? "画像なし"
+                : lang === "en"
+                  ? "No image"
+                  : "Sem imagem"}
+            </div>
+          )}
 
-      {allImages.length > 1 && (
-        <div className="flex gap-1.5 px-3 pt-3 overflow-x-auto scrollbar-none">
-          {allImages.map((img, idx) => (
-            <button
-              key={`${product.id}-${idx}`}
-              type="button"
-              onClick={() => setCurrentIndex(idx)}
-              className={`h-10 w-10 rounded-xl overflow-hidden flex-shrink-0 border-2 transition ${idx === currentIndex ? "border-black dark:border-white scale-95" : "border-transparent opacity-60 hover:opacity-100"}`}
+          <div className="absolute inset-x-3 top-3 flex items-start justify-between gap-2">
+            <span
+              className={`rounded-full border border-white/20 px-2.5 py-1 text-[10px] font-black uppercase tracking-wider text-white backdrop-blur-md ${
+                product.status === "active"
+                  ? "bg-emerald-600/90"
+                  : "bg-neutral-700/90"
+              }`}
             >
-              <img src={img} alt="mini" className="h-full w-full object-cover" />
+              {product.status === "active"
+                ? badgeLabelActive
+                : badgeLabelInactive}
+            </span>
+
+            <span className="max-w-[65%] truncate rounded-full bg-black/65 px-2.5 py-1 text-[10px] font-black uppercase tracking-wide text-white backdrop-blur-md">
+              {product.category}
+            </span>
+          </div>
+        </div>
+
+        {allImages.length > 1 && (
+          <div className="flex gap-1.5 overflow-x-auto px-3 pt-3 scrollbar-none">
+            {allImages.map(
+              (image, index) => (
+                <button
+                  key={`${product.id}-${index}`}
+                  type="button"
+                  onClick={() =>
+                    setCurrentIndex(index)
+                  }
+                  className={`h-10 w-10 flex-shrink-0 overflow-hidden rounded-xl border-2 transition ${
+                    index === currentIndex
+                      ? "scale-95 border-black dark:border-white"
+                      : "border-transparent opacity-60 hover:opacity-100"
+                  }`}
+                >
+                  <img
+                    src={image}
+                    alt=""
+                    className="h-full w-full object-cover"
+                  />
+                </button>
+              )
+            )}
+          </div>
+        )}
+
+        <div className="flex flex-1 flex-col gap-3 p-4">
+          <div className="flex items-start justify-between gap-3">
+            <h4 className="min-w-0 flex-1 break-words text-sm font-black leading-snug tracking-tight text-neutral-900 dark:text-white">
+              {product.name}
+            </h4>
+
+            <p className="shrink-0 text-base font-black text-neutral-950 dark:text-white">
+              {yen(product.sellPrice)}
+            </p>
+          </div>
+
+          <div className={`rounded-xl border px-3 py-2 text-xs font-black ${stockClass}`}>
+            {lang === "ja"
+              ? "在庫: "
+              : lang === "en"
+                ? "Stock: "
+                : "Estoque: "}
+            {product.stockQty}
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 text-[11px] font-bold text-neutral-500 dark:text-neutral-400">
+            <div className="rounded-xl bg-neutral-100 px-3 py-2 dark:bg-neutral-800">
+              <span className="block text-[9px] uppercase tracking-wider text-neutral-400">
+                {lang === "ja"
+                  ? "原価"
+                  : lang === "en"
+                    ? "Cost"
+                    : "Custo"}
+              </span>
+
+              <span className="mt-1 block text-neutral-800 dark:text-neutral-200">
+                {yen(product.costPrice)}
+              </span>
+            </div>
+
+            <div className="rounded-xl bg-neutral-100 px-3 py-2 dark:bg-neutral-800">
+              <span className="block text-[9px] uppercase tracking-wider text-neutral-400">
+                {lang === "ja"
+                  ? "販売単位"
+                  : lang === "en"
+                    ? "Units/sale"
+                    : "Unid./venda"}
+              </span>
+
+              <span className="mt-1 block text-neutral-800 dark:text-neutral-200">
+                {product.quantity}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {canManage && (
+          <div className="grid grid-cols-3 border-t border-neutral-100 dark:border-neutral-800">
+            <button
+              type="button"
+              onClick={() => onEdit(product)}
+              className="min-h-11 px-2 text-xs font-black text-neutral-900 transition hover:bg-neutral-50 dark:text-white dark:hover:bg-neutral-800"
+            >
+              {btnEdit}
             </button>
-          ))}
-        </div>
-      )}
 
-      <div className="p-4 flex-1 flex flex-col gap-2">
-        <h4 className="text-sm font-black text-neutral-900 dark:text-white tracking-tight line-clamp-2 min-h-[40px]">{product.name}</h4>
-        <div className="flex items-center justify-between border-t border-neutral-100 dark:border-neutral-800 pt-3">
-          <p className="text-xs font-bold text-neutral-500">{lang === "ja" ? "販売: " : lang === "en" ? "Sale: " : "Venda: "}<span className="text-sm font-black text-neutral-900 dark:text-white">{yen(product.sellPrice)}</span></p>
-          <span className={`text-xs font-black ${product.stockQty <= 0 ? "text-red-500" : product.stockQty <= 5 ? "text-amber-500" : "text-emerald-500"}`}>
-            {lang === "ja" ? "在庫: " : lang === "en" ? "Stock: " : "Estoque: "}{product.stockQty}
-          </span>
-        </div>
-        <p className="text-[11px] font-medium text-neutral-400 dark:text-neutral-500">
-          {lang === "ja" ? "原価: " : lang === "en" ? "Cost: " : "Custo: "}{yen(product.costPrice)} • {lang === "ja" ? "販売単位: " : lang === "en" ? "Unit/sale: " : "Unid/venda: "}{product.quantity}
-        </p>
+            <button
+              type="button"
+              onClick={() =>
+                onToggleStatus(
+                  product.id,
+                  product.status === "active"
+                    ? "inactive"
+                    : "active"
+                )
+              }
+              className="min-h-11 border-x border-neutral-100 px-2 text-xs font-black text-neutral-600 transition hover:bg-neutral-50 dark:border-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-800"
+            >
+              {product.status === "active"
+                ? btnDeactivate
+                : btnActivate}
+            </button>
+
+            <button
+              type="button"
+              onClick={() =>
+                onDelete(product.id)
+              }
+              className="min-h-11 px-2 text-xs font-black text-red-500 transition hover:bg-red-50 dark:hover:bg-red-950/20"
+            >
+              {btnDelete}
+            </button>
+          </div>
+        )}
       </div>
-
-      {canManage && (
-        <div className="px-4 pb-4 pt-2 flex items-center justify-between gap-4 border-t border-neutral-100 dark:border-neutral-800/40">
-          <button onClick={() => onEdit(product)} className="text-xs font-black text-neutral-900 dark:text-white underline">{btnEdit}</button>
-          <button onClick={() => onToggleStatus(product.id, product.status === "active" ? "inactive" : "active")} className="text-xs font-black text-neutral-600 dark:text-neutral-400 underline">
-            {product.status === "active" ? btnDeactivate : btnActivate}
-          </button>
-          <button onClick={() => onDelete(product.id)} className="text-xs font-black text-red-500 underline">{btnDelete}</button>
-        </div>
-      )}
-    </div>
+    </article>
   );
 }
 

@@ -21,11 +21,17 @@ import {
   type DocumentReference,
 } from "firebase/firestore";
 import { useI18n } from "@/app/lib/i18n";
+import {
+  ORDER_STATUS,
+  getOrderStatusLabel,
+  isOpenOrderStatus,
+  normalizeOrderStatus,
+  type OrderStatus,
+} from "@/app/lib/order-status";
 
 // --- 📝 Interfaces de Tipagem Estrita ---
 
 type EventStatus = "active" | "closed" | "cancelled";
-type OrderStatus = "pending" | "confirmed" | "delivered" | "cancelled";
 
 type UserDoc = {
   role?: "seller" | "admin";
@@ -120,11 +126,7 @@ function normEventStatus(s: any): EventStatus {
   return "active";
 }
 
-function normOrderStatus(s: any): OrderStatus {
-  const st = String(s || "pending");
-  if (st === "pending" || st === "confirmed" || st === "delivered" || st === "cancelled") return st;
-  return "pending";
-}
+
 
 function normalizeStringArray(value: any): string[] {
   return Array.isArray(value)
@@ -423,7 +425,7 @@ const [messageSummaries, setMessageSummaries] = useState<Record<string, MessageS
             quantities: (data.quantities || {}) as Record<string, number>,
             totalItems: Number(data.totalItems || 0),
             totalAmount: Number(data.totalAmount || 0),
-            status: data.status || "pending",
+            status: normalizeOrderStatus(data.status),
             channel: data.channel || "other",
             deliveryDate: data.deliveryDate || "",
             deliveryMode: data.deliveryMode || "none",
@@ -444,20 +446,19 @@ const [messageSummaries, setMessageSummaries] = useState<Record<string, MessageS
   }, [eventRef, t]);
 
   const validOrders = useMemo(() => {
-  return orders.filter((o) => normOrderStatus(o.status) !== "cancelled");
+  return orders.filter((o) => normalizeOrderStatus(o.status) !== "cancelled");
 }, [orders]);
 
 const totalOrders = validOrders.length;
 
 const pendingCount = useMemo(() => {
-  return validOrders.filter((o) => {
-    const st = normOrderStatus(o.status);
-    return st === "pending" || st === "confirmed";
-  }).length;
+  return validOrders.filter((o) =>
+    isOpenOrderStatus(o.status)
+  ).length;
 }, [validOrders]);
 
 const deliveredCount = useMemo(() => {
-  return validOrders.filter((o) => normOrderStatus(o.status) === "delivered").length;
+  return validOrders.filter((o) => normalizeOrderStatus(o.status) === "delivered").length;
 }, [validOrders]);
 
 const ordersRevenueSum = useMemo(() => {
@@ -599,8 +600,8 @@ return validOrders.filter((o) => o.deliveryDate === filterDate);
       const deliveryOrders = useMemo(() => {
   return orders.filter((o) => {
     const mode = String(o.deliveryMode || "").toLowerCase();
-    const st = normOrderStatus(o.status);
-    return mode === "delivery" && st !== "delivered" && st !== "cancelled";
+    const st = normalizeOrderStatus(o.status);
+    return mode === "delivery" && isOpenOrderStatus(st);
   });
 }, [orders]);
 
@@ -610,6 +611,8 @@ return validOrders.filter((o) => o.deliveryDate === filterDate);
       await updateDoc(doc(eventRef, "orders", orderId), {
         status: nextStatus,
         deliveredAt: nextStatus === "delivered" ? serverTimestamp() : null,
+        sellerUnread: false,
+        sellerReadAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
     } catch {
@@ -634,14 +637,13 @@ return validOrders.filter((o) => o.deliveryDate === filterDate);
   }, [eventRef, isActive, ordersRevenueSum, t, yen]);
 
   const pendingOrdersList = useMemo(() => {
-  return orders.filter((o) => {
-    const st = normOrderStatus(o.status);
-    return st === "pending" || st === "confirmed";
-  });
+  return orders.filter((o) =>
+    isOpenOrderStatus(o.status)
+  );
 }, [orders]);
 
 const deliveredOrdersList = useMemo(() => {
-  return orders.filter((o) => normOrderStatus(o.status) === "delivered");
+  return orders.filter((o) => normalizeOrderStatus(o.status) === "delivered");
 }, [orders]);
 
   const totalUnreadMessages = useMemo(() => {
@@ -1244,10 +1246,17 @@ function OrderGroup({
                   className="border border-neutral-200 dark:border-neutral-800 rounded-xl px-3 py-1.5 text-xs bg-white dark:bg-neutral-900 font-bold text-neutral-900 dark:text-white"
                   disabled={eventStatus === "cancelled"}
                 >
-                  <option value="pending">{t("eventPanel.orderStatus.pending")}</option>
-                  <option value="confirmed">{t("eventPanel.orderStatus.confirmed")}</option>
-                  <option value="delivered">{t("eventPanel.orderStatus.delivered")}</option>
-                  <option value="cancelled">{t("eventPanel.orderStatus.cancelled")}</option>
+                  {ORDER_STATUS.map((statusOption) => (
+                    <option
+                      key={statusOption}
+                      value={statusOption}
+                    >
+                      {getOrderStatusLabel(
+                        statusOption,
+                        lang,
+                      )}
+                    </option>
+                  ))}
                 </select>
               </div>
             </div>

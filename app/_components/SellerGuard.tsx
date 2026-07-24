@@ -8,28 +8,42 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { usePathname, useRouter } from "next/navigation";
-
-import { auth, db } from "@/app/lib/firebase";
-import { ensureUserProfile } from "@/app/lib/ensureUserProfile";
-import { useI18n } from "@/app/lib/i18n";
-
+import {
+  usePathname,
+  useRouter,
+} from "next/navigation";
 import {
   onAuthStateChanged,
   signOut,
   type User,
 } from "firebase/auth";
-
-import {
-  doc,
-  getDoc,
-  type Timestamp,
+import type {
+  Timestamp,
 } from "firebase/firestore";
 
-export type PlanId =
-  | "starter"
-  | "pro"
-  | "business";
+import {
+  auth,
+} from "@/app/lib/firebase";
+import {
+  ensureUserProfile,
+  type EnsureResult,
+} from "@/app/lib/ensureUserProfile";
+import {
+  normalizePlanId,
+  type PlanId,
+} from "@/app/lib/plan-catalog";
+import {
+  normalizeSellerRegionalProfile,
+} from "@/app/lib/seller-regional-profile";
+import {
+  useI18n,
+} from "@/app/lib/i18n";
+import type {
+  OperatingCountry,
+  RegionalLocale,
+  SupportedCurrency,
+  SupportedLanguage,
+} from "@/app/types/regional";
 
 export type SubscriptionStatus =
   | "none"
@@ -48,6 +62,14 @@ export type UserDoc = {
   currentPeriodEnd?: Timestamp;
   requestedPlanAt?: Timestamp;
   suspended?: boolean;
+
+  storeName?: string;
+  onboardingComplete?: boolean;
+  operatingCountry?: OperatingCountry | null;
+  currency?: SupportedCurrency | null;
+  regionalLocale?: RegionalLocale | null;
+  timeZone?: string;
+  defaultLanguage?: SupportedLanguage;
 };
 
 type SellerGuardChildrenArgs = {
@@ -62,69 +84,31 @@ type SellerGuardProps = {
   requireSellerIds?: boolean;
 };
 
-/**
- * Rotas da área do vendedor que precisam continuar acessíveis
- * mesmo quando o plano estiver vencido ou ainda não estiver ativo.
- */
-const PLAN_FREE_ROUTES = [
-  "/seller/rent",
-] as const;
+const RENT_PATH = "/seller/rent";
+const ONBOARDING_PATH =
+  "/seller/onboarding";
 
-function normalizePathname(pathname: string | null): string {
+function normalizePathname(
+  pathname: string | null,
+): string {
   if (!pathname) return "";
 
-  if (pathname.length > 1 && pathname.endsWith("/")) {
-    return pathname.slice(0, -1);
-  }
-
-  return pathname;
+  return pathname.length > 1 &&
+    pathname.endsWith("/")
+    ? pathname.slice(0, -1)
+    : pathname;
 }
 
-function isPlanFreeRoute(pathname: string): boolean {
-  return PLAN_FREE_ROUTES.some(
-    (route) =>
-      pathname === route ||
-      pathname.startsWith(`${route}/`)
-  );
-}
-
-function timestampToDate(value?: Timestamp): Date | null {
-  if (!value) return null;
-
-  try {
-    const date = value.toDate();
-
-    if (Number.isNaN(date.getTime())) {
-      return null;
-    }
-
-    return date;
-  } catch {
-    return null;
-  }
-}
-
-function isSubscriptionPeriodValid(
-  periodEnd?: Timestamp
+function isInsideRoute(
+  pathname: string,
+  route: string,
 ): boolean {
-  /*
-   * Mantém compatibilidade com contas antigas que ainda não possuem
-   * currentPeriodEnd. Nesse caso, subscriptionStatus === "active"
-   * continua sendo considerado válido.
-   */
-  if (!periodEnd) return true;
-
-  const endDate = timestampToDate(periodEnd);
-
-  if (!endDate) {
-    return false;
-  }
-
-  return endDate.getTime() > Date.now();
+  return pathname === route ||
+    pathname.startsWith(`${route}/`);
 }
 
 function normalizeSubscriptionStatus(
-  value: unknown
+  value: unknown,
 ): SubscriptionStatus {
   switch (value) {
     case "pending":
@@ -139,386 +123,354 @@ function normalizeSubscriptionStatus(
   }
 }
 
-function normalizePlan(value: unknown): PlanId {
-  switch (value) {
-    case "pro":
-    case "business":
-    case "starter":
-      return value;
+function timestampToDate(
+  value: unknown,
+): Date | null {
+  if (!value) return null;
 
-    default:
-      return "starter";
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime())
+      ? null
+      : value;
   }
+
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    "toDate" in value
+  ) {
+    const toDate = (
+      value as {
+        toDate?: unknown;
+      }
+    ).toDate;
+
+    if (typeof toDate === "function") {
+      const date = toDate.call(value);
+
+      return date instanceof Date &&
+        !Number.isNaN(date.getTime())
+        ? date
+        : null;
+    }
+  }
+
+  return null;
+}
+
+function isSubscriptionPeriodValid(
+  periodEnd: unknown,
+): boolean {
+  if (!periodEnd) return true;
+
+  const endDate =
+    timestampToDate(periodEnd);
+
+  return Boolean(
+    endDate &&
+      endDate.getTime() > Date.now(),
+  );
+}
+
+function buildProfile(
+  result: EnsureResult,
+): UserDoc {
+  const user = result.userDoc;
+  const seller = result.sellerDoc;
+
+  const role =
+    user.role === "admin"
+      ? "admin"
+      : "seller";
+
+  if (role === "admin") {
+    return {
+      role,
+      active: user.active !== false,
+      suspended: user.suspended === true,
+      plan: "starter",
+      subscriptionStatus: "active",
+      onboardingComplete: true,
+    };
+  }
+
+  const regional =
+    normalizeSellerRegionalProfile(
+      seller,
+      {
+        fallbackSellerId:
+          String(
+            user.sellerId ?? "",
+          ).trim(),
+        fallbackLanguage:
+          user.locale === "en" ||
+          user.locale === "ja"
+            ? user.locale
+            : "pt",
+      },
+    );
+
+  const commercial =
+    seller ?? user;
+
+  return {
+    role,
+    sellerId:
+      regional.sellerId ||
+      String(user.sellerId ?? "").trim(),
+    regionId:
+      String(
+        commercial.regionId ??
+          user.regionId ??
+          "",
+      ).trim(),
+
+    active:
+      user.active !== false &&
+      commercial.active !== false,
+    suspended:
+      user.suspended === true ||
+      commercial.suspended === true,
+
+    // Durante a migração, o admin legado ainda atualiza users/{uid}.
+    // A assinatura usa o espelho do usuário primeiro até o pacote admin.
+    plan: normalizePlanId(
+      user.plan ?? commercial.plan,
+    ),
+    subscriptionStatus:
+      normalizeSubscriptionStatus(
+        user.subscriptionStatus ??
+          commercial.subscriptionStatus,
+      ),
+    currentPeriodEnd:
+      user.currentPeriodEnd ??
+      commercial.currentPeriodEnd,
+    requestedPlanAt:
+      user.requestedPlanAt ??
+      commercial.requestedPlanAt,
+
+    storeName: regional.storeName,
+    onboardingComplete:
+      regional.onboardingComplete,
+    operatingCountry:
+      regional.operatingCountry,
+    currency: regional.currency,
+    regionalLocale:
+      regional.regionalLocale,
+    timeZone: regional.timeZone,
+    defaultLanguage:
+      regional.defaultLanguage,
+  };
 }
 
 export default function SellerGuard({
   children,
-  requireSellerIds = true,
+  requireSellerIds = false,
 }: SellerGuardProps) {
   const router = useRouter();
   const rawPathname = usePathname();
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
 
   const pathname = useMemo(
     () => normalizePathname(rawPathname),
-    [rawPathname]
+    [rawPathname],
   );
 
-  const planRouteAllowed = useMemo(
-    () => isPlanFreeRoute(pathname),
-    [pathname]
-  );
+  const onRentRoute =
+    isInsideRoute(
+      pathname,
+      RENT_PATH,
+    );
 
-  const [checkingAuth, setCheckingAuth] =
+  const onOnboardingRoute =
+    isInsideRoute(
+      pathname,
+      ONBOARDING_PATH,
+    );
+
+  const [checking, setChecking] =
     useState(true);
-
-  const [checkingProfile, setCheckingProfile] =
-    useState(false);
-
   const [authUser, setAuthUser] =
     useState<User | null>(null);
-
   const [profile, setProfile] =
     useState<UserDoc | null>(null);
-
-  const [profileMissing, setProfileMissing] =
-    useState(false);
-
-  const [creatingProfile, setCreatingProfile] =
-    useState(false);
-
   const [errMsg, setErrMsg] =
     useState("");
 
-  /**
-   * Escuta a autenticação.
-   */
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(
-      auth,
-      (currentUser) => {
-        setAuthUser(currentUser);
-        setCheckingAuth(false);
-
-        if (!currentUser) {
-          setProfile(null);
-          setProfileMissing(false);
-          router.replace("/login");
-        }
-      }
-    );
-
-    return () => unsubscribe();
-  }, [router]);
-
-  /**
-   * Carrega o perfil do Firestore.
-   */
   const loadProfile = useCallback(
     async (user: User) => {
       setErrMsg("");
-      setCheckingProfile(true);
-      setProfileMissing(false);
 
       try {
-        const userRef = doc(
-          db,
-          "users",
-          user.uid
+        const result =
+          await ensureUserProfile(
+            user,
+            lang,
+          );
+
+        setProfile(
+          buildProfile(result),
         );
-
-        const userSnap = await getDoc(userRef);
-
-        if (!userSnap.exists()) {
-          setProfile(null);
-          setProfileMissing(true);
-          return;
-        }
-
-        const data = userSnap.data();
-
-        const normalizedProfile: UserDoc = {
-          role:
-            data.role === "admin"
-              ? "admin"
-              : data.role === "seller"
-                ? "seller"
-                : undefined,
-
-          sellerId:
-            typeof data.sellerId === "string"
-              ? data.sellerId.trim()
-              : "",
-
-          regionId:
-            typeof data.regionId === "string"
-              ? data.regionId.trim()
-              : "",
-
-          active: data.active !== false,
-
-          plan: normalizePlan(data.plan),
-
-          subscriptionStatus:
-            normalizeSubscriptionStatus(
-              data.subscriptionStatus
-            ),
-
-          currentPeriodEnd:
-            data.currentPeriodEnd,
-
-          requestedPlanAt:
-            data.requestedPlanAt,
-
-          suspended:
-            data.suspended === true,
-        };
-
-        setProfile(normalizedProfile);
-        setProfileMissing(false);
-      } catch (error) {
+      } catch (error: any) {
         console.error(
-          "[SellerGuard] Erro ao carregar perfil:",
-          error
+          "[SellerGuard] Falha ao validar perfil:",
+          error,
         );
 
         setProfile(null);
-
         setErrMsg(
-          t("guard.err.loadProfile")
+          error?.message ||
+            t("guard.err.loadProfile"),
         );
       } finally {
-        setCheckingProfile(false);
+        setChecking(false);
       }
     },
-    [t]
+    [lang, t],
   );
 
   useEffect(() => {
-    if (!authUser) return;
+    setChecking(true);
 
-    void loadProfile(authUser);
-  }, [authUser, loadProfile]);
+    const unsubscribe =
+      onAuthStateChanged(
+        auth,
+        (user) => {
+          setAuthUser(user);
+
+          if (!user) {
+            setProfile(null);
+            setChecking(false);
+            router.replace("/login");
+            return;
+          }
+
+          void loadProfile(user);
+        },
+      );
+
+    return () => unsubscribe();
+  }, [loadProfile, router]);
 
   const role = profile?.role ?? null;
-
   const inactive =
     profile?.active === false;
-
   const suspended =
     profile?.suspended === true;
-
   const sellerId =
     profile?.sellerId?.trim() || "";
-
   const regionId =
     profile?.regionId?.trim() || "";
 
-  const subscriptionStatus =
-    profile?.subscriptionStatus || "none";
-
-  /**
-   * Plano válido.
-   *
-   * Admin não precisa de plano.
-   * Seller precisa:
-   * - conta ativa;
-   * - não suspensa;
-   * - subscriptionStatus active;
-   * - currentPeriodEnd ainda válido, quando existir.
-   */
   const planActive = useMemo(() => {
     if (!profile) return false;
-
-    if (role === "admin") {
-      return true;
-    }
-
-    if (role !== "seller") {
-      return false;
-    }
-
+    if (role === "admin") return true;
+    if (role !== "seller") return false;
     if (inactive || suspended) {
       return false;
     }
 
-    if (subscriptionStatus !== "active") {
+    if (
+      profile.subscriptionStatus !==
+      "active"
+    ) {
       return false;
     }
 
     return isSubscriptionPeriodValid(
-      profile.currentPeriodEnd
+      profile.currentPeriodEnd,
     );
   }, [
-    profile,
-    role,
     inactive,
-    suspended,
-    subscriptionStatus,
-  ]);
-
-  /**
-   * Identifica exatamente quando o seller deve ser enviado
-   * para a página de planos.
-   *
-   * A própria rota /seller/rent nunca é redirecionada.
-   */
-  const mustRedirectToRent = useMemo(() => {
-    if (!authUser || !profile) {
-      return false;
-    }
-
-    if (role !== "seller") {
-      return false;
-    }
-
-    if (planRouteAllowed) {
-      return false;
-    }
-
-    return !planActive;
-  }, [
-    authUser,
     profile,
     role,
-    planRouteAllowed,
-    planActive,
+    suspended,
   ]);
 
-  /**
-   * Redireciona o seller sem plano para a renovação,
-   * exceto quando ele já estiver na página de renovação.
-   */
+  const needsOnboarding =
+    role === "seller" &&
+    profile?.onboardingComplete !== true;
+
+  const mustRedirectToOnboarding =
+    Boolean(
+      authUser &&
+        profile &&
+        needsOnboarding &&
+        !onOnboardingRoute,
+    );
+
+  const mustRedirectToRent =
+    Boolean(
+      authUser &&
+        profile &&
+        role === "seller" &&
+        !needsOnboarding &&
+        !planActive &&
+        !onRentRoute &&
+        !onOnboardingRoute,
+    );
+
   useEffect(() => {
-    if (checkingAuth || checkingProfile) {
+    if (
+      checking ||
+      !pathname
+    ) {
       return;
     }
 
-    if (!pathname) {
+    if (mustRedirectToOnboarding) {
+      router.replace(
+        ONBOARDING_PATH,
+      );
       return;
     }
 
     if (mustRedirectToRent) {
-      router.replace("/seller/rent");
+      router.replace(RENT_PATH);
     }
   }, [
-    checkingAuth,
-    checkingProfile,
-    pathname,
+    checking,
+    mustRedirectToOnboarding,
     mustRedirectToRent,
+    pathname,
     router,
   ]);
 
-  const handleLogout = useCallback(async () => {
-    try {
-      await signOut(auth);
-    } finally {
-      router.replace("/login");
-    }
-  }, [router]);
-
-  const handleCreateProfileNow =
+  const handleLogout =
     useCallback(async () => {
-      if (!authUser) return;
-
-      setCreatingProfile(true);
-      setErrMsg("");
-
       try {
-        await ensureUserProfile(
-          authUser,
-          "pt"
-        );
-
-        await loadProfile(authUser);
-      } catch (error: any) {
-        console.error(
-          "[SellerGuard] Erro ao criar perfil:",
-          error
-        );
-
-        setErrMsg(
-          error?.message ||
-            t("guard.err.createProfile")
-        );
+        await signOut(auth);
       } finally {
-        setCreatingProfile(false);
+        router.replace("/login");
       }
-    }, [
-      authUser,
-      loadProfile,
-      t,
-    ]);
+    }, [router]);
 
-  const initialLoading =
-    checkingAuth ||
-    checkingProfile ||
-    (
-      authUser !== null &&
-      profile === null &&
-      !profileMissing &&
-      !errMsg
-    );
-
-  if (initialLoading) {
+  if (
+    checking ||
+    mustRedirectToOnboarding ||
+    mustRedirectToRent
+  ) {
     return (
-      <main className="flex min-h-[65vh] flex-col items-center justify-center gap-4 bg-white dark:bg-neutral-950 transition-colors">
+      <main className="flex min-h-[65vh] flex-col items-center justify-center gap-4 bg-white transition-colors dark:bg-neutral-950">
         <div className="h-9 w-9 animate-spin rounded-full border-4 border-neutral-200 border-t-neutral-900 dark:border-neutral-800 dark:border-t-white" />
 
-        <p className="animate-pulse text-sm font-black text-neutral-500">
-          {t("dashboard.checking_session")}
+        <p className="text-sm font-bold text-neutral-500">
+          {needsOnboarding
+            ? t("onboarding.loading")
+            : t("dashboard.checking_session")}
         </p>
       </main>
     );
   }
 
-  if (!authUser) {
-    return null;
-  }
-
-  if (profileMissing) {
-    return (
-      <main className="mx-auto mt-12 max-w-md space-y-4 p-4 text-center animate-fade-in">
-        <h1 className="text-2xl font-black tracking-tight text-neutral-900 dark:text-white">
-          {t("guard.profileMissing.title")}
-        </h1>
-
-        <div className="space-y-4 rounded-3xl border border-neutral-200 bg-neutral-50 p-6 dark:border-neutral-800 dark:bg-neutral-900">
-          <p className="text-sm font-medium leading-relaxed text-neutral-600 dark:text-neutral-400">
-            {t("guard.profileMissing.desc", {
-              path: `users/${authUser.uid}`,
-            })}
-          </p>
-
-          <button
-            type="button"
-            onClick={handleCreateProfileNow}
-            disabled={creatingProfile}
-            className="w-full rounded-2xl bg-black py-3.5 text-sm font-black text-white shadow-xl transition-all hover:opacity-90 disabled:opacity-50 dark:bg-white dark:text-black"
-          >
-            {creatingProfile
-              ? t("common.saving")
-              : t(
-                  "guard.profileMissing.ctaCreate"
-                )}
-          </button>
-        </div>
-
-        {errMsg && (
-          <p className="text-xs font-bold text-red-500">
-            {errMsg}
-          </p>
-        )}
-      </main>
-    );
-  }
+  if (!authUser) return null;
 
   if (!profile) {
     return (
-      <main className="mx-auto mt-16 max-w-md p-4 text-center animate-fade-in">
+      <main className="mx-auto mt-16 max-w-md p-4 text-center">
         <div className="space-y-4 rounded-3xl border border-red-200 bg-red-50 p-8 dark:border-red-900/30 dark:bg-red-950/20">
           <h1 className="text-xl font-black text-red-800 dark:text-red-200">
-            {t("eventPanel.error.title")}
+            {t("guard.profileMissing.title")}
           </h1>
 
           <p className="text-sm font-medium text-red-700 dark:text-red-300">
@@ -539,7 +491,7 @@ export default function SellerGuard({
           <button
             type="button"
             onClick={handleLogout}
-            className="text-xs font-black uppercase tracking-wider text-neutral-500 underline"
+            className="text-xs font-bold text-neutral-500 underline"
           >
             {t("common.logout")}
           </button>
@@ -548,22 +500,13 @@ export default function SellerGuard({
     );
   }
 
-  /**
-   * Conta realmente inativa ou suspensa.
-   *
-   * Isso é diferente de plano vencido.
-   * Um seller com plano vencido continua com active=true
-   * e pode entrar em /seller/rent.
-   */
   if (inactive || suspended) {
     return (
-      <main className="mx-auto mt-16 max-w-md p-4 text-center animate-fade-in">
-        <div className="space-y-4 rounded-3xl border border-red-200 bg-red-50/50 p-8 shadow-sm dark:border-red-900/30 dark:bg-red-950/20">
-          <div className="text-4xl">
-            🚫
-          </div>
+      <main className="mx-auto mt-16 max-w-md p-4 text-center">
+        <div className="space-y-4 rounded-3xl border border-red-200 bg-red-50/50 p-8 dark:border-red-900/30 dark:bg-red-950/20">
+          <div className="text-4xl">🚫</div>
 
-          <h1 className="text-xl font-black tracking-tight text-red-900 dark:text-red-200">
+          <h1 className="text-xl font-black text-red-900 dark:text-red-200">
             {suspended
               ? t("guard.suspended.title")
               : t("guard.inactive.title")}
@@ -578,7 +521,7 @@ export default function SellerGuard({
           <button
             type="button"
             onClick={handleLogout}
-            className="text-xs font-black uppercase tracking-wider text-neutral-900 underline dark:text-white"
+            className="text-xs font-bold text-neutral-900 underline dark:text-white"
           >
             {t("common.logout")}
           </button>
@@ -588,107 +531,34 @@ export default function SellerGuard({
   }
 
   if (
-    !role ||
+    role !== "admin" &&
     (
-      role === "seller" &&
-      requireSellerIds &&
-      (!sellerId || !regionId)
+      !sellerId ||
+      (
+        requireSellerIds &&
+        !regionId
+      )
     )
   ) {
     return (
-      <main className="mx-auto mt-16 max-w-md p-4 text-center animate-fade-in">
+      <main className="mx-auto mt-16 max-w-md p-4 text-center">
         <div className="space-y-4 rounded-3xl border border-neutral-200 bg-white p-8 shadow-xl dark:border-neutral-800 dark:bg-neutral-900">
-          <div className="text-4xl">
-            ⏳
-          </div>
-
-          <h1 className="text-xl font-black tracking-tight text-neutral-900 dark:text-white">
-            {t(
-              "guard.notConfigured.title"
-            )}
-          </h1>
-
-          <p className="text-sm font-medium leading-relaxed text-neutral-500 dark:text-neutral-400">
-            {t(
-              "guard.notConfigured.desc",
-              {
-                path: `users/${authUser.uid}`,
-              }
-            )}
-          </p>
-
-          <button
-            type="button"
-            onClick={handleLogout}
-            className="w-full rounded-2xl border border-neutral-200 py-3.5 text-xs font-black text-neutral-800 transition hover:bg-neutral-50 dark:border-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-800"
-          >
-            {t("common.back")}
-          </button>
-        </div>
-      </main>
-    );
-  }
-
-  /**
-   * Enquanto o redirecionamento acontece, não renderizamos
-   * a página protegida. Isso evita o efeito de piscar.
-   */
-  if (mustRedirectToRent) {
-    return (
-      <main className="flex min-h-[65vh] flex-col items-center justify-center gap-4 bg-white dark:bg-neutral-950">
-        <div className="h-9 w-9 animate-spin rounded-full border-4 border-neutral-200 border-t-neutral-900 dark:border-neutral-800 dark:border-t-white" />
-
-        <p className="text-sm font-black text-neutral-500">
-          {t("guard.planRequired.title")}
-        </p>
-      </main>
-    );
-  }
-
-  /**
-   * Na própria página de planos, seller vencido é autorizado.
-   */
-  if (
-    role === "seller" &&
-    !planActive &&
-    !planRouteAllowed
-  ) {
-    return (
-      <main className="mx-auto mt-16 max-w-md p-4 text-center animate-fade-in">
-        <div className="space-y-5 rounded-3xl border border-neutral-200 bg-white p-8 shadow-2xl dark:border-neutral-800 dark:bg-neutral-900">
-          <div className="text-4xl">
-            💳
-          </div>
-
-          <h1 className="text-xl font-black tracking-tight text-neutral-900 dark:text-white">
-            {t(
-              "guard.planRequired.title"
-            )}
+          <h1 className="text-xl font-black text-neutral-900 dark:text-white">
+            {t("guard.notConfigured.title")}
           </h1>
 
           <p className="text-sm font-medium text-neutral-500 dark:text-neutral-400">
-            {t(
-              "guard.planRequired.desc"
-            )}
+            {t("guard.missingSellerIds", {
+              path: `users/${authUser.uid}`,
+            })}
           </p>
 
           <Link
-            href="/seller/rent"
-            replace
-            className="block w-full rounded-2xl bg-black py-4 text-sm font-black text-white shadow-lg transition hover:opacity-95 dark:bg-white dark:text-black"
+            href={ONBOARDING_PATH}
+            className="block w-full rounded-2xl bg-black py-3.5 text-sm font-black text-white dark:bg-white dark:text-black"
           >
-            {t(
-              "guard.planRequired.cta"
-            )}
+            {t("onboarding.open")}
           </Link>
-
-          <button
-            type="button"
-            onClick={handleLogout}
-            className="text-xs font-bold text-neutral-400 underline dark:text-neutral-500"
-          >
-            {t("common.logout")}
-          </button>
         </div>
       </main>
     );

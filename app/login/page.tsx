@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { auth, db } from "@/app/lib/firebase";
+import { auth } from "@/app/lib/firebase";
 import {
   onAuthStateChanged,
   signInWithEmailAndPassword,
@@ -15,23 +15,19 @@ import {
   type ConfirmationResult,
   type User,
 } from "firebase/auth";
-import { doc, getDoc } from "firebase/firestore";
-import { ensureUserProfile } from "@/app/lib/ensureUserProfile";
+import {
+  ensureUserProfile,
+  type EnsureResult,
+} from "@/app/lib/ensureUserProfile";
+import {
+  hasCompleteSellerOnboarding,
+} from "@/app/lib/seller-regional-profile";
 import { useI18n } from "@/app/lib/i18n";
 
 type AuthMode = "email" | "google" | "phone";
 type Busy = null | "email" | "register" | "google" | "sendCode" | "verifyCode";
 
-type SubscriptionStatus = "none" | "pending" | "active" | "past_due" | "cancelled";
 type Role = "admin" | "seller";
-
-type UserDoc = {
-  role?: Role;
-  active?: boolean;
-  suspended?: boolean;
-  plan?: "starter" | "pro" | "business";
-  subscriptionStatus?: SubscriptionStatus;
-};
 
 function friendlyAuthError(err: any, tt: (k: string, fallback: string) => string) {
   const code = String(err?.code || "");
@@ -105,32 +101,49 @@ export default function LoginPage() {
   }, []);
 
   const resolveAfterLogin = useCallback(
-    async (user: User) => {
-      const snap = await getDoc(doc(db, "users", user.uid));
-      const data = (snap.exists() ? (snap.data() as UserDoc) : null) ?? null;
+    async (
+      result: EnsureResult,
+    ) => {
+      const userData = result.userDoc;
+      const sellerData = result.sellerDoc;
 
-      const role: Role | null =
-        data?.role === "admin" ? "admin" : data?.role === "seller" ? "seller" : null;
+      const role: Role =
+        userData.role === "admin"
+          ? "admin"
+          : "seller";
 
-      // admin -> painel admin
       if (role === "admin") {
         router.replace("/admin/");
         return;
       }
 
-      // seller (ou sem role ainda)
-      const isActive =
-        data?.subscriptionStatus === "active" &&
-        data?.suspended !== true &&
-        data?.active !== false;
-
-      if (isActive) {
-        router.replace("/seller/");
-      } else {
-        router.replace("/seller/rent");
+      if (
+        !hasCompleteSellerOnboarding(
+          sellerData,
+        )
+      ) {
+        router.replace(
+          "/seller/onboarding",
+        );
+        return;
       }
+
+      const commercial =
+        sellerData ?? userData;
+
+      const isActive =
+        commercial.subscriptionStatus ===
+          "active" &&
+        commercial.suspended !== true &&
+        commercial.active !== false;
+
+      router.replace(
+        isActive
+          ? "/seller/"
+          : "/seller/rent",
+      );
     },
-    [router]
+    [router],
   );
 
   const goAfterLogin = useCallback(
@@ -139,15 +152,26 @@ export default function LoginPage() {
       didRedirectRef.current = true;
 
       try {
-        // garante doc users/{uid} e role default "seller" se ainda não tiver
-        await ensureUserProfile(user, lang);
-        await resolveAfterLogin(user);
+        const result =
+          await ensureUserProfile(
+            user,
+            lang,
+          );
+
+        await resolveAfterLogin(result);
       } catch (e: any) {
         didRedirectRef.current = false;
-        setError(e?.message || tt("auth.err.validateProfile", "Falha ao validar perfil/plano no Firestore."));
+        setCheckingAuth(false);
+        setError(
+          e?.message ||
+            tt(
+              "auth.err.validateProfile",
+              "Falha ao validar perfil/plano no Firestore.",
+            ),
+        );
       }
     },
-    [lang, resolveAfterLogin, tt]
+    [lang, resolveAfterLogin, tt],
   );
 
   useEffect(() => {
