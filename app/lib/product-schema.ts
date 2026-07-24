@@ -75,11 +75,14 @@ export function resolveLocalizedProductText(
   };
 }
 
-export function normalizeProductPriceMajor(raw: Record<string, unknown>, currency: SupportedCurrency): number {
-  const minor = typeof raw.priceMinor === "number" && Number.isFinite(raw.priceMinor)
-    ? raw.priceMinor
+export function normalizeProductPriceMinor(raw: Record<string, unknown>, currency: SupportedCurrency): number {
+  return typeof raw.priceMinor === "number" && Number.isFinite(raw.priceMinor)
+    ? Math.max(0, Math.round(raw.priceMinor))
     : legacyMajorValueToMinor(raw.sellPrice ?? raw.price ?? raw.shadowSell, currency);
-  return minorToMajor(minor, currency);
+}
+
+export function normalizeProductPriceMajor(raw: Record<string, unknown>, currency: SupportedCurrency): number {
+  return minorToMajor(normalizeProductPriceMinor(raw, currency), currency);
 }
 
 export function normalizeInventory(rawValue: unknown, legacyStock: unknown, legacyThreshold: unknown) {

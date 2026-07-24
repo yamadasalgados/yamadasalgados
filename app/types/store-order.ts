@@ -1,5 +1,8 @@
 import type { Timestamp } from "firebase/firestore";
 
+import type {
+  AppliedOfferSnapshot,
+} from "@/app/lib/offer-schema";
 
 import {
   ORDER_STATUS,
@@ -97,4 +100,5 @@ export interface StoreOrder {
   status: StoreOrderStatus;
   items: StoreOrderItem[];
   history: StoreOrderHistory[];
+  offersApplied?: AppliedOfferSnapshot[];
 }

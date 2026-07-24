@@ -90,6 +90,10 @@ const dashboardText =
           "公開店舗",
         publicStoreDesc:
           "お客様向けの店舗ページを開きます。",
+        offersTitle:
+          "オファーとセット",
+        offersDesc:
+          "プロモーション、セット、割引を管理します。",
       }
     : lang === "en"
       ? {
@@ -115,6 +119,10 @@ const dashboardText =
             "Public store",
           publicStoreDesc:
             "Open the storefront customers access.",
+          offersTitle:
+            "Offers and kits",
+          offersDesc:
+            "Manage promotions, kits, and discounts.",
         }
       : {
           identitySynced:
@@ -139,6 +147,10 @@ const dashboardText =
             "Loja pública",
           publicStoreDesc:
             "Abra a vitrine acessada pelos clientes.",
+          offersTitle:
+            "Ofertas e kits",
+          offersDesc:
+            "Gerencie promoções, kits e descontos.",
         };
 
   const [checkingAuth, setCheckingAuth] = useState(true);
@@ -501,6 +513,13 @@ const showPlanWarning =
             desc={dashboardText.storeOrdersDesc}
             href="/seller/store-orders"
             icon="🛒"
+          />
+
+          <Action
+            title={dashboardText.offersTitle}
+            desc={dashboardText.offersDesc}
+            href="/seller/offers"
+            icon="🎁"
           />
 
           {sellerId && (

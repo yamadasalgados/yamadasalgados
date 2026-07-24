@@ -1,4 +1,5 @@
 import {
+  Gift,
   Package,
 } from "lucide-react";
 
@@ -27,6 +28,18 @@ export default function ItemsCard({
     Array.isArray(order?.items)
       ? order.items
       : [];
+
+  const offersApplied =
+    Array.isArray(order?.offersApplied)
+      ? order.offersApplied
+      : [];
+
+  const offersTitle =
+    locale.startsWith("ja")
+      ? "適用されたオファー"
+      : locale.startsWith("en")
+        ? "Applied offers"
+        : "Ofertas aplicadas";
 
   const totalItems =
     items.reduce(
@@ -201,6 +214,39 @@ export default function ItemsCard({
               );
             },
           )}
+        </div>
+      )}
+
+      {offersApplied.length > 0 && (
+        <div className="mt-7 rounded-2xl border border-orange-200 bg-orange-50 p-4 dark:border-orange-900/50 dark:bg-orange-950/20">
+          <div className="flex items-center gap-2 text-orange-800 dark:text-orange-200">
+            <Gift size={18} />
+            <h3 className="text-sm font-black">
+              {offersTitle}
+            </h3>
+          </div>
+
+          <div className="mt-3 space-y-2">
+            {offersApplied.map((offer) => (
+              <div
+                key={offer.offerId}
+                className="flex items-center justify-between gap-4 text-sm"
+              >
+                <span className="font-bold">
+                  {offer.name} · {offer.bundleCount}×
+                </span>
+                <span className="font-black text-green-700 dark:text-green-300">
+                  - {formatStoreOrderCurrency(
+                    discount > 0 &&
+                    offersApplied.length === 1
+                      ? discount
+                      : 0,
+                    locale,
+                  )}
+                </span>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

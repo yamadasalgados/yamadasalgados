@@ -3,6 +3,11 @@ import { Timestamp } from "firebase/firestore";
 import { normalizeOrderStatus } from "@/app/lib/order-status";
 
 import type {
+  AppliedOfferSnapshot,
+  OfferPricingMode,
+} from "@/app/lib/offer-schema";
+
+import type {
   StoreOrder,
   StoreOrderDate,
   StoreOrderDeliveryMode,
@@ -357,6 +362,165 @@ export function storeOrderDateToMillis(
   );
 }
 
+function normalizeAppliedOffers(
+  value: unknown,
+): AppliedOfferSnapshot[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((raw): AppliedOfferSnapshot | null => {
+      if (!isRecord(raw)) {
+        return null;
+      }
+
+      const offerId =
+        toSafeString(raw.offerId);
+      const name =
+        toSafeString(raw.name);
+      const pricingMode:
+        OfferPricingMode =
+        raw.pricingMode ===
+          "fixed_discount" ||
+        raw.pricingMode ===
+          "percentage_discount"
+          ? raw.pricingMode
+          : "fixed_total";
+      const requiredQuantity =
+        Math.max(
+          1,
+          Math.floor(
+            toSafeNumber(
+              raw.requiredQuantity,
+            ) || 1,
+          ),
+        );
+      const bundleCount =
+        Math.max(
+          1,
+          Math.floor(
+            toSafeNumber(
+              raw.bundleCount,
+            ) || 1,
+          ),
+        );
+
+      if (!offerId || !name) {
+        return null;
+      }
+
+      const selectedItems =
+        Array.isArray(raw.selectedItems)
+          ? raw.selectedItems
+              .map((item) => {
+                if (!isRecord(item)) {
+                  return null;
+                }
+
+                const productId =
+                  toSafeString(
+                    item.productId,
+                  );
+                const quantity =
+                  Math.max(
+                    0,
+                    Math.floor(
+                      toSafeNumber(
+                        item.quantity,
+                      ),
+                    ),
+                  );
+                const priceMinor =
+                  Math.max(
+                    0,
+                    Math.round(
+                      toSafeNumber(
+                        item.priceMinor,
+                      ),
+                    ),
+                  );
+
+                return productId &&
+                  quantity > 0
+                  ? {
+                      productId,
+                      quantity,
+                      priceMinor,
+                    }
+                  : null;
+              })
+              .filter(
+                (
+                  item,
+                ): item is {
+                  productId: string;
+                  quantity: number;
+                  priceMinor: number;
+                } => item !== null,
+              )
+          : [];
+
+      return {
+        offerId,
+        name,
+        pricingMode,
+        requiredQuantity,
+        bundleCount,
+        configuredRegularTotalMinor:
+          toOptionalNumber(
+            raw.configuredRegularTotalMinor,
+          ) ?? null,
+        configuredPromotionalTotalMinor:
+          toOptionalNumber(
+            raw.configuredPromotionalTotalMinor,
+          ) ?? null,
+        configuredDiscountMinor:
+          toOptionalNumber(
+            raw.configuredDiscountMinor,
+          ) ?? null,
+        configuredPercentage:
+          toOptionalNumber(
+            raw.configuredPercentage,
+          ) ?? null,
+        regularAmountMinor:
+          Math.max(
+            0,
+            Math.round(
+              toSafeNumber(
+                raw.regularAmountMinor,
+              ),
+            ),
+          ),
+        discountAmountMinor:
+          Math.max(
+            0,
+            Math.round(
+              toSafeNumber(
+                raw.discountAmountMinor,
+              ),
+            ),
+          ),
+        finalAmountMinor:
+          Math.max(
+            0,
+            Math.round(
+              toSafeNumber(
+                raw.finalAmountMinor,
+              ),
+            ),
+          ),
+        selectedItems,
+      };
+    })
+    .filter(
+      (
+        offer,
+      ): offer is AppliedOfferSnapshot =>
+        offer !== null,
+    );
+}
+
 export function parseStoreOrder(
   id: string,
   data: Record<string, unknown>,
@@ -524,6 +688,11 @@ export function parseStoreOrder(
     history:
       normalizeStoreOrderHistory(
         data.history,
+      ),
+
+    offersApplied:
+      normalizeAppliedOffers(
+        data.offersApplied,
       ),
   };
 }

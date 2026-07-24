@@ -23,6 +23,7 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  Gift,
   ImageIcon,
   Loader2,
   MapPin,
@@ -50,8 +51,25 @@ import {
 
 import {
   formatMoneyMajor,
+  formatMoneyMinor,
+  minorToMajor,
 } from "@/app/lib/money";
-import { normalizeInventory, normalizeProductPriceMajor, resolveLocalizedProductText } from "@/app/lib/product-schema";
+import {
+  normalizeInventory,
+  normalizeProductPriceMajor,
+  normalizeProductPriceMinor,
+  resolveLocalizedProductText,
+} from "@/app/lib/product-schema";
+import {
+  createAppliedOfferSnapshot,
+  evaluateOfferForCart,
+  normalizeOffer,
+  offerIsCurrentlyActive,
+  resolveLocalizedOfferText,
+  type AppliedOfferSnapshot,
+  type OfferDoc,
+  type OfferEvaluation,
+} from "@/app/lib/offer-schema";
 import {
   isSupportedCurrency,
   type RegionalLocale,
@@ -93,6 +111,7 @@ type Product = {
   imageUrl: string;
   extraImageUrls: string[];
   price: number;
+  priceMinor: number;
   stock?: number;
   stockField?:
     | "stockQty"
@@ -210,6 +229,22 @@ const TEXT = {
       "produto",
     searchResults:
       "Resultados da busca",
+    offersTitle: "Ofertas e kits",
+    offersHelp:
+      "Escolha uma oferta e combine os produtos participantes.",
+    useOffer: "Usar oferta",
+    selectedOffer: "Oferta selecionada",
+    removeOffer: "Remover oferta",
+    requiredOfferQuantity: "Quantidade do kit",
+    offerProducts: "Produtos participantes",
+    offerRemaining: "Faltam {count} itens para ativar",
+    offerReady: "Oferta aplicada ao carrinho",
+    offerBundles: "kits aplicados",
+    offerSavings: "Você economiza",
+    offerUnavailable:
+      "A oferta selecionada não está mais disponível.",
+    subtotal: "Subtotal",
+    discount: "Desconto",
   },
 
   en: {
@@ -295,6 +330,22 @@ const TEXT = {
       "product",
     searchResults:
       "Search results",
+    offersTitle: "Offers and kits",
+    offersHelp:
+      "Select an offer and combine eligible products.",
+    useOffer: "Use offer",
+    selectedOffer: "Selected offer",
+    removeOffer: "Remove offer",
+    requiredOfferQuantity: "Bundle quantity",
+    offerProducts: "Eligible products",
+    offerRemaining: "Add {count} more items to activate",
+    offerReady: "Offer applied to cart",
+    offerBundles: "bundles applied",
+    offerSavings: "You save",
+    offerUnavailable:
+      "The selected offer is no longer available.",
+    subtotal: "Subtotal",
+    discount: "Discount",
   },
 
   ja: {
@@ -383,6 +434,22 @@ const TEXT = {
       "商品",
     searchResults:
       "検索結果",
+    offersTitle: "オファーとセット",
+    offersHelp:
+      "オファーを選び、対象商品を組み合わせてください。",
+    useOffer: "オファーを使う",
+    selectedOffer: "選択中のオファー",
+    removeOffer: "オファーを外す",
+    requiredOfferQuantity: "セット数量",
+    offerProducts: "対象商品",
+    offerRemaining: "あと{count}点で適用されます",
+    offerReady: "オファーがカートに適用されました",
+    offerBundles: "セット適用",
+    offerSavings: "割引額",
+    offerUnavailable:
+      "選択したオファーは利用できません。",
+    subtotal: "小計",
+    discount: "割引",
   },
 } as const;
 
@@ -504,6 +571,7 @@ function normalizeProduct(
     return null;
   }
 
+  const priceMinor = normalizeProductPriceMinor(raw, currency);
   const price = normalizeProductPriceMajor(raw, currency);
 
   let stock:
@@ -607,6 +675,7 @@ function normalizeProduct(
     imageUrl,
     extraImageUrls,
     price,
+    priceMinor,
     stock,
     stockField,
   };
@@ -709,6 +778,8 @@ function cleanOrderItem(
     qty: item.qty,
     price:
       currentProduct.price,
+    priceMinor:
+      currentProduct.priceMinor,
     subtotal:
       item.qty *
       currentProduct.price,
@@ -735,14 +806,20 @@ function buildOrderPayload({
   customer,
   delivery,
   items,
+  subtotal,
+  discount,
   total,
+  offersApplied,
 }: {
   customer: CustomerForm;
   delivery: DeliveryForm;
   items: Array<
     Record<string, unknown>
   >;
+  subtotal: number;
+  discount: number;
   total: number;
+  offersApplied: AppliedOfferSnapshot[];
 }): Record<string, unknown> {
   const quantities: Record<
     string,
@@ -795,11 +872,25 @@ function buildOrderPayload({
 
     totalItems,
 
+    subtotal:
+      Math.max(
+        0,
+        subtotal,
+      ),
+
+    discount:
+      Math.max(
+        0,
+        discount,
+      ),
+
     totalAmount:
       Math.max(
         0,
         total,
       ),
+
+    offersApplied,
 
     status: "pending",
 
@@ -900,6 +991,12 @@ export default function StoreClient({
   const [products, setProducts] =
     useState<Product[]>([]);
 
+  const [offers, setOffers] =
+    useState<OfferDoc[]>([]);
+
+  const [selectedOfferId, setSelectedOfferId] =
+    useState("");
+
   const [loading, setLoading] =
     useState(true);
 
@@ -984,11 +1081,13 @@ export default function StoreClient({
 
     let sellerResolved = false;
     let productsResolved = false;
+    let offersResolved = false;
 
     const finishLoading = () => {
       if (
         sellerResolved &&
-        productsResolved
+        productsResolved &&
+        offersResolved
       ) {
         setLoading(false);
       }
@@ -1007,6 +1106,14 @@ export default function StoreClient({
         "sellers",
         sellerId,
         "products",
+      );
+
+    const offersReference =
+      collection(
+        db,
+        "sellers",
+        sellerId,
+        "offers",
       );
 
     const unsubscribeSeller =
@@ -1101,17 +1208,80 @@ export default function StoreClient({
         },
       );
 
+    const unsubscribeOffers =
+      onSnapshot(
+        offersReference,
+        (snapshot) => {
+          const now = new Date();
+          const loadedOffers =
+            snapshot.docs
+              .map((document) =>
+                normalizeOffer(
+                  document.id,
+                  document.data(),
+                  storeProfile.currency,
+                ),
+              )
+              .filter(
+                (
+                  offer,
+                ): offer is OfferDoc =>
+                  offer !== null &&
+                  offerIsCurrentlyActive(
+                    offer,
+                    now,
+                  ),
+              );
+
+          setOffers(loadedOffers);
+          setSelectedOfferId((current) =>
+            current &&
+            !loadedOffers.some(
+              (offer) =>
+                offer.id === current,
+            )
+              ? ""
+              : current,
+          );
+
+          offersResolved = true;
+          finishLoading();
+        },
+        (error) => {
+          console.warn(
+            "[StoreClient] Falha ao carregar ofertas:",
+            error,
+          );
+          setOffers([]);
+          offersResolved = true;
+          finishLoading();
+        },
+      );
+
     return () => {
       unsubscribeSeller();
       unsubscribeProducts();
+      unsubscribeOffers();
     };
   }, [
+    language,
     locale,
     reloadKey,
     sellerId,
+    storeProfile.currency,
     text.storeUnavailableBody,
   ]);
 
+
+  const selectedOffer =
+    useMemo(
+      () =>
+        offers.find(
+          (offer) =>
+            offer.id === selectedOfferId,
+        ) ?? null,
+      [offers, selectedOfferId],
+    );
 
 const categorySummaries =
   useMemo(() => {
@@ -1198,6 +1368,15 @@ const visibleProducts =
     return products.filter(
       (product) => {
         if (
+          selectedOffer &&
+          !selectedOffer.eligibleProductIds.includes(
+            product.id,
+          )
+        ) {
+          return false;
+        }
+
+        if (
           selectedCategory &&
           product.category !==
             selectedCategory
@@ -1228,11 +1407,13 @@ const visibleProducts =
     products,
     search,
     selectedCategory,
+    selectedOffer,
   ]);
 
 const showingProducts =
   selectedCategory !== null ||
-  search.trim().length > 0;
+  search.trim().length > 0 ||
+  selectedOffer !== null;
 
   const cartItems =
     useMemo<CartItem[]>(() => {
@@ -1275,7 +1456,7 @@ const showingProducts =
       [cartItems],
     );
 
-  const total =
+  const subtotal =
     useMemo(
       () =>
         cartItems.reduce(
@@ -1286,6 +1467,39 @@ const showingProducts =
         ),
       [cartItems],
     );
+
+  const selectedOfferEvaluation:
+    OfferEvaluation | null =
+    useMemo(() => {
+      if (!selectedOffer) {
+        return null;
+      }
+
+      return evaluateOfferForCart(
+        selectedOffer,
+        cartItems.map((item) => ({
+          productId: item.id,
+          quantity: item.qty,
+          priceMinor: item.priceMinor,
+        })),
+      );
+    }, [cartItems, selectedOffer]);
+
+  const discountMinor =
+    selectedOfferEvaluation?.applicable
+      ? selectedOfferEvaluation
+          .discountAmountMinor
+      : 0;
+
+  const discount = minorToMajor(
+    discountMinor,
+    storeProfile.currency,
+  );
+
+  const total = Math.max(
+    0,
+    subtotal - discount,
+  );
 
   const setQuantity =
     useCallback(
@@ -1448,11 +1662,29 @@ const showingProducts =
               ),
             );
 
+          const offerSnapshot =
+            selectedOfferId
+              ? await transaction.get(
+                  doc(
+                    db,
+                    "sellers",
+                    sellerId,
+                    "offers",
+                    selectedOfferId,
+                  ),
+                )
+              : null;
+
           const cleanItems: Array<
             Record<string, unknown>
           > = [];
+          const offerCartLines: Array<{
+            productId: string;
+            quantity: number;
+            priceMinor: number;
+          }> = [];
 
-          let currentTotal = 0;
+          let currentSubtotalMinor = 0;
 
           for (
             const productRead
@@ -1491,10 +1723,6 @@ const showingProducts =
               );
             }
 
-            const subtotal =
-              productRead.item.qty *
-              currentProduct.price;
-
             cleanItems.push(
               cleanOrderItem(
                 productRead.item,
@@ -1502,10 +1730,87 @@ const showingProducts =
               ),
             );
 
-            currentTotal +=
-              subtotal;
+            currentSubtotalMinor +=
+              currentProduct.priceMinor *
+              productRead.item.qty;
+
+            offerCartLines.push({
+              productId:
+                currentProduct.id,
+              quantity:
+                productRead.item.qty,
+              priceMinor:
+                currentProduct.priceMinor,
+            });
 
           }
+
+          let appliedOffers:
+            AppliedOfferSnapshot[] = [];
+          let currentDiscountMinor = 0;
+
+          if (selectedOfferId) {
+            if (
+              !offerSnapshot ||
+              !offerSnapshot.exists()
+            ) {
+              throw new Error(
+                "OFFER_UNAVAILABLE",
+              );
+            }
+
+            const currentOffer =
+              normalizeOffer(
+                offerSnapshot.id,
+                offerSnapshot.data(),
+                storeProfile.currency,
+              );
+
+            if (
+              !currentOffer ||
+              !offerIsCurrentlyActive(
+                currentOffer,
+              )
+            ) {
+              throw new Error(
+                "OFFER_UNAVAILABLE",
+              );
+            }
+
+            const evaluation =
+              evaluateOfferForCart(
+                currentOffer,
+                offerCartLines,
+              );
+            const snapshot =
+              createAppliedOfferSnapshot(
+                evaluation,
+                language,
+                language,
+              );
+
+            if (snapshot) {
+              appliedOffers = [snapshot];
+              currentDiscountMinor =
+                snapshot.discountAmountMinor;
+            }
+          }
+
+          const currentSubtotal =
+            minorToMajor(
+              currentSubtotalMinor,
+              storeProfile.currency,
+            );
+          const currentDiscount =
+            minorToMajor(
+              currentDiscountMinor,
+              storeProfile.currency,
+            );
+          const currentTotal = Math.max(
+            0,
+            currentSubtotal -
+              currentDiscount,
+          );
 
           transaction.set(
             orderReference,
@@ -1513,8 +1818,14 @@ const showingProducts =
               customer,
               delivery,
               items: cleanItems,
+              subtotal:
+                currentSubtotal,
+              discount:
+                currentDiscount,
               total:
                 currentTotal,
+              offersApplied:
+                appliedOffers,
             }),
           );
         },
@@ -1553,11 +1864,15 @@ const showingProducts =
         error.message ===
           "PRODUCT_UNAVAILABLE"
           ? text.stockError
-          : errorCode.includes(
-                "permission-denied",
-              )
-            ? text.permissionError
-            : text.orderError;
+          : error instanceof Error &&
+              error.message ===
+                "OFFER_UNAVAILABLE"
+            ? text.offerUnavailable
+            : errorCode.includes(
+                  "permission-denied",
+                )
+              ? text.permissionError
+              : text.orderError;
 
       setFormError(message);
     } finally {
@@ -1586,6 +1901,7 @@ const showingProducts =
     setFormError("");
     setSearch("");
     setSelectedCategory(null);
+    setSelectedOfferId("");
     setStep("products");
     goToTop();
   }
@@ -1795,6 +2111,22 @@ const showingProducts =
 
 {step === "products" && (
   <>
+    <StoreOffersSection
+      offers={offers}
+      selectedOfferId={selectedOfferId}
+      evaluation={selectedOfferEvaluation}
+      products={products}
+      language={language}
+      locale={storeProfile.regionalLocale}
+      currency={storeProfile.currency}
+      text={text}
+      onSelect={(offerId) => {
+        setSelectedOfferId(offerId);
+        setSelectedCategory(null);
+        setSearch("");
+      }}
+    />
+
     <section className="mt-6 rounded-3xl border border-neutral-200 bg-white p-4 shadow-sm dark:border-neutral-800 dark:bg-neutral-900 sm:p-5">
       <label className="flex items-center gap-3 rounded-2xl border border-neutral-200 bg-neutral-50 px-4 py-3 dark:border-neutral-700 dark:bg-neutral-950/50">
         <Search
@@ -1943,7 +2275,13 @@ const showingProducts =
 
             <h2 className="mt-1 text-2xl font-black">
               {selectedCategory ??
-                text.searchResults}
+                (selectedOffer
+                  ? resolveLocalizedOfferText(
+                      selectedOffer.content,
+                      language,
+                      language,
+                    ).name
+                  : text.searchResults)}
             </h2>
           </div>
 
@@ -1953,6 +2291,7 @@ const showingProducts =
               setSelectedCategory(
                 null,
               );
+              setSelectedOfferId("");
               setSearch("");
               window.scrollTo({
                 top: 0,
@@ -2447,10 +2786,16 @@ const showingProducts =
 
             <OrderSummary
               items={cartItems}
+              subtotal={subtotal}
+              discount={discount}
               total={total}
               locale={storeProfile.regionalLocale}
               currency={storeProfile.currency}
               totalLabel={text.total}
+              subtotalLabel={text.subtotal}
+              discountLabel={text.discount}
+              offerEvaluation={selectedOfferEvaluation}
+              language={language}
             />
 
             <button
@@ -2542,10 +2887,14 @@ const showingProducts =
         <CartDrawer
           items={cartItems}
           totalItems={totalItems}
+          subtotal={subtotal}
+          discount={discount}
           total={total}
           locale={storeProfile.regionalLocale}
           currency={storeProfile.currency}
           text={text}
+          offerEvaluation={selectedOfferEvaluation}
+          language={language}
           onClose={() =>
             setCartOpen(false)
           }
@@ -2736,18 +3085,236 @@ function Field({
   );
 }
 
+function StoreOffersSection({
+  offers,
+  selectedOfferId,
+  evaluation,
+  products,
+  language,
+  locale,
+  currency,
+  text,
+  onSelect,
+}: {
+  offers: OfferDoc[];
+  selectedOfferId: string;
+  evaluation: OfferEvaluation | null;
+  products: Product[];
+  language: Language;
+  locale: string;
+  currency: SupportedCurrency;
+  text: (typeof TEXT)[Language];
+  onSelect: (offerId: string) => void;
+}) {
+  if (offers.length === 0) {
+    return null;
+  }
+
+  const productById = new Map(
+    products.map((product) => [
+      product.id,
+      product,
+    ]),
+  );
+
+  return (
+    <section className="mt-6 space-y-4">
+      <div>
+        <h2 className="text-2xl font-black sm:text-3xl">
+          {text.offersTitle}
+        </h2>
+        <p className="mt-2 text-sm text-neutral-600 dark:text-neutral-300">
+          {text.offersHelp}
+        </p>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        {offers.map((offer) => {
+          const localized =
+            resolveLocalizedOfferText(
+              offer.content,
+              language,
+              language,
+            );
+          const selected =
+            offer.id === selectedOfferId;
+          const currentEvaluation =
+            selected ? evaluation : null;
+          const eligibleNames =
+            offer.eligibleProductIds
+              .map((id) =>
+                productById.get(id)?.name,
+              )
+              .filter(
+                (name): name is string =>
+                  Boolean(name),
+              );
+
+          let priceLabel = "";
+
+          if (
+            offer.pricing.mode ===
+            "fixed_total"
+          ) {
+            priceLabel = `${formatMoneyMinor(
+              offer.pricing
+                .regularTotalMinor ?? 0,
+              currency,
+              locale,
+            )} → ${formatMoneyMinor(
+              offer.pricing
+                .promotionalTotalMinor ?? 0,
+              currency,
+              locale,
+            )}`;
+          } else if (
+            offer.pricing.mode ===
+            "fixed_discount"
+          ) {
+            priceLabel = `- ${formatMoneyMinor(
+              offer.pricing
+                .discountMinor ?? 0,
+              currency,
+              locale,
+            )}`;
+          } else {
+            priceLabel = `${offer.pricing.percentage ?? 0}%`;
+          }
+
+          const progressLabel =
+            currentEvaluation
+              ? currentEvaluation.applicable
+                ? `${text.offerReady} · ${currentEvaluation.bundleCount} ${text.offerBundles}`
+                : text.offerRemaining.replace(
+                    "{count}",
+                    String(
+                      currentEvaluation.nextBundleRemaining,
+                    ),
+                  )
+              : "";
+
+          return (
+            <article
+              key={offer.id}
+              className={[
+                "overflow-hidden rounded-3xl border bg-white shadow-sm transition dark:bg-neutral-900",
+                selected
+                  ? "border-orange-500 ring-2 ring-orange-500/20"
+                  : "border-neutral-200 dark:border-neutral-800",
+              ].join(" ")}
+            >
+              <div className="p-5">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <p className="text-xs font-black uppercase tracking-wider text-orange-700 dark:text-orange-300">
+                      {text.requiredOfferQuantity}: {offer.requiredQuantity}
+                    </p>
+                    <h3 className="mt-2 break-words text-xl font-black">
+                      {localized.name}
+                    </h3>
+                  </div>
+
+                  <Gift
+                    size={28}
+                    className="shrink-0 text-orange-500"
+                  />
+                </div>
+
+                {localized.description && (
+                  <p className="mt-3 text-sm text-neutral-600 dark:text-neutral-300">
+                    {localized.description}
+                  </p>
+                )}
+
+                <p className="mt-4 text-lg font-black">
+                  {priceLabel}
+                </p>
+
+                {eligibleNames.length > 0 && (
+                  <div className="mt-4">
+                    <p className="text-[10px] font-black uppercase tracking-wider text-neutral-400">
+                      {text.offerProducts}
+                    </p>
+                    <p className="mt-1 line-clamp-2 text-xs font-semibold text-neutral-600 dark:text-neutral-300">
+                      {eligibleNames.join(" · ")}
+                    </p>
+                  </div>
+                )}
+
+                {selected && currentEvaluation && (
+                  <div
+                    className={[
+                      "mt-4 rounded-2xl border p-4 text-sm font-bold",
+                      currentEvaluation.applicable
+                        ? "border-green-200 bg-green-50 text-green-700 dark:border-green-900/50 dark:bg-green-950/20 dark:text-green-300"
+                        : "border-orange-200 bg-orange-50 text-orange-800 dark:border-orange-900/50 dark:bg-orange-950/20 dark:text-orange-200",
+                    ].join(" ")}
+                  >
+                    <p>{progressLabel}</p>
+
+                    {currentEvaluation.applicable && (
+                      <p className="mt-2 text-xs font-black">
+                        {text.offerSavings}: {formatMoneyMinor(
+                          currentEvaluation.discountAmountMinor,
+                          currency,
+                          locale,
+                        )}
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <button
+                type="button"
+                onClick={() =>
+                  onSelect(
+                    selected ? "" : offer.id,
+                  )
+                }
+                className={[
+                  "flex min-h-12 w-full items-center justify-center border-t px-4 text-sm font-black transition",
+                  selected
+                    ? "border-orange-200 bg-orange-50 text-orange-800 hover:bg-orange-100 dark:border-orange-900/50 dark:bg-orange-950/20 dark:text-orange-200"
+                    : "border-neutral-200 bg-neutral-950 text-white hover:bg-neutral-800 dark:border-neutral-800 dark:bg-white dark:text-neutral-950 dark:hover:bg-neutral-200",
+                ].join(" ")}
+              >
+                {selected
+                  ? text.removeOffer
+                  : text.useOffer}
+              </button>
+            </article>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 function OrderSummary({
   items,
+  subtotal,
+  discount,
   total,
   locale,
   currency,
   totalLabel,
+  subtotalLabel,
+  discountLabel,
+  offerEvaluation,
+  language,
 }: {
   items: CartItem[];
+  subtotal: number;
+  discount: number;
   total: number;
   locale: string;
   currency: SupportedCurrency;
   totalLabel: string;
+  subtotalLabel: string;
+  discountLabel: string;
+  offerEvaluation: OfferEvaluation | null;
+  language: Language;
 }) {
   return (
     <section className="mt-6 rounded-2xl bg-neutral-100 p-5 dark:bg-neutral-800">
@@ -2773,6 +3340,35 @@ function OrderSummary({
         ))}
       </div>
 
+      <div className="mt-4 space-y-2 border-t border-neutral-300 pt-4 text-sm dark:border-neutral-700">
+        <div className="flex items-center justify-between gap-4">
+          <span className="text-neutral-500">{subtotalLabel}</span>
+          <span className="font-bold">
+            {formatCurrency(subtotal, locale, currency)}
+          </span>
+        </div>
+
+        {discount > 0 && (
+          <>
+            {offerEvaluation?.applicable && (
+              <p className="text-xs font-bold text-orange-700 dark:text-orange-300">
+                {resolveLocalizedOfferText(
+                  offerEvaluation.offer.content,
+                  language,
+                  language,
+                ).name}
+              </p>
+            )}
+            <div className="flex items-center justify-between gap-4 text-green-700 dark:text-green-300">
+              <span>{discountLabel}</span>
+              <span className="font-black">
+                - {formatCurrency(discount, locale, currency)}
+              </span>
+            </div>
+          </>
+        )}
+      </div>
+
       <div className="mt-4 flex items-center justify-between border-t border-neutral-300 pt-4 text-xl font-black dark:border-neutral-700">
         <span>{totalLabel}</span>
 
@@ -2791,20 +3387,28 @@ function OrderSummary({
 function CartDrawer({
   items,
   totalItems,
+  subtotal,
+  discount,
   total,
   locale,
   currency,
   text,
+  offerEvaluation,
+  language,
   onClose,
   onContinue,
   onChangeQuantity,
 }: {
   items: CartItem[];
   totalItems: number;
+  subtotal: number;
+  discount: number;
   total: number;
   locale: string;
   currency: SupportedCurrency;
   text: (typeof TEXT)[Language];
+  offerEvaluation: OfferEvaluation | null;
+  language: Language;
   onClose: () => void;
   onContinue: () => void;
   onChangeQuantity: (
@@ -2910,7 +3514,36 @@ function CartDrawer({
         </div>
 
         <footer className="border-t border-neutral-200 p-5 dark:border-neutral-800">
-          <div className="flex items-center justify-between text-xl font-black">
+          <div className="space-y-2 text-sm">
+            <div className="flex items-center justify-between gap-4">
+              <span className="text-neutral-500">{text.subtotal}</span>
+              <span className="font-bold">
+                {formatCurrency(subtotal, locale, currency)}
+              </span>
+            </div>
+
+            {discount > 0 && (
+              <>
+                {offerEvaluation?.applicable && (
+                  <p className="text-xs font-bold text-orange-700 dark:text-orange-300">
+                    {resolveLocalizedOfferText(
+                      offerEvaluation.offer.content,
+                      language,
+                      language,
+                    ).name}
+                  </p>
+                )}
+                <div className="flex items-center justify-between gap-4 text-green-700 dark:text-green-300">
+                  <span>{text.discount}</span>
+                  <span className="font-black">
+                    - {formatCurrency(discount, locale, currency)}
+                  </span>
+                </div>
+              </>
+            )}
+          </div>
+
+          <div className="mt-4 flex items-center justify-between border-t border-neutral-200 pt-4 text-xl font-black dark:border-neutral-800">
             <span>{text.total}</span>
 
             <span>
