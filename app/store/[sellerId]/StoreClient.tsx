@@ -51,6 +51,7 @@ import {
 import {
   formatMoneyMajor,
 } from "@/app/lib/money";
+import { normalizeInventory, normalizeProductPriceMajor, resolveLocalizedProductText } from "@/app/lib/product-schema";
 import {
   isSupportedCurrency,
   type RegionalLocale,
@@ -471,6 +472,8 @@ function normalizeImageList(
 function normalizeProduct(
   id: string,
   rawValue: unknown,
+  language: Language,
+  currency: SupportedCurrency,
 ): Product | null {
   const raw =
     asRecord(rawValue);
@@ -488,32 +491,20 @@ function normalizeProduct(
     return null;
   }
 
-  const name =
-    asString(raw.name) ||
-    asString(raw.title) ||
-    asString(
-      raw.productName,
-    );
+  const localized = resolveLocalizedProductText(
+    raw.content,
+    language,
+    language,
+    asString(raw.name) || asString(raw.title) || asString(raw.productName),
+    asString(raw.description),
+  );
+  const name = localized.name;
 
   if (!name) {
     return null;
   }
 
-  const price =
-    [
-      raw.sellPrice,
-      raw.shadowSell,
-      raw.price,
-      raw.unitPrice,
-      raw.valor,
-    ]
-      .map(
-        optionalFiniteNumber,
-      )
-      .find(
-        (value) =>
-          value !== undefined,
-      ) ?? 0;
+  const price = normalizeProductPriceMajor(raw, currency);
 
   let stock:
     | number
@@ -530,6 +521,12 @@ function normalizeProduct(
    * Campos antigos ficam como fallback para documentos legados.
    * stockQty tem prioridade mesmo quando vale 0.
    */
+  const v2Inventory = normalizeInventory(raw.inventory, raw.stockQty ?? raw.stock, raw.lowStockThreshold);
+  if (raw.inventory && typeof raw.inventory === "object") {
+    stock = v2Inventory.tracked ? v2Inventory.quantity : undefined;
+    stockField = "inventory";
+  }
+
   const stockCandidates: Array<{
     field:
       NonNullable<
@@ -559,6 +556,7 @@ function normalizeProduct(
     const candidate
     of stockCandidates
   ) {
+    if (stockField === "inventory") break;
     const normalized =
       optionalFiniteNumber(
         candidate.value,
@@ -1065,6 +1063,8 @@ export default function StoreClient({
                 normalizeProduct(
                   document.id,
                   document.data(),
+                  language,
+                  storeProfile.currency,
                 ),
               )
               .filter(
@@ -1470,6 +1470,8 @@ const showingProducts =
               normalizeProduct(
                 productRead.snapshot.id,
                 productRead.snapshot.data(),
+                language,
+                storeProfile.currency,
               );
 
             if (!currentProduct) {

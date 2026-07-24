@@ -19,6 +19,7 @@ import {
 import { Plus } from "lucide-react";
 
 import { auth, db } from "@/app/lib/firebase";
+import { normalizeInventory, normalizeProductContent, normalizeProductPriceMajor } from "@/app/lib/product-schema";
 import { ensureUserProfile } from "@/app/lib/ensureUserProfile";
 import { useI18n } from "@/app/lib/i18n";
 import { formatMoneyMajor } from "@/app/lib/money";
@@ -350,7 +351,10 @@ export default function ProductsCatalogPage() {
         const list = snap.docs
           .map((categoryDoc) => {
             const data = categoryDoc.data();
-            const categoryName = normalizeCategoryLabel(data.name);
+            const names = data.names && typeof data.names === "object" ? data.names : {};
+            const categoryName = normalizeCategoryLabel(
+              names[lang] || names.pt || names.en || names.ja || data.name,
+            );
 
             return {
               id: categoryDoc.id,
@@ -394,13 +398,21 @@ export default function ProductsCatalogPage() {
             ownerUid: String(data.ownerUid || authUser.uid),
             sellerId: String(data.sellerId || sellerId),
             sellerEmail: data.sellerEmail ?? authUser.email ?? null,
+            schemaVersion: 2 as const,
+            categoryId: String(data.categoryId || ""),
             category: String(data.category || "Sem categoria"),
+            content: normalizeProductContent(data.content, String(data.name || ""), String(data.description || "")),
             name: String(data.name || ""),
+            description: String(data.description || ""),
+            priceMinor: Number(data.priceMinor ?? 0),
+            costPriceMinor: typeof data.costPriceMinor === "number" ? data.costPriceMinor : null,
             costPrice: Number(data.costPrice ?? data.shadowCost ?? 0),
-            sellPrice: Number(data.sellPrice ?? data.price ?? data.shadowSell ?? 0),
-            quantity: Number(data.quantity ?? 1),
-            stockQty: Math.max(0, Number(data.stockQty ?? data.stock ?? 0)),
-            lowStockThreshold: Math.max(0, Number(data.lowStockThreshold ?? 5)),
+            sellPrice: normalizeProductPriceMajor(data, currency),
+            unitsPerSale: Number(data.unitsPerSale ?? data.quantity ?? 1),
+            quantity: Number(data.unitsPerSale ?? data.quantity ?? 1),
+            inventory: normalizeInventory(data.inventory, data.stockQty ?? data.stock, data.lowStockThreshold),
+            stockQty: normalizeInventory(data.inventory, data.stockQty ?? data.stock, data.lowStockThreshold).quantity,
+            lowStockThreshold: normalizeInventory(data.inventory, data.stockQty ?? data.stock, data.lowStockThreshold).lowStockThreshold,
             status: (data.status === "inactive" ? "inactive" : "active") as ProductStatus,
             imageUrl: String(data.imageUrl || data.image || ""),
             extraImageUrls: Array.isArray(data.extraImageUrls) ? data.extraImageUrls.filter(Boolean) : [],
@@ -415,7 +427,7 @@ export default function ProductsCatalogPage() {
         setListening(false);
       }
     );
-  }, [authUser, sellerId, profileReady, inactive, t]);
+  }, [authUser, sellerId, profileReady, inactive, t, currency]);
 
   const openCreateProduct = useCallback(() => {
     setSelectedProduct(null);

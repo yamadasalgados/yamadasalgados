@@ -27,6 +27,13 @@ import {
 } from "lucide-react";
 
 import { db } from "@/app/lib/firebase";
+import { majorToMinor } from "@/app/lib/money";
+import {
+  emptyProductContent,
+  normalizeProductContent,
+  type ProductContent,
+  type ProductLanguage,
+} from "@/app/lib/product-schema";
 import type {
   SupportedCurrency,
 } from "@/app/types/regional";
@@ -71,6 +78,9 @@ type Snapshot = {
   sellPrice: string;
   quantity: string;
   stockQty: string;
+  lowStockThreshold: string;
+  inventoryTracked: boolean;
+  content: ProductContent;
   existingImageUrl: string;
   existingExtraUrls: string[];
   newCategoryName: string;
@@ -132,6 +142,9 @@ export default function ProductModal({
   const [sellPrice, setSellPrice] = useState("");
   const [quantity, setQuantity] = useState("1");
   const [stockQty, setStockQty] = useState("0");
+  const [lowStockThreshold, setLowStockThreshold] = useState("5");
+  const [inventoryTracked, setInventoryTracked] = useState(true);
+  const [content, setContent] = useState<ProductContent>(() => emptyProductContent());
 
   const [creatingCategory, setCreatingCategory] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState("");
@@ -257,6 +270,9 @@ export default function ProductModal({
         sellPrice,
         quantity,
         stockQty,
+        lowStockThreshold,
+        inventoryTracked,
+        content,
         existingImageUrl,
         existingExtraUrls,
         newCategoryName,
@@ -272,6 +288,9 @@ export default function ProductModal({
       sellPrice,
       status,
       stockQty,
+      lowStockThreshold,
+      inventoryTracked,
+      content,
     ],
   );
 
@@ -310,7 +329,10 @@ export default function ProductModal({
           ? String(activeProduct.sellPrice)
           : "",
       quantity: String(activeProduct?.quantity || 1),
-      stockQty: String(activeProduct?.stockQty || 0),
+      stockQty: String(activeProduct?.inventory?.quantity ?? activeProduct?.stockQty ?? 0),
+      lowStockThreshold: String(activeProduct?.inventory?.lowStockThreshold ?? activeProduct?.lowStockThreshold ?? 5),
+      inventoryTracked: activeProduct?.inventory?.tracked ?? true,
+      content: normalizeProductContent(activeProduct?.content, activeProduct?.name || "", activeProduct?.description || ""),
       existingImageUrl: activeProduct?.imageUrl || "",
       existingExtraUrls: activeProduct?.extraImageUrls || [],
       newCategoryName: "",
@@ -323,6 +345,9 @@ export default function ProductModal({
     setSellPrice(nextState.sellPrice);
     setQuantity(nextState.quantity);
     setStockQty(nextState.stockQty);
+    setLowStockThreshold(nextState.lowStockThreshold);
+    setInventoryTracked(nextState.inventoryTracked);
+    setContent(nextState.content);
     setExistingImageUrl(nextState.existingImageUrl);
     setExistingExtraUrls(nextState.existingExtraUrls);
     setCreatingCategory(activeCategories.length === 0);
@@ -426,8 +451,10 @@ export default function ProductModal({
     const parsedSale = sellPrice === "" ? 0 : toNum(sellPrice);
     const parsedQuantity = toNum(quantity);
     const parsedStock = toNum(stockQty);
+    const parsedThreshold = toNum(lowStockThreshold);
 
-    if (!name.trim()) {
+    const translatedNameExists = Object.values(content).some((entry) => entry.name.trim());
+    if (!name.trim() && !translatedNameExists) {
       errors.name = t("products.err.invalidName");
     }
 
@@ -455,6 +482,10 @@ export default function ProductModal({
       errors.stockQty = copy.invalidStock;
     }
 
+    if (Number.isNaN(parsedThreshold) || parsedThreshold < 0) {
+      errors.lowStockThreshold = copy.invalidStock;
+    }
+
     if (!existingImageUrl && !mainFile) {
       errors.image = copy.imageRequired;
     }
@@ -479,6 +510,7 @@ export default function ProductModal({
       parsedSale,
       parsedQuantity,
       parsedStock,
+      parsedThreshold,
     };
   }, [
     category,
@@ -499,6 +531,8 @@ export default function ProductModal({
     quantity,
     sellPrice,
     stockQty,
+    lowStockThreshold,
+    content,
     t,
   ]);
 
@@ -561,6 +595,7 @@ export default function ProductModal({
     const sale = validation.parsedSale;
     const units = Math.floor(validation.parsedQuantity);
     const stock = Math.floor(validation.parsedStock);
+    const threshold = Math.floor(validation.parsedThreshold);
     const normalizedCategory = normalizeCategoryLabel(category);
 
     setSaving(true);
@@ -607,9 +642,13 @@ export default function ProductModal({
         await setDoc(
           doc(db, "sellers", sellerId, "categories", categorySlug),
           {
+            schemaVersion: 2,
             ownerUid: authUser.uid,
+            names: { pt: normalizedCategory, en: "", ja: "" },
             name: normalizedCategory,
             slug: categorySlug,
+            status: "active",
+            sortOrder: 0,
             updatedAt: serverTimestamp(),
           },
           { merge: true },
@@ -621,18 +660,48 @@ export default function ProductModal({
         );
       }
 
+      const categoryId = slugify(normalizedCategory);
+      const normalizedContent = normalizeProductContent(
+        content,
+        name.trim(),
+        content.pt.shortDescription,
+      );
+      const preferredLanguage = (lang === "en" || lang === "ja" ? lang : "pt") as ProductLanguage;
+      const fallbackName =
+        normalizedContent[preferredLanguage].name ||
+        normalizedContent.pt.name ||
+        normalizedContent.en.name ||
+        normalizedContent.ja.name ||
+        name.trim();
+
       const payload = {
+        schemaVersion: 2 as const,
         ownerUid: authUser.uid,
         sellerId,
         sellerEmail: authUser.email ?? null,
+        categoryId,
         category: normalizedCategory,
-        name: name.trim(),
+        content: normalizedContent,
+        name: fallbackName,
+        description:
+          normalizedContent[preferredLanguage].shortDescription ||
+          normalizedContent.pt.shortDescription ||
+          "",
+        priceMinor: majorToMinor(sale, currency),
+        costPriceMinor: majorToMinor(cost, currency),
+        unitsPerSale: units,
+        inventory: {
+          tracked: inventoryTracked,
+          quantity: stock,
+          lowStockThreshold: threshold,
+        },
         costPrice: cost,
         sellPrice: sale,
         shadowCost: cost,
         shadowSell: sale,
         quantity: units,
         stockQty: stock,
+        lowStockThreshold: threshold,
         status,
         imageUrl: nextMainUrl,
         extraImageUrls: nextExtraUrls,
@@ -654,7 +723,6 @@ export default function ProductModal({
           ...product,
           ...payload,
           updatedAt: localTimestamp,
-          lowStockThreshold: product.lowStockThreshold,
         };
       } else {
         const createdReference = await addDoc(
@@ -670,16 +738,24 @@ export default function ProductModal({
           id: createdReference.id,
           createdAt: localTimestamp,
           updatedAt: localTimestamp,
+          schemaVersion: 2,
           ownerUid: authUser.uid,
           sellerId,
           sellerEmail: authUser.email ?? null,
+          categoryId,
           category: normalizedCategory,
-          name: name.trim(),
+          content: normalizedContent,
+          name: fallbackName,
+          description: payload.description,
+          priceMinor: payload.priceMinor,
+          costPriceMinor: payload.costPriceMinor,
           costPrice: cost,
           sellPrice: sale,
+          unitsPerSale: units,
           quantity: units,
+          inventory: payload.inventory,
           stockQty: stock,
-          lowStockThreshold: 5,
+          lowStockThreshold: threshold,
           status,
           imageUrl: nextMainUrl,
           extraImageUrls: nextExtraUrls,
@@ -694,6 +770,9 @@ export default function ProductModal({
         sellPrice: String(savedProduct.sellPrice || ""),
         quantity: String(savedProduct.quantity || 1),
         stockQty: String(savedProduct.stockQty || 0),
+        lowStockThreshold: String(savedProduct.lowStockThreshold || 0),
+        inventoryTracked: savedProduct.inventory.tracked,
+        content: savedProduct.content,
         existingImageUrl: savedProduct.imageUrl,
         existingExtraUrls: savedProduct.extraImageUrls || [],
         newCategoryName: "",
@@ -844,11 +923,6 @@ export default function ProductModal({
                   clearFieldError("category");
                 }}
                 onCreateCategory={() => void handleCreateCategory()}
-                name={name}
-                setName={(value) => {
-                  setName(value);
-                  clearFieldError("name");
-                }}
                 costPrice={costPrice}
                 setCostPrice={(value) => {
                   setCostPrice(value);
@@ -868,6 +942,20 @@ export default function ProductModal({
                 setStockQty={(value) => {
                   setStockQty(value);
                   clearFieldError("stockQty");
+                }}
+                lowStockThreshold={lowStockThreshold}
+                setLowStockThreshold={(value) => {
+                  setLowStockThreshold(value);
+                  clearFieldError("lowStockThreshold");
+                }}
+                inventoryTracked={inventoryTracked}
+                setInventoryTracked={setInventoryTracked}
+                content={content}
+                setContent={setContent}
+                legacyName={name}
+                setLegacyName={(value) => {
+                  setName(value);
+                  clearFieldError("name");
                 }}
                 status={status}
                 setStatus={setStatus}

@@ -1,8 +1,8 @@
 {
-  "name": "yamada-fix-admin-planrequests-collection-group",
+  "name": "yamada-fix-02a2-productform-props",
   "destructive": false,
   "files": [
-    "firestore.rules",
+    "app/seller/products/ProductModal.tsx",
     "README.md"
   ]
 }
