@@ -161,40 +161,29 @@ async function sendPushToSeller(params: {
 }
 
 /**
- * ✅ Resolve o EventRef de forma robusta:
- * 1) tenta sellers/{sellerId}/events/{eventId}
- * 2) se não existir, procura via collectionGroup("events") pelo documentId == eventId
+ * Resolve exclusivamente o caminho canônico do schema V2:
+ * sellers/{sellerId}/events/{eventId}.
  */
-async function resolveEventRef(inputSellerId: string, eventId: string) {
+async function resolveEventRef(
+  inputSellerId: string,
+  eventId: string,
+) {
   const sellerId = cleanStr(inputSellerId, 160);
   const eId = cleanStr(eventId, 120);
 
-  // tentativa direta
-  if (sellerId) {
-    const directRef = db.collection("sellers").doc(sellerId).collection("events").doc(eId);
-    const directSnap = await directRef.get();
-    if (directSnap.exists) {
-      return { eventRef: directRef, sellerId: sellerId };
-    }
-  }
+  if (!sellerId || !eId) return null;
 
-  // fallback: collectionGroup
-  const FieldPath = admin.firestore.FieldPath;
-  const cg = await db
-    .collectionGroup("events")
-    .where(FieldPath.documentId(), "==", eId)
-    .limit(1)
-    .get();
+  const eventRef = db
+    .collection("sellers")
+    .doc(sellerId)
+    .collection("events")
+    .doc(eId);
 
-  if (cg.empty) return null;
+  const eventSnap = await eventRef.get();
 
-  const foundRef = cg.docs[0].ref; // .../sellers/{sellerId}/events/{eventId}
-  const sellerDoc = foundRef.parent.parent; // sellers/{sellerId}
-  const foundSellerId = sellerDoc?.id || "";
+  if (!eventSnap.exists) return null;
 
-  if (!foundSellerId) return null;
-
-  return { eventRef: foundRef, sellerId: foundSellerId };
+  return { eventRef, sellerId };
 }
 
 /** ---------- FUNCTION ---------- */
@@ -214,6 +203,7 @@ export const createEventOrder = onRequest(
         const eventId = cleanStr(body.eventId, 120);
         const channel = body.channel as any;
 
+        if (!sellerIdIncoming) httpError(400, "Missing sellerId");
         if (!eventId) httpError(400, "Missing eventId");
         if (channel !== "whatsapp" && channel !== "messenger") httpError(400, "Invalid channel");
 
@@ -250,7 +240,7 @@ export const createEventOrder = onRequest(
         const deliveryTimeSlot = cleanStr(body.deliveryTimeSlot, 20);
         const locationLink = deliveryMode === "delivery" ? cleanStr(body.locationLink, 300) : "";
 
-        // ✅ resolve o evento de verdade (evita "Event not found" por sellerId errado)
+        // Resolve somente o caminho canônico informado pelo cliente.
         const resolved = await resolveEventRef(sellerIdIncoming, eventId);
         if (!resolved) httpError(404, "Event not found");
 

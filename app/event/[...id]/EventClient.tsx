@@ -29,7 +29,7 @@ type EventData = {
   title: string;
   region: string;
   regionId?: string;
-  sellerId?: string;
+  sellerId: string;
   deliveryDates: string[];
   deliveryDateLabel: string;
   productIds: string[];
@@ -415,13 +415,9 @@ return Array.from(set).sort((a, b) => a.localeCompare(b, locale));
         setLoading(true);
         setNotFound(false);
 
-        let snap = await getDoc(doc(db, "sellers", sellerId, "events", id));
-        let eventSource: "seller-events" | "root-events" = "seller-events";
-
-        if (!snap.exists()) {
-          snap = await getDoc(doc(db, "events", id));
-          eventSource = "root-events";
-        }
+        const snap = await getDoc(
+          doc(db, "sellers", sellerId, "events", id),
+        );
 
         if (!alive) return;
 
@@ -431,8 +427,22 @@ return Array.from(set).sort((a, b) => a.localeCompare(b, locale));
         }
 
         const data = snap.data() as any;
+        const storedSellerId =
+          typeof data.sellerId === "string"
+            ? data.sellerId.trim()
+            : "";
 
-        const effectiveSellerId = eventSource === "seller-events" ? sellerId : String(data.sellerId || sellerId);
+        // O caminho é a fonte de verdade. Um sellerId divergente no
+        // documento indica dado inconsistente e não deve ser aceito.
+        if (storedSellerId && storedSellerId !== sellerId) {
+          console.error(
+            "[EventClient] Event/seller mismatch",
+            { sellerId, storedSellerId, eventId: id },
+          );
+          setNotFound(true);
+          return;
+        }
+
         const deliveryDates = normalizeStringArray(data.deliveryDates);
 
         let deliveryDateLabel = String(data.deliveryDateLabel || data.deliveryDate || "");
@@ -447,7 +457,7 @@ return Array.from(set).sort((a, b) => a.localeCompare(b, locale));
         const nextEvent: EventData = {
           title: String(data.title || data.name || ""),
           region: String(data.region || data.regionName || ""),
-          sellerId: effectiveSellerId,
+          sellerId,
           regionId: String(data.regionId || ""),
           deliveryDates,
           deliveryDateLabel,
@@ -472,7 +482,7 @@ return Array.from(set).sort((a, b) => a.localeCompare(b, locale));
             ...(nextEvent.featuredProductNames || []),
           ]);
 
-          const productsMap = await fetchEventPublishedProducts(effectiveSellerId, id, eventProductNames);
+          const productsMap = await fetchEventPublishedProducts(sellerId, id, eventProductNames);
           setProductsData(productsMap);
         } catch (productErr) {
           console.error("[EventClient] Evento abriu, mas erro ao carregar produtos:", productErr);
@@ -507,15 +517,13 @@ return Array.from(set).sort((a, b) => a.localeCompare(b, locale));
   }, [sellerId, id, tr]);
 
   useEffect(() => {
-    const effectiveSellerId = event?.sellerId || sellerId;
-
-    if (!effectiveSellerId || !id || !lastOrderId) return;
+    if (!sellerId || !id || !lastOrderId) return;
 
     setChatLoading(true);
 
     return onSnapshot(
       query(
-        collection(db, "sellers", effectiveSellerId, "events", id, "orders", lastOrderId, "messages"),
+        collection(db, "sellers", sellerId, "events", id, "orders", lastOrderId, "messages"),
         orderBy("createdAt", "asc"),
         limit(200)
       ),
@@ -529,7 +537,7 @@ return Array.from(set).sort((a, b) => a.localeCompare(b, locale));
         setChatLoading(false);
       }
     );
-  }, [event?.sellerId, sellerId, id, lastOrderId]);
+  }, [sellerId, id, lastOrderId]);
 
   const canSubmit = useMemo(() => {
     if (submitting) return false;
@@ -588,27 +596,31 @@ return Array.from(set).sort((a, b) => a.localeCompare(b, locale));
       });
     });
 
-    const effectiveSellerId = event.sellerId || sellerId;
-
-    const orderRef = await addDoc(collection(db, "sellers", effectiveSellerId, "events", id, "orders"), {
-      customerName: customerName.trim(),
-      note: note.trim(),
-      quantities: quantitiesClean,
-      items,
-      totalItems,
-      totalAmount,
-      status: "pending",
-      channel: "pwa",
-      deliveryMode,
-      deliveryDate: getChosenDate(),
-      deliveryTimeSlot: getChosenTimeLabel(),
-      locationLink: deliveryMode === "delivery" ? locationLink.trim() : "",
-      customerClientId: customerId,
-      sellerUnread: true,
-      sellerReadAt: null,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
+    const orderRef = await addDoc(
+      collection(db, "sellers", sellerId, "events", id, "orders"),
+      {
+        customerName: customerName.trim(),
+        note: note.trim(),
+        quantities: quantitiesClean,
+        items,
+        totalItems,
+        totalAmount,
+        status: "pending",
+        channel: "pwa",
+        deliveryMode,
+        deliveryDate: getChosenDate(),
+        deliveryTimeSlot: getChosenTimeLabel(),
+        locationLink:
+          deliveryMode === "delivery"
+            ? locationLink.trim()
+            : "",
+        customerClientId: customerId,
+        sellerUnread: true,
+        sellerReadAt: null,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      },
+    );
 
     setLastOrderId(orderRef.id);
     setChatOpen(true);
@@ -658,7 +670,7 @@ return Array.from(set).sort((a, b) => a.localeCompare(b, locale));
     const txt = chatText.trim();
     setChatText("");
 
-    await addDoc(collection(db, "sellers", event.sellerId || sellerId, "events", id, "orders", lastOrderId, "messages"), {
+    await addDoc(collection(db, "sellers", sellerId, "events", id, "orders", lastOrderId, "messages"), {
       text: txt,
       senderId: customerId,
       senderRole: "customer",

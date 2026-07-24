@@ -119,14 +119,6 @@ service cloud.firestore {
       );
     }
 
-    function validAccountStatus(value) {
-      return value in [
-        "active",
-        "suspended",
-        "disabled"
-      ];
-    }
-
     function validPlan(value) {
       return value in [
         "starter",
@@ -339,6 +331,23 @@ service cloud.firestore {
 
       allow delete:
         if isAdmin();
+    }
+
+    // =========================================================
+    // ADMIN COLLECTION-GROUP QUERIES
+    // =========================================================
+
+    /*
+     * The admin plans screen uses:
+     *
+     *   collectionGroup(db, "planRequests")
+     *
+     * Collection-group queries must be authorized by a recursive wildcard
+     * rule that covers every collection with that ID. The seller-scoped rule
+     * below remains responsible for owner reads and all writes.
+     */
+    match /{path=**}/planRequests/{requestId} {
+      allow read: if isAdmin();
     }
 
     // =========================================================
