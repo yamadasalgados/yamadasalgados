@@ -1,9 +1,8 @@
 {
-  "name": "yamada-export-legacy-event",
+  "name": "yamada-fix-admin-planrequests-collection-group",
   "destructive": false,
   "files": [
-    "scripts/export-legacy-event-orders.cjs",
-    "scripts/list-legacy-events.cjs",
+    "firestore.rules",
     "README.md"
   ]
 }

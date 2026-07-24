@@ -1,0 +1,47 @@
+{
+  "name": "yamada-foundation-01d",
+  "schemaVersion": 1,
+  "destructive": false,
+  "files": [
+    {
+      "path": "app/event/[...id]/page.tsx",
+      "sha256": "2739107e0b7b2704d8b64bfed45ce57375705dc33b413efe823f3a4579e9f0f5",
+      "sizeBytes": 2479
+    },
+    {
+      "path": "app/event/[...id]/EventClient.tsx",
+      "sha256": "d265567039e13ba77f723d73f227c5711d59469c8a4f02a9d41d280314aeaf31",
+      "sizeBytes": 42796
+    },
+    {
+      "path": "functions/_src/createEventOrder.ts",
+      "sha256": "97d778b10987b038f328e11abcdec684b7a6e43b96a32f6c2f92b0544e095003",
+      "sizeBytes": 14082
+    },
+    {
+      "path": "functions/lib/createEventOrder.js",
+      "sha256": "40f653cda584e5f70b54e75170e60576038304cadbba1ca2330d1e4214aca820",
+      "sizeBytes": 16182
+    },
+    {
+      "path": "firestore.rules",
+      "sha256": "d005bd11372ce08b03ce3ee85b2ed571876de681df90bf1240a085cba5108fd0",
+      "sizeBytes": 23301
+    },
+    {
+      "path": "scripts/audit-legacy-root-paths.cjs",
+      "sha256": "c605ada85329c323229527df3df01e13ee363f6d5776e70a48a2f3c65484954e",
+      "sizeBytes": 2750
+    },
+    {
+      "path": "INSTALL-01D.md",
+      "sha256": "fdfbc1e9f0cbd7d06edea73843bd7d41aa0a7c3fcfee8b1fdb7b9a72c83798f4",
+      "sizeBytes": 2915
+    },
+    {
+      "path": "VALIDATION-01D.md",
+      "sha256": "c61e9896a663dc0ede378d742efe1194a68f488ecfbff966d357f0f3a61b7146",
+      "sizeBytes": 467
+    }
+  ]
+}
