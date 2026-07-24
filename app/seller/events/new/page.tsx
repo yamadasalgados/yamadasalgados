@@ -12,7 +12,6 @@ import {
   collection,
   addDoc,
   serverTimestamp,
-  setDoc,
   onSnapshot,
   query,
   limit,
@@ -21,9 +20,24 @@ import {
 } from "firebase/firestore";
 import { ensureUserProfile } from "@/app/lib/ensureUserProfile";
 import { useI18n } from "@/app/lib/i18n";
+import { Gift } from "lucide-react";
+import {
+  formatMoneyMinor,
+  majorToMinor,
+} from "@/app/lib/money";
+import {
+  normalizeOffer,
+  offerIsCurrentlyActive,
+  resolveLocalizedOfferText,
+  type OfferDoc,
+} from "@/app/lib/offer-schema";
+import type {
+  RegionalLocale,
+  SupportedCurrency,
+} from "@/app/types/regional";
 
 type DeliveryChoice = "delivery" | "pickup" | "both";
-type ProductStatus = "active" | "inactive";
+type ProductStatus = "active" | "inactive" | "made_to_order";
 
 type UserDoc = {
   role?: "seller" | "admin";
@@ -36,6 +50,7 @@ type ProductDoc = {
   id: string;
   name: string;
   price: number;
+  priceMinor?: number;
   imageUrl?: string;
   image?: string;
   extraImageUrls?: string[];
@@ -119,6 +134,11 @@ export default function CreateNewEventPage() {
   const [ownProducts, setOwnProducts] = useState<ProductDoc[]>([]);
   const [loadingProducts, setLoadingProducts] = useState(false);
   const [selectedOwn, setSelectedOwn] = useState<Record<string, boolean>>({});
+  const [ownOffers, setOwnOffers] = useState<OfferDoc[]>([]);
+  const [selectedOfferIds, setSelectedOfferIds] = useState<Record<string, boolean>>({});
+  const [loadingOffers, setLoadingOffers] = useState(false);
+  const [currency, setCurrency] = useState<SupportedCurrency>("JPY");
+  const [regionalLocale, setRegionalLocale] = useState<RegionalLocale>("ja-JP");
 
   const [loading, setLoading] = useState(false);
   const [creatingProfile, setCreatingProfile] = useState(false);
@@ -129,21 +149,45 @@ export default function CreateNewEventPage() {
   const role = profile?.role ?? "";
   const inactive = profile?.active === false;
 
-  const yen = useCallback(
-    (n: number) => {
-      const locale = lang === "pt" ? "pt-BR" : lang === "en" ? "en-US" : "ja-JP";
-      return new Intl.NumberFormat(locale, {
+  const money = useCallback(
+    (n: number) =>
+      new Intl.NumberFormat(regionalLocale, {
         style: "currency",
-        currency: "JPY",
-        maximumFractionDigits: 0,
-      }).format(Math.round(n || 0));
-    },
-    [lang]
+        currency,
+        maximumFractionDigits: currency === "JPY" ? 0 : 2,
+      }).format(Number(n || 0)),
+    [currency, regionalLocale],
   );
 
   const pickedCount = useMemo(() => {
     return Object.values(selectedOwn).filter(Boolean).length;
   }, [selectedOwn]);
+
+  const productById = useMemo(
+    () => new Map(ownProducts.map((product) => [product.id, product])),
+    [ownProducts],
+  );
+
+  const selectableOffers = useMemo(
+    () =>
+      ownOffers.filter((offer) =>
+        offer.eligibleProductIds.every((productId) => productById.has(productId)),
+      ),
+    [ownOffers, productById],
+  );
+
+  const selectedOffers = useMemo(
+    () => selectableOffers.filter((offer) => selectedOfferIds[offer.id]),
+    [selectableOffers, selectedOfferIds],
+  );
+
+  const requiredProductIds = useMemo(() => {
+    const ids = new Set<string>();
+    selectedOffers.forEach((offer) => {
+      offer.eligibleProductIds.forEach((productId) => ids.add(productId));
+    });
+    return ids;
+  }, [selectedOffers]);
 
   const canSubmit = useMemo(() => {
     if (!authUser || !sellerId || inactive) return false;
@@ -228,10 +272,17 @@ export default function CreateNewEventPage() {
               id: d.id,
               name: String(data.name || ""),
               price: Number(data.sellPrice || data.price || 0),
+              priceMinor: typeof data.priceMinor === "number"
+                ? Math.max(0, Math.round(data.priceMinor))
+                : undefined,
               imageUrl: String(data.imageUrl || data.image || ""),
               extraImageUrls: normalizeStringArray(data.extraImageUrls),
               category: String(data.category || ""),
-              status: (data.status === "inactive" ? "inactive" : "active") as ProductStatus,
+              status: (data.status === "inactive"
+                ? "inactive"
+                : data.status === "made_to_order"
+                  ? "made_to_order"
+                  : "active") as ProductStatus,
               stockQty: toNumberOrUndef(data.stockQty),
               lowStockThreshold: toNumberOrUndef(data.lowStockThreshold),
             };
@@ -257,7 +308,66 @@ export default function CreateNewEventPage() {
     };
   }, [authUser, sellerId, inactive, t]);
 
+  useEffect(() => {
+    if (!sellerId) return;
+
+    getDoc(doc(db, "sellers", sellerId))
+      .then((snapshot) => {
+        if (!snapshot.exists()) return;
+        const data = snapshot.data() as any;
+        const nextCurrency = data?.regional?.currency;
+        const nextLocale = data?.regional?.locale;
+        if (nextCurrency === "BRL" || nextCurrency === "USD" || nextCurrency === "JPY") {
+          setCurrency(nextCurrency);
+        }
+        if (nextLocale === "pt-BR" || nextLocale === "en-US" || nextLocale === "ja-JP") {
+          setRegionalLocale(nextLocale);
+        }
+      })
+      .catch(() => undefined);
+  }, [sellerId]);
+
+  useEffect(() => {
+    if (!sellerId || inactive) {
+      setOwnOffers([]);
+      return;
+    }
+
+    setLoadingOffers(true);
+    return onSnapshot(
+      query(collection(db, "sellers", sellerId, "offers"), orderBy("createdAt", "desc"), limit(200)),
+      (snapshot) => {
+        const list = snapshot.docs
+          .map((document) => normalizeOffer(document.id, document.data(), currency))
+          .filter((offer): offer is OfferDoc => offer !== null && offerIsCurrentlyActive(offer));
+        setOwnOffers(list);
+        setLoadingOffers(false);
+      },
+      (error) => {
+        console.error("[CreateEvent] offers:", error);
+        setOwnOffers([]);
+        setLoadingOffers(false);
+      },
+    );
+  }, [currency, inactive, sellerId]);
+
+  const toggleOffer = (offer: OfferDoc) => {
+    const selecting = !selectedOfferIds[offer.id];
+    setSelectedOfferIds((current) => ({ ...current, [offer.id]: selecting }));
+
+    if (selecting) {
+      setSelectedOwn((current) => {
+        const next = { ...current };
+        offer.eligibleProductIds.forEach((productId) => {
+          if (productById.has(productId)) next[productId] = true;
+        });
+        return next;
+      });
+    }
+  };
+
   const toggleOwn = (id: string) => {
+    if (selectedOwn[id] && requiredProductIds.has(id)) return;
     setSelectedOwn((prev) => ({ ...prev, [id]: !prev[id] }));
   };
 
@@ -270,7 +380,11 @@ export default function CreateNewEventPage() {
   };
 
   const clearOwn = () => {
-    setSelectedOwn({});
+    const next: Record<string, boolean> = {};
+    requiredProductIds.forEach((productId) => {
+      next[productId] = true;
+    });
+    setSelectedOwn(next);
   };
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -328,6 +442,10 @@ export default function CreateNewEventPage() {
         name: titleTrim,
         isActive: true,
         productIds: pickedOwnIds,
+        offerIds: selectedOffers.map((offer) => offer.id),
+        currency,
+        regionalLocale,
+        defaultLanguage: lang === "en" || lang === "ja" ? lang : "pt",
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       };
@@ -350,10 +468,14 @@ export default function CreateNewEventPage() {
           enabled: true,
           name: p.name,
           price: Number(p.price || 0),
+          priceMinor: p.priceMinor ?? majorToMinor(Number(p.price || 0), currency),
+          currency,
           imageUrl: pickImageUrl(p),
           extraImageUrls: normalizeStringArray(p.extraImageUrls),
           category: String(p.category || ""),
           status: p.status,
+          availabilityStatus: p.status === "made_to_order" ? "made_to_order" : "active",
+          productionMode: p.status === "made_to_order" ? "made_to_order" : "stock",
           stockQty: toNumberOrUndef(p.stockQty),
           lowStockThreshold: toNumberOrUndef(p.lowStockThreshold),
           createdAt: serverTimestamp(),
@@ -363,17 +485,28 @@ export default function CreateNewEventPage() {
         batch.set(doc(db, "sellers", sellerId, "events", eventRef.id, "items", pid), stripUndefined(base));
       }
 
-      await batch.commit();
+      for (const offer of selectedOffers) {
+        batch.set(
+          doc(db, "sellers", sellerId, "events", eventRef.id, "offers", offer.id),
+          {
+            schemaVersion: 2,
+            sourceOfferId: offer.id,
+            content: offer.content,
+            status: "active",
+            eligibleProductIds: offer.eligibleProductIds,
+            requiredQuantity: offer.requiredQuantity,
+            pricing: offer.pricing,
+            startsAt: offer.startsAt ?? null,
+            endsAt: offer.endsAt ?? null,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+            createdBy: authUser.uid,
+            updatedBy: authUser.uid,
+          },
+        );
+      }
 
-      await setDoc(
-        doc(db, "users", authUser.uid),
-        {
-          sellerId,
-          regionId,
-          updatedAt: serverTimestamp(),
-        },
-        { merge: true }
-      );
+      await batch.commit();
 
       router.push(`/seller/events/${eventRef.id}`);
     } catch (e: any) {
@@ -608,6 +741,72 @@ export default function CreateNewEventPage() {
             </div>
           </div>
 
+          <div className="space-y-3 rounded-3xl border border-orange-200 bg-orange-50/40 p-4 dark:border-orange-900/40 dark:bg-orange-950/10">
+            <div className="flex items-center gap-2">
+              <Gift className="h-5 w-5 text-orange-500" />
+              <div>
+                <h4 className="text-xs font-black uppercase tracking-widest text-orange-700 dark:text-orange-300">
+                  {lang === "ja" ? "オファーとセット" : lang === "en" ? "Offers and kits" : "Ofertas e kits"}
+                </h4>
+                <p className="mt-1 text-[11px] font-bold text-neutral-500 dark:text-neutral-400">
+                  {lang === "ja"
+                    ? "選択すると対象商品もイベントに追加されます。"
+                    : lang === "en"
+                      ? "Selecting an offer automatically includes its eligible products."
+                      : "Ao selecionar uma oferta, os produtos participantes entram automaticamente no evento."}
+                </p>
+              </div>
+            </div>
+
+            {loadingOffers ? (
+              <p className="py-3 text-center text-xs font-bold text-neutral-400">{t("products.updating")}</p>
+            ) : selectableOffers.length === 0 ? (
+              <p className="py-3 text-center text-xs font-bold text-neutral-400">
+                {lang === "ja" ? "利用可能なオファーはありません。" : lang === "en" ? "No eligible offers found." : "Nenhuma oferta disponível para estes produtos."}
+              </p>
+            ) : (
+              <div className="grid gap-3 sm:grid-cols-2">
+                {selectableOffers.map((offer) => {
+                  const checked = Boolean(selectedOfferIds[offer.id]);
+                  const localized = resolveLocalizedOfferText(
+                    offer.content,
+                    lang === "en" || lang === "ja" ? lang : "pt",
+                    lang === "en" || lang === "ja" ? lang : "pt",
+                  );
+                  const priceLabel =
+                    offer.pricing.mode === "fixed_total"
+                      ? `${formatMoneyMinor(offer.pricing.regularTotalMinor ?? 0, currency, regionalLocale)} → ${formatMoneyMinor(offer.pricing.promotionalTotalMinor ?? 0, currency, regionalLocale)}`
+                      : offer.pricing.mode === "fixed_discount"
+                        ? `- ${formatMoneyMinor(offer.pricing.discountMinor ?? 0, currency, regionalLocale)}`
+                        : `${offer.pricing.percentage ?? 0}%`;
+
+                  return (
+                    <label
+                      key={offer.id}
+                      className={`cursor-pointer rounded-2xl border p-4 transition ${checked ? "border-orange-500 bg-white ring-2 ring-orange-500/20 dark:bg-neutral-900" : "border-orange-200 bg-white/70 dark:border-orange-900/40 dark:bg-neutral-900/60"}`}
+                    >
+                      <div className="flex items-start gap-3">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleOffer(offer)}
+                          className="mt-1 h-4 w-4 accent-orange-500"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-black text-neutral-900 dark:text-white">{localized.name}</p>
+                          <p className="mt-1 text-xs font-black text-orange-600 dark:text-orange-300">{priceLabel}</p>
+                          <p className="mt-2 text-[10px] font-bold text-neutral-400">
+                            {lang === "ja" ? "必要数" : lang === "en" ? "Required quantity" : "Quantidade necessária"}: {offer.requiredQuantity}
+                          </p>
+                        </div>
+                      </div>
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
           {loadingProducts ? (
             <p className="text-xs font-bold text-neutral-400 italic py-4 text-center">
               {t("products.updating")}
@@ -666,8 +865,13 @@ export default function CreateNewEventPage() {
                       </p>
 
                       <p className="text-[10px] font-bold text-neutral-400 truncate">
-                        {yen(p.price)} {p.category ? `• ${p.category}` : ""}
+                        {money(p.price)} {p.category ? `• ${p.category}` : ""}
                       </p>
+                      {requiredProductIds.has(p.id) && (
+                        <p className="text-[9px] font-black uppercase tracking-wider text-orange-500">
+                          {lang === "ja" ? "セット必須" : lang === "en" ? "Required by kit" : "Obrigatório pelo kit"}
+                        </p>
+                      )}
                     </div>
                   </label>
                 );

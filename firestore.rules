@@ -739,6 +739,15 @@ service cloud.firestore {
             || isSellerOwner(sellerId);
         }
 
+        // Snapshot das ofertas selecionadas para este evento.
+        // A página pública lê estes documentos; apenas seller/admin escreve.
+        match /offers/{offerId} {
+          allow read: if true;
+          allow create, update, delete:
+            if isAdmin()
+            || isSellerOwner(sellerId);
+        }
+
         match /orders/{orderId} {
           allow create:
             if sellerAcceptsOrders(sellerId)

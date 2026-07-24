@@ -27,6 +27,9 @@ import type {
   RegionalLocale,
   SupportedCurrency,
 } from "@/app/types/regional";
+import type {
+  AppliedOfferSnapshot,
+} from "@/app/lib/offer-schema";
 
 // --- 📝 Interfaces de Tipagem Estrita (TypeScript) ---
 
@@ -61,10 +64,14 @@ type EventDoc = {
 
 type OrderDoc = {
   customerName?: string;
+  customerPhone?: string;
   note?: string;
   quantities: Record<string, number>;
   totalItems?: number;
+  subtotal?: number;
+  discount?: number;
   totalAmount?: number;
+  offersApplied?: AppliedOfferSnapshot[];
   status?: OrderStatus | string;
   channel?: string;
   deliveryMode?: "delivery" | "pickup" | "none" | string;
@@ -292,12 +299,16 @@ export default function OrderDetailClient({ eventId, orderId }: { eventId: strin
             "",
           ),
         currency:
-          userData.currency ?? "JPY",
+          sellerData?.regional?.currency ??
+          userData.currency ??
+          "JPY",
         regionalLocale:
+          sellerData?.regional?.locale ??
           userData.regionalLocale ??
           "ja-JP",
         timeZone:
           String(
+            sellerData?.regional?.timeZone ??
             userData.timeZone ??
             "Asia/Tokyo",
           ),
@@ -366,10 +377,16 @@ export default function OrderDetailClient({ eventId, orderId }: { eventId: strin
         const data = snap.data() as any;
         setOrder({
           customerName: data.customerName || "",
+          customerPhone: data.customerPhone || "",
           note: data.note || "",
           quantities: (data.quantities || {}) as Record<string, number>,
           totalItems: Number(data.totalItems || 0),
+          subtotal: Number(data.subtotal || data.totalAmount || 0),
+          discount: Number(data.discount || 0),
           totalAmount: Number(data.totalAmount || 0),
+          offersApplied: Array.isArray(data.offersApplied)
+            ? data.offersApplied as AppliedOfferSnapshot[]
+            : [],
           status: data.status || "pending",
           channel: data.channel || "other",
           deliveryMode: data.deliveryMode || "pickup",
@@ -554,6 +571,14 @@ export default function OrderDetailClient({ eventId, orderId }: { eventId: strin
                 {lang === "ja" ? "顧客情報" : lang === "en" ? "Customer Data" : "Dados do Comprador"}
               </span>
               <p className="text-base font-black text-neutral-900 dark:text-white tracking-tight">{order.customerName || (lang === "ja" ? "名前なしの顧客" : lang === "en" ? "Unnamed Customer" : "Cliente sem Nome")}</p>
+              {order.customerPhone && (
+                <a
+                  href={`tel:${order.customerPhone}`}
+                  className="text-xs font-black text-blue-600 underline dark:text-blue-400"
+                >
+                  {order.customerPhone}
+                </a>
+              )}
               {order.note && <p className="text-xs font-medium text-neutral-500 dark:text-neutral-400 bg-white dark:bg-neutral-900 p-3 rounded-xl border border-neutral-100 dark:border-neutral-800 mt-2 leading-relaxed">{lang === "ja" ? "備考: " : lang === "en" ? "Note: " : "Obs: "}{order.note}</p>}
             </div>
 
@@ -644,8 +669,29 @@ export default function OrderDetailClient({ eventId, orderId }: { eventId: strin
                     {lang === "ja" ? "獲得総額" : lang === "en" ? "Total Revenue" : "Total Arrecadado"}
                   </span>
                   <span className="text-xl font-black text-neutral-900 dark:text-white">{yen(order.totalAmount || computedTotal || 0)}</span>
+                  {(order.discount || 0) > 0 && (
+                    <span className="mt-1 block text-[10px] font-black text-emerald-600 dark:text-emerald-400">
+                      {lang === "ja" ? "割引" : lang === "en" ? "Discount" : "Desconto"}: -{yen(order.discount || 0)}
+                    </span>
+                  )}
                 </div>
               </div>
+
+              {(order.offersApplied || []).length > 0 && (
+                <div className="rounded-2xl border border-orange-200 bg-orange-50 p-4 dark:border-orange-900/40 dark:bg-orange-950/20">
+                  {(order.offersApplied || []).map((offer) => (
+                    <div key={offer.offerId} className="space-y-1">
+                      <p className="text-[10px] font-black uppercase tracking-wider text-orange-600 dark:text-orange-300">
+                        {lang === "ja" ? "適用オファー" : lang === "en" ? "Applied offer" : "Oferta aplicada"}
+                      </p>
+                      <p className="text-sm font-black text-neutral-900 dark:text-white">{offer.name}</p>
+                      <p className="text-xs font-bold text-neutral-500 dark:text-neutral-300">
+                        {offer.bundleCount} {lang === "ja" ? "セット" : lang === "en" ? "bundle(s)" : "kit(s)"} · {lang === "ja" ? "割引" : lang === "en" ? "discount" : "desconto"} {yen(order.discount || 0)}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )}
 
               <div className="overflow-hidden border border-neutral-200 dark:border-neutral-800 rounded-2xl bg-white dark:bg-neutral-900">
                 <table className="min-w-full text-xs border-collapse">

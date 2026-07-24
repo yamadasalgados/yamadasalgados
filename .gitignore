@@ -75,3 +75,8 @@ node_modules/
 .env.local
 .vercel/
 exports/
+review_packages/
+yamada-*.zip
+INSTALL-*.md
+VALIDATION-*.md
+MANIFEST-*.json

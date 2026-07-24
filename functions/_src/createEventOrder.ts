@@ -22,7 +22,7 @@ const PUSH_SUBJECT = defineSecret("PUSH_SUBJECT");
 const SELLER_DASHBOARD_BASE_URL = defineString("SELLER_DASHBOARD_BASE_URL", { default: "" });
 
 /** ---------- TYPES ---------- */
-type Channel = "whatsapp" | "messenger";
+type Channel = "whatsapp" | "messenger" | "pwa";
 
 type CreateOrderBody = {
   sellerId: string;
@@ -30,7 +30,9 @@ type CreateOrderBody = {
   channel: Channel;
 
   customerName?: string;
+  customerPhone?: string;
   note?: string;
+  selectedOfferId?: string;
 
   deliveryMode?: "delivery" | "pickup" | "none";
   deliveryDate?: string;
@@ -186,6 +188,192 @@ async function resolveEventRef(
   return { eventRef, sellerId };
 }
 
+/** ---------- OFFER HELPERS ---------- */
+type PricingMode =
+  | "fixed_total"
+  | "fixed_discount"
+  | "percentage_discount";
+
+type EventOffer = {
+  id: string;
+  content: Record<string, { name?: string }>;
+  eligibleProductIds: string[];
+  requiredQuantity: number;
+  pricing: {
+    mode: PricingMode;
+    regularTotalMinor: number | null;
+    promotionalTotalMinor: number | null;
+    discountMinor: number | null;
+    percentage: number | null;
+  };
+};
+
+function asInt(value: unknown, fallback = 0) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed)
+    ? Math.max(0, Math.round(parsed))
+    : fallback;
+}
+
+function normalizeEventOffer(
+  id: string,
+  value: FirebaseFirestore.DocumentData,
+): EventOffer | null {
+  const eligibleProductIds = Array.isArray(value.eligibleProductIds)
+    ? Array.from(
+        new Set(
+          value.eligibleProductIds
+            .filter((item: unknown) => typeof item === "string")
+            .map((item: string) => item.trim())
+            .filter(Boolean),
+        ),
+      )
+    : [];
+  const requiredQuantity = asInt(value.requiredQuantity);
+  const pricingRaw =
+    value.pricing && typeof value.pricing === "object"
+      ? value.pricing
+      : {};
+  const mode: PricingMode =
+    pricingRaw.mode === "fixed_discount" ||
+    pricingRaw.mode === "percentage_discount"
+      ? pricingRaw.mode
+      : "fixed_total";
+
+  if (eligibleProductIds.length === 0 || requiredQuantity < 1) {
+    return null;
+  }
+
+  return {
+    id,
+    content:
+      value.content && typeof value.content === "object"
+        ? value.content
+        : {},
+    eligibleProductIds,
+    requiredQuantity,
+    pricing: {
+      mode,
+      regularTotalMinor:
+        pricingRaw.regularTotalMinor == null
+          ? null
+          : asInt(pricingRaw.regularTotalMinor),
+      promotionalTotalMinor:
+        pricingRaw.promotionalTotalMinor == null
+          ? null
+          : asInt(pricingRaw.promotionalTotalMinor),
+      discountMinor:
+        pricingRaw.discountMinor == null
+          ? null
+          : asInt(pricingRaw.discountMinor),
+      percentage:
+        pricingRaw.percentage == null
+          ? null
+          : Math.min(100, Math.max(0, Number(pricingRaw.percentage) || 0)),
+    },
+  };
+}
+
+function currencyMinorFactor(currency: string) {
+  return currency === "JPY" ? 1 : 100;
+}
+
+function majorToMinor(value: unknown, currency: string) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.max(0, Math.round(parsed * currencyMinorFactor(currency)));
+}
+
+function minorToMajorValue(value: number, currency: string) {
+  return value / currencyMinorFactor(currency);
+}
+
+function resolveOfferName(offer: EventOffer) {
+  for (const language of ["pt", "en", "ja"]) {
+    const name = offer.content?.[language]?.name;
+    if (typeof name === "string" && name.trim()) return name.trim();
+  }
+  return offer.id;
+}
+
+function evaluateEventOffer(
+  offer: EventOffer,
+  lines: Array<{ productId: string; quantity: number; priceMinor: number }>,
+) {
+  const eligible = new Set(offer.eligibleProductIds);
+  const eligibleQuantity = lines.reduce(
+    (sum, line) =>
+      eligible.has(line.productId)
+        ? sum + Math.max(0, Math.floor(line.quantity))
+        : sum,
+    0,
+  );
+  const bundleCount = Math.floor(eligibleQuantity / offer.requiredQuantity);
+  let remaining = bundleCount * offer.requiredQuantity;
+  const selectedItems: Array<{
+    productId: string;
+    quantity: number;
+    priceMinor: number;
+  }> = [];
+
+  for (const line of [...lines].sort((a, b) => b.priceMinor - a.priceMinor)) {
+    if (remaining <= 0) break;
+    if (!eligible.has(line.productId)) continue;
+    const quantity = Math.min(remaining, Math.max(0, Math.floor(line.quantity)));
+    if (quantity <= 0) continue;
+    selectedItems.push({ ...line, quantity });
+    remaining -= quantity;
+  }
+
+  const regularAmountMinor = selectedItems.reduce(
+    (sum, item) => sum + item.quantity * item.priceMinor,
+    0,
+  );
+  let discountAmountMinor = 0;
+
+  if (bundleCount > 0) {
+    if (offer.pricing.mode === "fixed_total") {
+      discountAmountMinor = Math.max(
+        0,
+        regularAmountMinor -
+          (offer.pricing.promotionalTotalMinor ?? 0) * bundleCount,
+      );
+    } else if (offer.pricing.mode === "fixed_discount") {
+      discountAmountMinor = Math.min(
+        regularAmountMinor,
+        (offer.pricing.discountMinor ?? 0) * bundleCount,
+      );
+    } else {
+      discountAmountMinor = Math.min(
+        regularAmountMinor,
+        Math.round(
+          regularAmountMinor *
+            Math.min(100, Math.max(0, offer.pricing.percentage ?? 0)) /
+            100,
+        ),
+      );
+    }
+  }
+
+  if (bundleCount <= 0 || discountAmountMinor <= 0) return null;
+
+  return {
+    offerId: offer.id,
+    name: resolveOfferName(offer),
+    pricingMode: offer.pricing.mode,
+    requiredQuantity: offer.requiredQuantity,
+    bundleCount,
+    configuredRegularTotalMinor: offer.pricing.regularTotalMinor,
+    configuredPromotionalTotalMinor: offer.pricing.promotionalTotalMinor,
+    configuredDiscountMinor: offer.pricing.discountMinor,
+    configuredPercentage: offer.pricing.percentage,
+    regularAmountMinor,
+    discountAmountMinor,
+    finalAmountMinor: Math.max(0, regularAmountMinor - discountAmountMinor),
+    selectedItems,
+  };
+}
+
 /** ---------- FUNCTION ---------- */
 export const createEventOrder = onRequest(
   {
@@ -198,226 +386,261 @@ export const createEventOrder = onRequest(
         if (req.method !== "POST") httpError(405, "Method not allowed");
 
         const body = (req.body || {}) as Partial<CreateOrderBody>;
-
         const sellerIdIncoming = cleanStr(body.sellerId, 160);
         const eventId = cleanStr(body.eventId, 120);
-        const channel = body.channel as any;
+        const selectedOfferId = cleanStr(body.selectedOfferId, 120);
+        const channel = body.channel as Channel;
 
         if (!sellerIdIncoming) httpError(400, "Missing sellerId");
         if (!eventId) httpError(400, "Missing eventId");
-        if (channel !== "whatsapp" && channel !== "messenger") httpError(400, "Invalid channel");
+        if (!["whatsapp", "messenger", "pwa"].includes(channel)) {
+          httpError(400, "Invalid channel");
+        }
 
         const quantitiesRaw = body.quantities || {};
         if (typeof quantitiesRaw !== "object" || Array.isArray(quantitiesRaw)) {
           httpError(400, "Invalid quantities");
         }
 
-        const MAX_DISTINCT_ITEMS = 80;
-
         const quantities: Record<string, number> = {};
-        for (const [k, q] of Object.entries(quantitiesRaw)) {
-          const key = cleanStr(k, 200);
-          const qty = clampInt(q, 0, 999);
-          if (key && qty > 0) quantities[key] = qty;
-
-          if (Object.keys(quantities).length > MAX_DISTINCT_ITEMS) {
-            httpError(400, `Too many different items (max ${MAX_DISTINCT_ITEMS}).`);
+        for (const [keyRaw, quantityRaw] of Object.entries(quantitiesRaw)) {
+          const key = cleanStr(keyRaw, 200);
+          const quantity = clampInt(quantityRaw, 0, 999);
+          if (key && quantity > 0) quantities[key] = quantity;
+          if (Object.keys(quantities).length > 80) {
+            httpError(400, "Too many different items (max 80).");
           }
         }
 
-        const totalItems = Object.values(quantities).reduce((sum, q) => sum + q, 0);
+        const totalItems = Object.values(quantities).reduce((sum, value) => sum + value, 0);
         if (totalItems <= 0) httpError(400, "Select at least 1 item");
 
-        const customerName = cleanStr(body.customerName, 80);
-        const note = cleanStr(body.note, 800);
-
+        const customerName = cleanStr(body.customerName, 120);
+        const customerPhone = cleanStr(body.customerPhone, 50);
+        const note = cleanStr(body.note, 1500);
         const deliveryMode =
-          body.deliveryMode === "delivery" || body.deliveryMode === "pickup" || body.deliveryMode === "none"
+          body.deliveryMode === "delivery" ||
+          body.deliveryMode === "pickup" ||
+          body.deliveryMode === "none"
             ? body.deliveryMode
             : "pickup";
+        const deliveryDate = cleanStr(body.deliveryDate, 50);
+        const deliveryTimeSlot = cleanStr(body.deliveryTimeSlot, 100);
+        const locationLink =
+          deliveryMode === "delivery"
+            ? cleanStr(body.locationLink, 2000)
+            : "";
 
-        const deliveryDate = cleanStr(body.deliveryDate, 40);
-        const deliveryTimeSlot = cleanStr(body.deliveryTimeSlot, 20);
-        const locationLink = deliveryMode === "delivery" ? cleanStr(body.locationLink, 300) : "";
-
-        // Resolve somente o caminho canônico informado pelo cliente.
         const resolved = await resolveEventRef(sellerIdIncoming, eventId);
         if (!resolved) httpError(404, "Event not found");
 
-        const eventRef = resolved.eventRef; // sellers/{realSellerId}/events/{eventId}
-        const sellerId = resolved.sellerId; // ✅ seller real (da árvore)
+        const eventRef = resolved.eventRef;
+        const sellerId = resolved.sellerId;
         const itemsCol = eventRef.collection("items");
-
-        // ✅ grava SOMENTE dentro do evento
         const orderRef = eventRef.collection("orders").doc();
-
-        // ✅ vamos devolver sempre por ID (mais confiável)
         const updatedStocksById: Record<string, number> = {};
-
         let regionIdForPush = "";
         let eventTitleForPush = "";
         let eventRegionForPush = "";
-        let totalAmount = 0;
 
-        // resolve legacy por name -> ref (se vier name)
-        const nameKeys = Object.keys(quantities).filter((k) => !looksLikeDocId(k));
+        const nameKeys = Object.keys(quantities).filter((key) => !looksLikeDocId(key));
         const nameToRef: Record<string, FirebaseFirestore.DocumentReference> = {};
 
         if (nameKeys.length > 0) {
-          const LOOKUP_LIMIT = 80;
-          const keysSlice = nameKeys.slice(0, LOOKUP_LIMIT);
-
-          type NameLookup =
-            | { name: string; ref: FirebaseFirestore.DocumentReference }
-            | { name: string; ref: null };
-
-          const lookups: NameLookup[] = await Promise.all(
-            keysSlice.map(async (name): Promise<NameLookup> => {
-              const qs = await itemsCol.where("name", "==", name).limit(1).get();
-              if (qs.empty) return { name, ref: null };
-              return { name, ref: qs.docs[0].ref };
-            })
+          const lookups = await Promise.all(
+            nameKeys.slice(0, 80).map(async (name) => {
+              const snapshot = await itemsCol.where("name", "==", name).limit(1).get();
+              return { name, ref: snapshot.empty ? null : snapshot.docs[0].ref };
+            }),
           );
-
-          for (const r of lookups) {
-            if (r.ref === null) {
-              httpError(400, `Produto não encontrado no evento: ${r.name}`);
-            } else {
-              nameToRef[r.name] = r.ref;
-            }
+          for (const lookup of lookups) {
+            if (!lookup.ref) httpError(400, `Produto não encontrado no evento: ${lookup.name}`);
+            nameToRef[lookup.name] = lookup.ref;
           }
         }
 
         await db.runTransaction(async (tx) => {
           const eventSnap = await tx.get(eventRef);
           if (!eventSnap.exists) throw new Error("Event not found");
-
           const eventData = eventSnap.data() || {};
-          const status = String(eventData.status || "active");
-          if (status !== "active") throw new Error("Event is not active");
-
-          // ✅ garante coerência
-          const sellerIdInEvent = typeof eventData.sellerId === "string" ? eventData.sellerId : "";
+          if (String(eventData.status || "active") !== "active") {
+            throw new Error("Event is not active");
+          }
+          const sellerIdInEvent =
+            typeof eventData.sellerId === "string" ? eventData.sellerId : "";
           if (sellerIdInEvent && sellerIdInEvent !== sellerId) {
             throw new Error("Event/seller mismatch");
           }
 
-          const regionId = typeof eventData.regionId === "string" ? eventData.regionId : "";
-          const eventTitle = typeof eventData.title === "string" ? eventData.title : "";
-          const eventRegion =
+          regionIdForPush = typeof eventData.regionId === "string" ? eventData.regionId : "";
+          eventTitleForPush = typeof eventData.title === "string" ? eventData.title : "";
+          eventRegionForPush =
             typeof eventData.region === "string"
               ? eventData.region
-              : typeof (eventData as any).regionName === "string"
-              ? (eventData as any).regionName
-              : "";
+              : typeof eventData.regionName === "string"
+                ? eventData.regionName
+                : "";
 
-          regionIdForPush = regionId;
-          eventTitleForPush = eventTitle;
-          eventRegionForPush = eventRegion;
+          const allowDelivery =
+            typeof eventData.allowDelivery === "boolean" ? eventData.allowDelivery : true;
+          const allowPickup =
+            typeof eventData.allowPickup === "boolean" ? eventData.allowPickup : true;
+          if (deliveryMode === "delivery" && !allowDelivery) {
+            throw new Error("Delivery disabled for this event");
+          }
+          if (deliveryMode === "pickup" && !allowPickup) {
+            throw new Error("Pickup disabled for this event");
+          }
 
-          const allowDelivery = typeof eventData.allowDelivery === "boolean" ? eventData.allowDelivery : true;
-          const allowPickup = typeof eventData.allowPickup === "boolean" ? eventData.allowPickup : true;
+          const currency =
+            eventData.currency === "BRL" || eventData.currency === "USD"
+              ? eventData.currency
+              : "JPY";
+          const entries = Object.entries(quantities).map(([key, quantity]) => ({
+            key,
+            quantity,
+            ref: looksLikeDocId(key) ? itemsCol.doc(key) : nameToRef[key],
+          }));
+          const itemSnapshots = await Promise.all(entries.map((entry) => tx.get(entry.ref)));
+          const offerSnap = selectedOfferId
+            ? await tx.get(eventRef.collection("offers").doc(selectedOfferId))
+            : null;
 
-          if (deliveryMode === "delivery" && !allowDelivery) throw new Error("Delivery disabled for this event");
-          if (deliveryMode === "pickup" && !allowPickup) throw new Error("Pickup disabled for this event");
+          const items: Array<Record<string, unknown>> = [];
+          const offerLines: Array<{
+            productId: string;
+            quantity: number;
+            priceMinor: number;
+          }> = [];
+          const pendingStockUpdates: Array<{
+            ref: FirebaseFirestore.DocumentReference;
+            stockQty: number;
+          }> = [];
+          let subtotalMinor = 0;
 
-          // ✅ atualiza estoque e calcula total a partir de /items
-          for (const [key, qty] of Object.entries(quantities)) {
-            let itemRef: FirebaseFirestore.DocumentReference;
+          for (let index = 0; index < entries.length; index += 1) {
+            const entry = entries[index];
+            const itemSnap = itemSnapshots[index];
+            if (!itemSnap.exists) throw new Error(`Item missing in event: ${entry.key}`);
+            const itemData = itemSnap.data() || {};
+            const madeToOrder =
+              itemData.status === "made_to_order" ||
+              itemData.availabilityStatus === "made_to_order" ||
+              itemData.productionMode === "made_to_order";
+            const priceMinor =
+              typeof itemData.priceMinor === "number" && Number.isFinite(itemData.priceMinor)
+                ? Math.max(0, Math.round(itemData.priceMinor))
+                : majorToMinor(itemData.price ?? itemData.sellPrice ?? 0, currency);
+            const currentStock =
+              typeof itemData.stockQty === "number" && Number.isFinite(itemData.stockQty)
+                ? itemData.stockQty
+                : null;
 
-            if (looksLikeDocId(key)) {
-              itemRef = itemsCol.doc(key);
-            } else {
-              itemRef = nameToRef[key];
-              if (!itemRef) throw new Error(`Product not found in event: ${key}`);
+            if (!madeToOrder && currentStock !== null) {
+              if (currentStock < entry.quantity) {
+                const nameForMessage =
+                  typeof itemData.name === "string" ? itemData.name : entry.ref.id;
+                throw new Error(
+                  `Insufficient stock for "${nameForMessage}". Left: ${currentStock}`,
+                );
+              }
+              const nextStock = currentStock - entry.quantity;
+              pendingStockUpdates.push({ ref: entry.ref, stockQty: nextStock });
+              updatedStocksById[entry.ref.id] = nextStock;
             }
 
-            const itemSnap = await tx.get(itemRef);
-            if (!itemSnap.exists) throw new Error(`Item missing in event: ${key}`);
+            subtotalMinor += priceMinor * entry.quantity;
+            offerLines.push({
+              productId: entry.ref.id,
+              quantity: entry.quantity,
+              priceMinor,
+            });
+            items.push({
+              productId: entry.ref.id,
+              name: typeof itemData.name === "string" ? itemData.name : entry.ref.id,
+              qty: entry.quantity,
+              quantity: entry.quantity,
+              unitPrice: minorToMajorValue(priceMinor, currency),
+              unitPriceMinor: priceMinor,
+              subtotal: minorToMajorValue(priceMinor * entry.quantity, currency),
+              subtotalMinor: priceMinor * entry.quantity,
+              imageUrl: typeof itemData.imageUrl === "string" ? itemData.imageUrl : "",
+              category: typeof itemData.category === "string" ? itemData.category : "",
+              availabilityStatus: madeToOrder ? "made_to_order" : "active",
+              productionMode: madeToOrder ? "made_to_order" : "stock",
+            });
+          }
 
-            const itemData = itemSnap.data() || {};
-
-            const price =
-              typeof itemData.price === "number" && Number.isFinite(itemData.price) ? itemData.price : 0;
-            totalAmount += price * qty;
-
-            const currentStock =
-              typeof itemData.stockQty === "number" && Number.isFinite(itemData.stockQty) ? itemData.stockQty : null;
-
-            if (currentStock !== null) {
-              if (currentStock < qty) {
-                const nameForMsg = typeof itemData.name === "string" ? itemData.name : itemRef.id;
-                throw new Error(`Insufficient stock for "${nameForMsg}". Left: ${currentStock}`);
-              }
-
-              const newStock = currentStock - qty;
-              tx.update(itemRef, { stockQty: newStock });
-              updatedStocksById[itemRef.id] = newStock;
+          let offersApplied: Array<Record<string, unknown>> = [];
+          let discountMinor = 0;
+          if (selectedOfferId) {
+            if (!offerSnap || !offerSnap.exists) throw new Error("Offer unavailable");
+            const offer = normalizeEventOffer(offerSnap.id, offerSnap.data() || {});
+            if (!offer) throw new Error("Offer unavailable");
+            const applied = evaluateEventOffer(offer, offerLines);
+            if (applied) {
+              offersApplied = [applied];
+              discountMinor = applied.discountAmountMinor;
             }
           }
 
-          const payload = {
-            sellerId,
-            eventId: eventRef.id,
+          for (const update of pendingStockUpdates) {
+            tx.update(update.ref, { stockQty: update.stockQty });
+          }
 
-            regionId: regionIdForPush || null,
-            eventTitle: eventTitleForPush || null,
-            eventRegion: eventRegionForPush || null,
+          const subtotal = minorToMajorValue(subtotalMinor, currency);
+          const discount = minorToMajorValue(discountMinor, currency);
+          const totalAmount = Math.max(0, subtotal - discount);
 
+          tx.set(orderRef, {
             customerName: customerName || null,
+            customerPhone: customerPhone || null,
             note: note || null,
-
             quantities,
+            items,
             totalItems,
+            subtotal,
+            discount,
             totalAmount,
-
+            offersApplied,
             status: "pending" as const,
             channel,
-
             deliveryMode,
             deliveryDate: deliveryDate || "Sem preferência",
             deliveryTimeSlot: deliveryTimeSlot || "Sem preferência",
             locationLink: locationLink || null,
-
+            sellerUnread: true,
+            sellerReadAt: null,
             createdAt: admin.firestore.FieldValue.serverTimestamp(),
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-          };
-
-          tx.set(orderRef, payload);
+          });
         });
 
-        // ✅ responde pro cliente
         res.status(200).json({
           ok: true,
           orderId: orderRef.id,
           updatedStocksById,
         });
 
-        // ✅ push async pro seller
         if (sellerId && regionIdForPush) {
-          const dashBase = (SELLER_DASHBOARD_BASE_URL.value() || "").trim();
-
+          const dashboardBase = (SELLER_DASHBOARD_BASE_URL.value() || "").trim();
           const url =
-            dashBase && dashBase.startsWith("http")
-              ? `${dashBase.replace(/\/$/, "")}/seller/events/${eventRef.id}`
+            dashboardBase && dashboardBase.startsWith("http")
+              ? `${dashboardBase.replace(/\/$/, "")}/seller/events/${eventRef.id}`
               : "";
-
-          const title = "📦 Novo pedido no evento";
-          const bodyText = `${eventTitleForPush || "Evento"} • ${eventRegionForPush || ""} • ${totalItems} item(ns)`;
-
           sendPushToSeller({
             sellerId,
             regionId: regionIdForPush,
-            title,
-            body: bodyText.trim(),
+            title: "📦 Novo pedido no evento",
+            body: `${eventTitleForPush || "Evento"} • ${eventRegionForPush || ""} • ${totalItems} item(ns)`.trim(),
             url,
-          }).catch((e) => console.warn("[push] sendPushToSeller error:", e));
+          }).catch((error) => console.warn("[push] sendPushToSeller error:", error));
         }
-      } catch (err: any) {
-        const status = typeof err?.status === "number" ? err.status : 400;
-        console.error("createEventOrder error:", err);
-        res.status(status).json({ ok: false, error: err?.message || "Unknown error" });
+      } catch (error: any) {
+        const status = typeof error?.status === "number" ? error.status : 400;
+        console.error("createEventOrder error:", error);
+        res.status(status).json({ ok: false, error: error?.message || "Unknown error" });
       }
     });
-  }
+  },
 );

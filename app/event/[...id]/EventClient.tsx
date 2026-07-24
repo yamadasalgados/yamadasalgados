@@ -15,12 +15,33 @@ import {
   onSnapshot,
   orderBy,
   query,
+  runTransaction,
   serverTimestamp,
   type Timestamp,
 } from "firebase/firestore";
+import { Gift } from "lucide-react";
+import {
+  createAppliedOfferSnapshot,
+  evaluateOfferForCart,
+  normalizeOffer,
+  offerIsCurrentlyActive,
+  resolveLocalizedOfferText,
+  type AppliedOfferSnapshot,
+  type OfferDoc,
+  type OfferEvaluation,
+} from "@/app/lib/offer-schema";
+import {
+  formatMoneyMinor,
+  legacyMajorValueToMinor,
+  minorToMajor,
+} from "@/app/lib/money";
+import type {
+  RegionalLocale,
+  SupportedCurrency,
+} from "@/app/types/regional";
 
 type CategoryName = string;
-type ProductStatus = "active" | "inactive";
+type ProductStatus = "active" | "inactive" | "made_to_order";
 type DeliveryMode = "delivery" | "pickup" | "none";
 type DateOption = "event-date" | "no-preference";
 type TimeOption = "no-preference" | "custom";
@@ -34,6 +55,7 @@ type EventData = {
   deliveryDateLabel: string;
   productIds: string[];
   featuredProductIds?: string[];
+  offerIds?: string[];
   productNames?: string[];
   featuredProductNames?: string[];
   whatsapp: string;
@@ -43,6 +65,9 @@ type EventData = {
   pickupNote?: string;
   allowDelivery?: boolean;
   allowPickup?: boolean;
+  currency: SupportedCurrency;
+  regionalLocale: RegionalLocale;
+  defaultLanguage: "pt" | "en" | "ja";
 };
 
 type ProductImageData = {
@@ -51,10 +76,13 @@ type ProductImageData = {
   imageUrl: string;
   extraImageUrls: string[];
   price?: number;
+  priceMinor: number;
   category?: CategoryName;
   stockQty?: number;
   lowStockThreshold?: number;
   status?: ProductStatus;
+  availabilityStatus: "active" | "made_to_order";
+  productionMode: "stock" | "made_to_order";
 };
 
 type ChatMessage = {
@@ -108,53 +136,151 @@ function normalizeCategoryDynamic(v: any): CategoryName | undefined {
   return s ? s : undefined;
 }
 
-function mapProductSnapToData(snap: any): Record<string, ProductImageData> {
+function mapProductSnapToData(
+  snap: any,
+  currency: SupportedCurrency,
+): Record<string, ProductImageData> {
   const map: Record<string, ProductImageData> = {};
 
   snap.docs.forEach((d: any) => {
     const docData = d.data() as any;
+    const inventory =
+      docData.inventory &&
+      typeof docData.inventory === "object"
+        ? docData.inventory
+        : {};
+    const tracked =
+      typeof inventory.tracked === "boolean"
+        ? inventory.tracked
+        : true;
     const stockQty =
-      typeof docData.stockQty === "number" && Number.isFinite(docData.stockQty)
-        ? docData.stockQty
-        : undefined;
+      typeof inventory.quantity === "number" &&
+      Number.isFinite(inventory.quantity)
+        ? Math.max(0, Math.floor(inventory.quantity))
+        : typeof docData.stockQty === "number" &&
+            Number.isFinite(docData.stockQty)
+          ? Math.max(0, Math.floor(docData.stockQty))
+          : undefined;
     const lowStockThreshold =
-      typeof docData.lowStockThreshold === "number" && Number.isFinite(docData.lowStockThreshold)
-        ? docData.lowStockThreshold
-        : undefined;
+      typeof inventory.lowStockThreshold === "number" &&
+      Number.isFinite(inventory.lowStockThreshold)
+        ? Math.max(0, Math.floor(inventory.lowStockThreshold))
+        : typeof docData.lowStockThreshold === "number" &&
+            Number.isFinite(docData.lowStockThreshold)
+          ? Math.max(0, Math.floor(docData.lowStockThreshold))
+          : undefined;
 
-    const rawStatus: ProductStatus = docData.status === "inactive" ? "inactive" : "active";
-    const isOutOfStock = typeof stockQty === "number" ? stockQty <= 0 : false;
+    const madeToOrder =
+      docData.status === "made_to_order" ||
+      docData.availabilityStatus === "made_to_order" ||
+      docData.productionMode === "made_to_order";
+    const rawStatus: ProductStatus =
+      docData.status === "inactive"
+        ? "inactive"
+        : madeToOrder
+          ? "made_to_order"
+          : "active";
+    const isOutOfStock =
+      !madeToOrder &&
+      tracked &&
+      typeof stockQty === "number"
+        ? stockQty <= 0
+        : false;
+    const priceMinor =
+      typeof docData.priceMinor === "number" &&
+      Number.isFinite(docData.priceMinor)
+        ? Math.max(0, Math.round(docData.priceMinor))
+        : legacyMajorValueToMinor(
+            docData.price ??
+              docData.sellPrice ??
+              0,
+            currency,
+          );
 
     map[d.id] = {
       id: d.id,
-      name: typeof docData.name === "string" ? docData.name : d.id,
+      name:
+        typeof docData.name === "string"
+          ? docData.name
+          : d.id,
       imageUrl:
         typeof docData.imageUrl === "string"
           ? docData.imageUrl
           : typeof docData.image === "string"
             ? docData.image
             : "",
-      extraImageUrls: normalizeStringArray(docData.extraImageUrls),
-      price: safeNumber(docData.price || docData.sellPrice),
-      category: normalizeCategoryDynamic(docData.category),
+      extraImageUrls: normalizeStringArray(
+        docData.extraImageUrls,
+      ),
+      price: minorToMajor(
+        priceMinor,
+        currency,
+      ),
+      priceMinor,
+      category: normalizeCategoryDynamic(
+        docData.category,
+      ),
       stockQty,
       lowStockThreshold,
-      status: isOutOfStock ? "inactive" : rawStatus,
+      status: isOutOfStock
+        ? "inactive"
+        : rawStatus,
+      availabilityStatus: madeToOrder
+        ? "made_to_order"
+        : "active",
+      productionMode: madeToOrder
+        ? "made_to_order"
+        : "stock",
     };
   });
 
   return map;
 }
 
-async function fetchEventPublishedProducts(sellerId: string, eventId: string, productNames: string[] = []) {
+async function fetchEventPublishedProducts(
+  sellerId: string,
+  eventId: string,
+  productNames: string[] = [],
+  currency: SupportedCurrency,
+) {
   const wantedNames = uniq(productNames);
   const result: Record<string, ProductImageData> = {};
 
-  const itemsSnap = await getDocs(collection(db, "sellers", sellerId, "events", eventId, "items"));
-  Object.assign(result, mapProductSnapToData(itemsSnap));
+  const itemsSnap = await getDocs(
+    collection(
+      db,
+      "sellers",
+      sellerId,
+      "events",
+      eventId,
+      "items",
+    ),
+  );
+  Object.assign(
+    result,
+    mapProductSnapToData(
+      itemsSnap,
+      currency,
+    ),
+  );
 
-  const eventProductsSnap = await getDocs(collection(db, "sellers", sellerId, "events", eventId, "products"));
-  Object.assign(result, mapProductSnapToData(eventProductsSnap));
+  const eventProductsSnap = await getDocs(
+    collection(
+      db,
+      "sellers",
+      sellerId,
+      "events",
+      eventId,
+      "products",
+    ),
+  );
+  Object.assign(
+    result,
+    mapProductSnapToData(
+      eventProductsSnap,
+      currency,
+    ),
+  );
 
   wantedNames.forEach((name) => {
     if (!result[name]) {
@@ -164,7 +290,10 @@ async function fetchEventPublishedProducts(sellerId: string, eventId: string, pr
         imageUrl: "",
         extraImageUrls: [],
         price: 0,
+        priceMinor: 0,
         status: "active",
+        availabilityStatus: "active",
+        productionMode: "stock",
       };
     }
   });
@@ -176,7 +305,7 @@ export default function EventClient({ sellerId, id }: { sellerId: string; id: st
 
 const { t, lang } = useI18n();
 
-const locale =
+const uiLocale =
   lang === "pt"
     ? "pt-BR"
     : lang === "en"
@@ -196,10 +325,14 @@ const locale =
   );
 
   const [event, setEvent] = useState<EventData | null>(null);
+  const locale = event?.regionalLocale ?? uiLocale;
+  const currency = event?.currency ?? "JPY";
+  const language = lang === "en" || lang === "ja" ? lang : "pt";
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
 
   const [customerName, setCustomerName] = useState("");
+  const [customerPhone, setCustomerPhone] = useState("");
   const [note, setNote] = useState("");
   const [quantities, setQuantities] = useState<Record<string, number>>({});
 
@@ -216,6 +349,8 @@ const locale =
   const [currentUrl, setCurrentUrl] = useState("");
 
   const [productsData, setProductsData] = useState<Record<string, ProductImageData>>({});
+  const [offers, setOffers] = useState<OfferDoc[]>([]);
+  const [selectedOfferId, setSelectedOfferId] = useState("");
   const [activeCategory, setActiveCategory] = useState("__all__");
 
   const [submitting, setSubmitting] = useState(false);
@@ -273,13 +408,39 @@ return Array.from(set).sort((a, b) => a.localeCompare(b, locale));
     return orderableIds.reduce((sum, pid) => sum + (quantities[pid] || 0), 0);
   }, [orderableIds, quantities]);
 
-  const totalAmount = useMemo(() => {
-    return orderableIds.reduce((sum, pid) => {
-      const q = quantities[pid] || 0;
-      const price = productsData[pid]?.price || 0;
-      return sum + q * price;
-    }, 0);
-  }, [orderableIds, quantities, productsData]);
+  const selectedOffer = useMemo(
+    () => offers.find((offer) => offer.id === selectedOfferId) ?? null,
+    [offers, selectedOfferId],
+  );
+
+  const offerEvaluation = useMemo<OfferEvaluation | null>(() => {
+    if (!selectedOffer) return null;
+
+    return evaluateOfferForCart(
+      selectedOffer,
+      orderableIds.map((productId) => ({
+        productId,
+        quantity: quantities[productId] || 0,
+        priceMinor: productsData[productId]?.priceMinor || 0,
+      })),
+    );
+  }, [orderableIds, productsData, quantities, selectedOffer]);
+
+  const subtotalMinor = useMemo(
+    () =>
+      orderableIds.reduce((sum, productId) => {
+        const quantity = quantities[productId] || 0;
+        return sum + quantity * (productsData[productId]?.priceMinor || 0);
+      }, 0),
+    [orderableIds, productsData, quantities],
+  );
+
+  const discountMinor = offerEvaluation?.applicable
+    ? offerEvaluation.discountAmountMinor
+    : 0;
+  const totalAmountMinor = Math.max(0, subtotalMinor - discountMinor);
+  const subtotalAmount = minorToMajor(subtotalMinor, currency);
+  const totalAmount = minorToMajor(totalAmountMinor, currency);
 
   const fmtChatTime = useCallback((ts?: Timestamp) => {
     if (!ts) return "";
@@ -294,6 +455,7 @@ return Array.from(set).sort((a, b) => a.localeCompare(b, locale));
 
   const resetOrderForm = useCallback(() => {
     setCustomerName("");
+    setCustomerPhone("");
     setQuantities({});
     setNote("");
     setLocationLink("");
@@ -331,8 +493,14 @@ return Array.from(set).sort((a, b) => a.localeCompare(b, locale));
 
         if (next < 0) return prev;
 
-        const stock = productsData[productId]?.stockQty;
-        if (typeof stock === "number" && Number.isFinite(stock) && next > stock) {
+        const product = productsData[productId];
+        const stock = product?.stockQty;
+        if (
+          product?.availabilityStatus !== "made_to_order" &&
+          typeof stock === "number" &&
+          Number.isFinite(stock) &&
+          next > stock
+        ) {
           return { ...prev, [productId]: stock };
         }
 
@@ -427,6 +595,12 @@ return Array.from(set).sort((a, b) => a.localeCompare(b, locale));
         }
 
         const data = snap.data() as any;
+        const sellerSnapshot = await getDoc(doc(db, "sellers", sellerId));
+        const sellerData = sellerSnapshot.exists() ? sellerSnapshot.data() as any : {};
+        const sellerRegional =
+          sellerData.regional && typeof sellerData.regional === "object"
+            ? sellerData.regional
+            : {};
         const storedSellerId =
           typeof data.sellerId === "string"
             ? data.sellerId.trim()
@@ -472,6 +646,25 @@ return Array.from(set).sort((a, b) => a.localeCompare(b, locale));
           pickupNote: String(data.pickupNote || ""),
           allowDelivery: data.allowDelivery !== false,
           allowPickup: data.allowPickup !== false,
+          offerIds: normalizeStringArray(data.offerIds),
+          currency:
+            data.currency === "BRL" || data.currency === "USD" || data.currency === "JPY"
+              ? data.currency
+              : sellerRegional.currency === "BRL" || sellerRegional.currency === "USD"
+                ? sellerRegional.currency
+                : "JPY",
+          regionalLocale:
+            data.regionalLocale === "pt-BR" || data.regionalLocale === "en-US" || data.regionalLocale === "ja-JP"
+              ? data.regionalLocale
+              : sellerRegional.locale === "pt-BR" || sellerRegional.locale === "en-US"
+                ? sellerRegional.locale
+                : "ja-JP",
+          defaultLanguage:
+            data.defaultLanguage === "en" || data.defaultLanguage === "ja" || data.defaultLanguage === "pt"
+              ? data.defaultLanguage
+              : sellerData.storefrontLanguage === "en" || sellerData.storefrontLanguage === "ja"
+                ? sellerData.storefrontLanguage
+                : "pt",
         };
 
         setEvent(nextEvent);
@@ -482,8 +675,38 @@ return Array.from(set).sort((a, b) => a.localeCompare(b, locale));
             ...(nextEvent.featuredProductNames || []),
           ]);
 
-          const productsMap = await fetchEventPublishedProducts(sellerId, id, eventProductNames);
+          const productsMap = await fetchEventPublishedProducts(
+            sellerId,
+            id,
+            eventProductNames,
+            nextEvent.currency,
+          );
           setProductsData(productsMap);
+
+          const offerSnapshot = await getDocs(
+            collection(db, "sellers", sellerId, "events", id, "offers"),
+          );
+          const allowedOfferIds = new Set(nextEvent.offerIds || []);
+          const eventOffers = offerSnapshot.docs
+            .map((document) =>
+              normalizeOffer(
+                document.id,
+                document.data(),
+                nextEvent.currency,
+              ),
+            )
+            .filter(
+              (offer): offer is OfferDoc =>
+                offer !== null &&
+                offerIsCurrentlyActive(offer) &&
+                (allowedOfferIds.size === 0 || allowedOfferIds.has(offer.id)),
+            );
+          setOffers(eventOffers);
+          setSelectedOfferId((current) =>
+            eventOffers.some((offer) => offer.id === current)
+              ? current
+              : "",
+          );
         } catch (productErr) {
           console.error("[EventClient] Evento abriu, mas erro ao carregar produtos:", productErr);
           setProductsData({});
@@ -544,6 +767,7 @@ return Array.from(set).sort((a, b) => a.localeCompare(b, locale));
     if (!event) return false;
     if (String(event.status || "active") !== "active") return false;
     if (!customerName.trim()) return false;
+    if (!customerPhone.trim()) return false;
     if (totalItems <= 0 || totalAmount <= 0) return false;
     if (!deliveryMode) return false;
     if (event.deliveryDates.length > 0 && dateOption === "event-date" && !selectedDate) return false;
@@ -553,6 +777,7 @@ return Array.from(set).sort((a, b) => a.localeCompare(b, locale));
     submitting,
     event,
     customerName,
+    customerPhone,
     totalItems,
     totalAmount,
     deliveryMode,
@@ -566,45 +791,185 @@ return Array.from(set).sort((a, b) => a.localeCompare(b, locale));
   const registerOrderInFirestore = useCallback(async () => {
     if (!event) return "";
 
-    const quantitiesClean: Record<string, number> = {};
-    const items: Array<{
-      productId: string;
-      name: string;
-      qty: number;
-      unitPrice: number;
-      subtotal: number;
-      imageUrl?: string;
-      category?: string;
-    }> = [];
-
-    orderableIds.forEach((pid) => {
-      const qty = quantities[pid] || 0;
-      if (qty <= 0) return;
-
-      const product = productsData[pid];
-      const unitPrice = product?.price || 0;
-
-      quantitiesClean[pid] = qty;
-      items.push({
-        productId: pid,
-        name: product?.name || pid,
-        qty,
-        unitPrice,
-        subtotal: qty * unitPrice,
-        imageUrl: product?.imageUrl || "",
-        category: product?.category || "",
-      });
-    });
-
-    const orderRef = await addDoc(
+    const selectedProductIds = orderableIds.filter(
+      (productId) => (quantities[productId] || 0) > 0,
+    );
+    const orderReference = doc(
       collection(db, "sellers", sellerId, "events", id, "orders"),
-      {
+    );
+
+    await runTransaction(db, async (transaction) => {
+      const eventReference = doc(db, "sellers", sellerId, "events", id);
+      const eventSnapshot = await transaction.get(eventReference);
+
+      if (!eventSnapshot.exists()) {
+        throw new Error("EVENT_UNAVAILABLE");
+      }
+
+      const eventData = eventSnapshot.data() as any;
+      if (String(eventData.status || "active") !== "active") {
+        throw new Error("EVENT_UNAVAILABLE");
+      }
+
+      const productReads = await Promise.all(
+        selectedProductIds.map(async (productId) => {
+          const reference = doc(
+            db,
+            "sellers",
+            sellerId,
+            "events",
+            id,
+            "items",
+            productId,
+          );
+          const snapshot = await transaction.get(reference);
+          return { productId, snapshot };
+        }),
+      );
+
+      const offerSnapshot = selectedOfferId
+        ? await transaction.get(
+            doc(
+              db,
+              "sellers",
+              sellerId,
+              "events",
+              id,
+              "offers",
+              selectedOfferId,
+            ),
+          )
+        : null;
+
+      const quantitiesClean: Record<string, number> = {};
+      const items: Array<Record<string, unknown>> = [];
+      const offerLines: Array<{
+        productId: string;
+        quantity: number;
+        priceMinor: number;
+      }> = [];
+      let currentSubtotalMinor = 0;
+
+      for (const productRead of productReads) {
+        if (!productRead.snapshot.exists()) {
+          throw new Error("PRODUCT_UNAVAILABLE");
+        }
+
+        const data = productRead.snapshot.data() as any;
+        const quantity = Math.max(
+          0,
+          Math.floor(quantities[productRead.productId] || 0),
+        );
+        if (quantity <= 0) continue;
+
+        const madeToOrder =
+          data.status === "made_to_order" ||
+          data.availabilityStatus === "made_to_order" ||
+          data.productionMode === "made_to_order";
+        const inventory =
+          data.inventory && typeof data.inventory === "object"
+            ? data.inventory
+            : {};
+        const stock =
+          typeof inventory.quantity === "number"
+            ? inventory.quantity
+            : typeof data.stockQty === "number"
+              ? data.stockQty
+              : null;
+
+        if (
+          !madeToOrder &&
+          typeof stock === "number" &&
+          Number.isFinite(stock) &&
+          stock < quantity
+        ) {
+          throw new Error("PRODUCT_UNAVAILABLE");
+        }
+
+        const priceMinor =
+          typeof data.priceMinor === "number" && Number.isFinite(data.priceMinor)
+            ? Math.max(0, Math.round(data.priceMinor))
+            : legacyMajorValueToMinor(
+                data.price ?? data.sellPrice ?? 0,
+                event.currency,
+              );
+        const unitPrice = minorToMajor(priceMinor, event.currency);
+
+        quantitiesClean[productRead.productId] = quantity;
+        currentSubtotalMinor += priceMinor * quantity;
+        offerLines.push({
+          productId: productRead.productId,
+          quantity,
+          priceMinor,
+        });
+        items.push({
+          productId: productRead.productId,
+          name: String(data.name || productRead.productId),
+          qty: quantity,
+          quantity,
+          unitPrice,
+          unitPriceMinor: priceMinor,
+          subtotal: unitPrice * quantity,
+          subtotalMinor: priceMinor * quantity,
+          imageUrl: String(data.imageUrl || ""),
+          category: String(data.category || ""),
+          availabilityStatus: madeToOrder ? "made_to_order" : "active",
+          productionMode: madeToOrder ? "made_to_order" : "stock",
+        });
+      }
+
+      let offersApplied: AppliedOfferSnapshot[] = [];
+      let currentDiscountMinor = 0;
+
+      if (selectedOfferId) {
+        if (!offerSnapshot || !offerSnapshot.exists()) {
+          throw new Error("OFFER_UNAVAILABLE");
+        }
+
+        const currentOffer = normalizeOffer(
+          offerSnapshot.id,
+          offerSnapshot.data(),
+          event.currency,
+        );
+
+        if (!currentOffer || !offerIsCurrentlyActive(currentOffer)) {
+          throw new Error("OFFER_UNAVAILABLE");
+        }
+
+        const evaluation = evaluateOfferForCart(currentOffer, offerLines);
+        const appliedSnapshot = createAppliedOfferSnapshot(
+          evaluation,
+          language,
+          event.defaultLanguage,
+        );
+
+        if (appliedSnapshot) {
+          offersApplied = [appliedSnapshot];
+          currentDiscountMinor = appliedSnapshot.discountAmountMinor;
+        }
+      }
+
+      const currentSubtotal = minorToMajor(
+        currentSubtotalMinor,
+        event.currency,
+      );
+      const currentDiscount = minorToMajor(
+        currentDiscountMinor,
+        event.currency,
+      );
+      const currentTotal = Math.max(0, currentSubtotal - currentDiscount);
+
+      transaction.set(orderReference, {
         customerName: customerName.trim(),
+        customerPhone: customerPhone.trim(),
         note: note.trim(),
         quantities: quantitiesClean,
         items,
         totalItems,
-        totalAmount,
+        subtotal: currentSubtotal,
+        discount: currentDiscount,
+        totalAmount: currentTotal,
+        offersApplied,
         status: "pending",
         channel: "pwa",
         deliveryMode,
@@ -619,34 +984,35 @@ return Array.from(set).sort((a, b) => a.localeCompare(b, locale));
         sellerReadAt: null,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
-      },
-    );
+      });
+    });
 
-    setLastOrderId(orderRef.id);
+    setLastOrderId(orderReference.id);
     setChatOpen(true);
 
-    return orderRef.id;
+    return orderReference.id;
   }, [
     event,
     sellerId,
     id,
     orderableIds,
     quantities,
-    productsData,
+    selectedOfferId,
     customerName,
+    customerPhone,
     note,
     totalItems,
-    totalAmount,
     deliveryMode,
     locationLink,
     customerId,
     getChosenDate,
     getChosenTimeLabel,
+    language,
   ]);
 
   const handleFinalize = useCallback(async () => {
     if (!canSubmit) {
-      alert(tr("event.error.fill_required", "Escolha produtos, informe seu nome e selecione entrega/data/hora antes de finalizar."));
+      alert(tr("event.error.fill_required", "Escolha produtos, informe nome e telefone e selecione entrega/data/hora antes de finalizar."));
       return;
     }
 
@@ -736,6 +1102,20 @@ return Array.from(set).sort((a, b) => a.localeCompare(b, locale));
         )}
       </header>
 
+      <EventOffersSection
+        offers={offers}
+        selectedOfferId={selectedOfferId}
+        evaluation={offerEvaluation}
+        productsData={productsData}
+        language={language}
+        defaultLanguage={event.defaultLanguage}
+        currency={currency}
+        locale={locale}
+        eventClosed={eventClosed}
+        onSelect={setSelectedOfferId}
+        tr={tr}
+      />
+
       <section className="space-y-4">
         <div className="flex items-center justify-between border-b border-neutral-100 dark:border-neutral-800/60 pb-2">
           <div>
@@ -779,7 +1159,8 @@ return Array.from(set).sort((a, b) => a.localeCompare(b, locale));
               const name = info?.name || pid;
               const qty = quantities[pid] ?? 0;
               const stock = typeof info?.stockQty === "number" ? info.stockQty : null;
-              const isOutOfStock = stock !== null && stock <= 0;
+              const madeToOrder = info?.availabilityStatus === "made_to_order";
+              const isOutOfStock = !madeToOrder && stock !== null && stock <= 0;
 
               return (
                 <div
@@ -804,10 +1185,16 @@ return Array.from(set).sort((a, b) => a.localeCompare(b, locale));
                       <h4 className="text-sm font-black text-neutral-900 dark:text-white tracking-tight truncate">{name}</h4>
 
                       <p className="text-xs font-black text-neutral-600 dark:text-neutral-400">
-                        ¥{(info?.price || 0).toLocaleString("ja-JP")}
+                        {formatMoneyMinor(info?.priceMinor || 0, currency, locale)}
                       </p>
 
-                      {stock !== null && !isOutOfStock && (
+                      {madeToOrder && (
+                        <span className="inline-flex rounded-full bg-violet-100 px-2 py-1 text-[9px] font-black uppercase tracking-wider text-violet-700 dark:bg-violet-950/40 dark:text-violet-300">
+                          {tr("event.product.made_to_order", "Sob encomenda")}
+                        </span>
+                      )}
+
+                      {stock !== null && !isOutOfStock && !madeToOrder && (
                         <p className="text-[10px] font-bold text-neutral-400">
                           {tr("event.product.stock", "Estoque")}: {stock}
                         </p>
@@ -864,6 +1251,15 @@ return Array.from(set).sort((a, b) => a.localeCompare(b, locale));
             value={customerName}
             onChange={(e) => setCustomerName(e.target.value)}
             placeholder={tr("event.form.customer_name", "Seu nome")}
+            className="w-full rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-4 py-3 text-sm text-neutral-900 dark:text-white focus:outline-none"
+          />
+
+          <input
+            value={customerPhone}
+            onChange={(e) => setCustomerPhone(e.target.value)}
+            placeholder={tr("event.form.customer_phone", "Telefone / WhatsApp")}
+            inputMode="tel"
+            autoComplete="tel"
             className="w-full rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-4 py-3 text-sm text-neutral-900 dark:text-white focus:outline-none"
           />
 
@@ -1032,6 +1428,10 @@ return Array.from(set).sort((a, b) => a.localeCompare(b, locale));
               <span className="text-neutral-900 dark:text-white">{customerName.trim() || "—"}</span>
             </p>
             <p>
+              {tr("event.form.customer_phone", "Telefone")}: {" "}
+              <span className="text-neutral-900 dark:text-white">{customerPhone.trim() || "—"}</span>
+            </p>
+            <p>
               {tr("event.whatsapp.mode", "Modo")}:{" "}
               <span className="text-neutral-900 dark:text-white">{getDeliveryModeLabel(deliveryMode)}</span>
             </p>
@@ -1049,13 +1449,25 @@ return Array.from(set).sort((a, b) => a.localeCompare(b, locale));
             </p>
           </div>
 
-          {totalAmount > 0 && (
-            <p className="text-sm font-black text-neutral-800 dark:text-neutral-300">
-              {tr("event.order.total", "Total")}:{" "}
-              <span className="text-xl text-emerald-600 dark:text-emerald-400">
-                ¥{totalAmount.toLocaleString("ja-JP")}
-              </span>
-            </p>
+          {subtotalAmount > 0 && (
+            <div className="space-y-1 rounded-2xl bg-neutral-50 p-4 text-sm font-bold dark:bg-neutral-950/60">
+              <div className="flex items-center justify-between text-neutral-500">
+                <span>{tr("event.order.subtotal", "Subtotal")}</span>
+                <span>{formatMoneyMinor(subtotalMinor, currency, locale)}</span>
+              </div>
+              {discountMinor > 0 && (
+                <div className="flex items-center justify-between text-emerald-600 dark:text-emerald-400">
+                  <span>{tr("event.order.discount", "Desconto")}</span>
+                  <span>- {formatMoneyMinor(discountMinor, currency, locale)}</span>
+                </div>
+              )}
+              <div className="flex items-center justify-between border-t border-neutral-200 pt-2 text-base font-black text-neutral-900 dark:border-neutral-800 dark:text-white">
+                <span>{tr("event.order.total", "Total")}</span>
+                <span className="text-xl text-emerald-600 dark:text-emerald-400">
+                  {formatMoneyMinor(totalAmountMinor, currency, locale)}
+                </span>
+              </div>
+            </div>
           )}
 
           <button
@@ -1069,7 +1481,7 @@ return Array.from(set).sort((a, b) => a.localeCompare(b, locale));
 
           {!canSubmit && (
             <p className="text-[11px] font-bold text-neutral-400 text-center">
-              {tr("event.order.fill_required_hint", "Escolha produtos, informe seu nome e selecione entrega/data/hora para finalizar.")}
+              {tr("event.order.fill_required_hint", "Escolha produtos, informe nome e telefone e selecione entrega/data/hora para finalizar.")}
             </p>
           )}
         </div>
@@ -1145,5 +1557,168 @@ return Array.from(set).sort((a, b) => a.localeCompare(b, locale));
         )}
       </section>
     </main>
+  );
+}
+
+function EventOffersSection({
+  offers,
+  selectedOfferId,
+  evaluation,
+  productsData,
+  language,
+  defaultLanguage,
+  currency,
+  locale,
+  eventClosed,
+  onSelect,
+  tr,
+}: {
+  offers: OfferDoc[];
+  selectedOfferId: string;
+  evaluation: OfferEvaluation | null;
+  productsData: Record<string, ProductImageData>;
+  language: "pt" | "en" | "ja";
+  defaultLanguage: "pt" | "en" | "ja";
+  currency: SupportedCurrency;
+  locale: RegionalLocale | string;
+  eventClosed: boolean;
+  onSelect: (offerId: string) => void;
+  tr: (key: string, fallback: string) => string;
+}) {
+  if (offers.length === 0) return null;
+
+  return (
+    <section className="space-y-4">
+      <div className="flex items-center gap-3">
+        <Gift className="h-6 w-6 text-orange-500" />
+        <div>
+          <h2 className="text-sm font-black uppercase tracking-widest text-orange-600 dark:text-orange-300">
+            {tr("event.offers.title", "Ofertas e kits")}
+          </h2>
+          <p className="mt-1 text-[11px] font-bold text-neutral-400">
+            {tr(
+              "event.offers.subtitle",
+              "Selecione uma oferta e combine os produtos participantes. Outros produtos continuam disponíveis normalmente.",
+            )}
+          </p>
+        </div>
+      </div>
+
+      <div className="flex snap-x snap-mandatory gap-4 overflow-x-auto pb-2 scrollbar-none">
+        {offers.map((offer) => {
+          const selected = offer.id === selectedOfferId;
+          const localized = resolveLocalizedOfferText(
+            offer.content,
+            language,
+            defaultLanguage,
+          );
+          const eligibleNames = offer.eligibleProductIds
+            .map((productId) => productsData[productId]?.name)
+            .filter((name): name is string => Boolean(name));
+          const currentEvaluation = selected ? evaluation : null;
+          const priceLabel =
+            offer.pricing.mode === "fixed_total"
+              ? `${formatMoneyMinor(
+                  offer.pricing.regularTotalMinor ?? 0,
+                  currency,
+                  locale,
+                )} → ${formatMoneyMinor(
+                  offer.pricing.promotionalTotalMinor ?? 0,
+                  currency,
+                  locale,
+                )}`
+              : offer.pricing.mode === "fixed_discount"
+                ? `- ${formatMoneyMinor(
+                    offer.pricing.discountMinor ?? 0,
+                    currency,
+                    locale,
+                  )}`
+                : `${offer.pricing.percentage ?? 0}%`;
+
+          return (
+            <article
+              key={offer.id}
+              className={cn(
+                "min-w-[min(88vw,420px)] snap-start overflow-hidden rounded-3xl border bg-white shadow-sm transition dark:bg-neutral-900",
+                selected
+                  ? "border-orange-500 ring-2 ring-orange-500/20"
+                  : "border-neutral-200 dark:border-neutral-800",
+              )}
+            >
+              <div className="p-5">
+                <p className="text-[10px] font-black uppercase tracking-widest text-orange-600 dark:text-orange-300">
+                  {tr("event.offers.required", "Quantidade necessária")}: {offer.requiredQuantity}
+                </p>
+                <h3 className="mt-2 text-xl font-black text-neutral-900 dark:text-white">
+                  {localized.name}
+                </h3>
+                {localized.description && (
+                  <p className="mt-2 text-sm font-medium text-neutral-500 dark:text-neutral-300">
+                    {localized.description}
+                  </p>
+                )}
+                <p className="mt-4 text-lg font-black text-neutral-900 dark:text-white">
+                  {priceLabel}
+                </p>
+                {eligibleNames.length > 0 && (
+                  <p className="mt-3 line-clamp-2 text-xs font-semibold text-neutral-500 dark:text-neutral-300">
+                    {eligibleNames.join(" · ")}
+                  </p>
+                )}
+
+                {selected && currentEvaluation && (
+                  <div
+                    className={cn(
+                      "mt-4 rounded-2xl border p-4 text-sm font-bold",
+                      currentEvaluation.applicable
+                        ? "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-950/20 dark:text-emerald-300"
+                        : "border-orange-200 bg-orange-50 text-orange-700 dark:border-orange-900/40 dark:bg-orange-950/20 dark:text-orange-200",
+                    )}
+                  >
+                    {currentEvaluation.applicable ? (
+                      <>
+                        <p>
+                          {tr("event.offers.applied", "Oferta aplicada")} · {currentEvaluation.bundleCount} {tr("event.offers.bundles", "kit(s)")}
+                        </p>
+                        <p className="mt-2 text-xs font-black">
+                          {tr("event.offers.savings", "Economia")}: {formatMoneyMinor(
+                            currentEvaluation.discountAmountMinor,
+                            currency,
+                            locale,
+                          )}
+                        </p>
+                      </>
+                    ) : (
+                      <p>
+                        {tr("event.offers.remaining", "Faltam {count} itens").replace(
+                          "{count}",
+                          String(currentEvaluation.nextBundleRemaining),
+                        )}
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <button
+                type="button"
+                disabled={eventClosed}
+                onClick={() => onSelect(selected ? "" : offer.id)}
+                className={cn(
+                  "flex min-h-12 w-full items-center justify-center border-t px-4 text-sm font-black transition disabled:opacity-40",
+                  selected
+                    ? "border-orange-200 bg-orange-50 text-orange-800 dark:border-orange-900/40 dark:bg-orange-950/20 dark:text-orange-200"
+                    : "border-neutral-200 bg-neutral-950 text-white dark:border-neutral-800 dark:bg-white dark:text-neutral-950",
+                )}
+              >
+                {selected
+                  ? tr("event.offers.remove", "Remover oferta")
+                  : tr("event.offers.use", "Usar oferta")}
+              </button>
+            </article>
+          );
+        })}
+      </div>
+    </section>
   );
 }

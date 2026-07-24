@@ -22,7 +22,17 @@ import {
 } from "firebase/firestore";
 import { useI18n } from "@/app/lib/i18n";
 import { ensureUserProfile } from "@/app/lib/ensureUserProfile";
-import { formatMoneyMajor } from "@/app/lib/money";
+import {
+  formatMoneyMajor,
+  formatMoneyMinor,
+} from "@/app/lib/money";
+import { Gift } from "lucide-react";
+import {
+  normalizeOffer,
+  offerIsCurrentlyActive,
+  resolveLocalizedOfferText,
+  type OfferDoc,
+} from "@/app/lib/offer-schema";
 import type {
   RegionalLocale,
   SupportedCurrency,
@@ -64,6 +74,7 @@ type EventDoc = {
   deliveryDateLabel?: string;
   productIds?: string[];
   featuredProductIds?: string[];
+  offerIds?: string[];
   whatsapp?: string;
   status?: EventStatus | string;
   pickupLink?: string;
@@ -109,7 +120,7 @@ type ProductDoc = {
   imageUrl?: string;
   extraImageUrls?: string[];
   category?: string;
-  status?: "active" | "inactive" | string;
+  status?: "active" | "inactive" | "made_to_order" | string;
   stockQty?: number;
   lowStockThreshold?: number;
 };
@@ -171,7 +182,20 @@ function buildEventItemPayload(p: ProductDoc) {
     imageUrl: pickImageUrl(p),
     extraImageUrls: normalizeStringArray(p.extraImageUrls),
     category: String(p.category || ""),
-    status: p.status === "inactive" ? "inactive" : "active",
+    status:
+      p.status === "inactive"
+        ? "inactive"
+        : p.status === "made_to_order"
+          ? "made_to_order"
+          : "active",
+    availabilityStatus:
+      p.status === "made_to_order"
+        ? "made_to_order"
+        : "active",
+    productionMode:
+      p.status === "made_to_order"
+        ? "made_to_order"
+        : "stock",
     stockQty: toNumberOrUndef(p.stockQty),
     lowStockThreshold: toNumberOrUndef(p.lowStockThreshold),
     updatedAt: serverTimestamp(),
@@ -203,12 +227,43 @@ async function loadSellerProductsOnly(sellerUid: string): Promise<ProductDoc[]> 
         imageUrl: String(data.imageUrl || data.image || ""),
         extraImageUrls: normalizeStringArray(data.extraImageUrls),
         category: String(data.category || ""),
-        status: String(data.status || "active"),
+        status:
+          data.status === "made_to_order"
+            ? "made_to_order"
+            : String(data.status || "active"),
         stockQty: toNumberOrUndef(data.stockQty),
         lowStockThreshold: toNumberOrUndef(data.lowStockThreshold),
       } as ProductDoc;
     })
     .filter(Boolean) as ProductDoc[];
+}
+
+async function loadSellerOffersOnly(
+  sellerUid: string,
+  currency: SupportedCurrency,
+): Promise<OfferDoc[]> {
+  if (!sellerUid) return [];
+
+  const snapshot = await getDocs(
+    query(
+      collection(db, "sellers", sellerUid, "offers"),
+      orderBy("createdAt", "desc"),
+    ),
+  );
+
+  return snapshot.docs
+    .map((document) =>
+      normalizeOffer(
+        document.id,
+        document.data(),
+        currency,
+      ),
+    )
+    .filter(
+      (offer): offer is OfferDoc =>
+        offer !== null &&
+        offerIsCurrentlyActive(offer),
+    );
 }
 
 async function resolveEventDocSellerOnly(params: {
@@ -267,10 +322,14 @@ const [messageSummaries, setMessageSummaries] = useState<Record<string, MessageS
 
   const [productIds, setProductIds] = useState<string[]>([]);
   const [featuredProductIds, setFeaturedProductIds] = useState<string[]>([]);
+  const [offerIds, setOfferIds] = useState<string[]>([]);
 
   const [allProducts, setAllProducts] = useState<ProductDoc[]>([]);
   const [allProductsLoading, setAllProductsLoading] = useState(true);
   const [allProductsError, setAllProductsError] = useState<string | null>(null);
+  const [allOffers, setAllOffers] = useState<OfferDoc[]>([]);
+  const [allOffersLoading, setAllOffersLoading] = useState(true);
+  const [allOffersError, setAllOffersError] = useState<string | null>(null);
 
   const [orders, setOrders] = useState<OrderDoc[]>([]);
   const [ordersLoading, setOrdersLoading] = useState(true);
@@ -418,12 +477,16 @@ const [messageSummaries, setMessageSummaries] = useState<Record<string, MessageS
             "",
           ),
         currency:
-          userData.currency ?? "JPY",
+          sellerData?.regional?.currency ??
+          userData.currency ??
+          "JPY",
         regionalLocale:
+          sellerData?.regional?.locale ??
           userData.regionalLocale ??
           "ja-JP",
         timeZone:
           String(
+            sellerData?.regional?.timeZone ??
             userData.timeZone ??
             "Asia/Tokyo",
           ),
@@ -486,6 +549,7 @@ const [messageSummaries, setMessageSummaries] = useState<Record<string, MessageS
         setDeliveryDatesText(Array.isArray(data.deliveryDates) ? data.deliveryDates.join("\n") : "");
         setProductIds(Array.isArray(data.productIds) ? uniqStrings(data.productIds) : []);
         setFeaturedProductIds(Array.isArray(data.featuredProductIds) ? uniqStrings(data.featuredProductIds) : []);
+        setOfferIds(Array.isArray(data.offerIds) ? uniqStrings(data.offerIds) : []);
       } catch (e: any) {
         setError(e?.message || t("eventPanel.err.loadEvent"));
       } finally {
@@ -504,6 +568,30 @@ const [messageSummaries, setMessageSummaries] = useState<Record<string, MessageS
       .catch(() => setAllProductsError(t("eventPanel.err.allowedProductsLoad")))
       .finally(() => setAllProductsLoading(false));
   }, [event, sellerUid, t]);
+
+
+  useEffect(() => {
+    if (!event || !sellerUid) return;
+
+    setAllOffersLoading(true);
+    setAllOffersError(null);
+
+    loadSellerOffersOnly(
+      sellerUid,
+      profile?.currency ?? "JPY",
+    )
+      .then(setAllOffers)
+      .catch(() =>
+        setAllOffersError(
+          lang === "ja"
+            ? "オファーを読み込めませんでした。"
+            : lang === "en"
+              ? "Could not load offers."
+              : "Não foi possível carregar as ofertas.",
+        ),
+      )
+      .finally(() => setAllOffersLoading(false));
+  }, [event, lang, profile?.currency, sellerUid]);
 
   const productNameById = useMemo(() => {
     const m = new Map<string, string>();
@@ -601,24 +689,74 @@ return validOrders.filter((o) => o.deliveryDate === filterDate);
   }, [filteredOrders, resolveItemLabel]);
 
   const selectedProductSet = useMemo(() => new Set(productIds), [productIds]);
+  const selectedOfferSet = useMemo(() => new Set(offerIds), [offerIds]);
+  const productById = useMemo(
+    () => new Map(allProducts.map((product) => [product.id, product])),
+    [allProducts],
+  );
+  const offerById = useMemo(
+    () => new Map(allOffers.map((offer) => [offer.id, offer])),
+    [allOffers],
+  );
+  const requiredProductIds = useMemo(() => {
+    const result = new Set<string>();
+    offerIds.forEach((offerId) => {
+      offerById.get(offerId)?.eligibleProductIds.forEach((productId) => {
+        if (productById.has(productId)) result.add(productId);
+      });
+    });
+    return result;
+  }, [offerById, offerIds, productById]);
+
+  const selectableOffers = useMemo(
+    () =>
+      allOffers.filter((offer) =>
+        offer.eligibleProductIds.every((productId) => productById.has(productId)),
+      ),
+    [allOffers, productById],
+  );
+
+  const toggleEventOffer = useCallback((offer: OfferDoc) => {
+    const selecting = !selectedOfferSet.has(offer.id);
+
+    setOfferIds((current) => {
+      const next = new Set(current);
+      if (selecting) next.add(offer.id);
+      else next.delete(offer.id);
+      return Array.from(next);
+    });
+
+    if (selecting) {
+      setProductIds((current) =>
+        uniqStrings([
+          ...current,
+          ...offer.eligibleProductIds.filter((productId) => productById.has(productId)),
+        ]),
+      );
+    }
+  }, [productById, selectedOfferSet]);
 
   const toggleEventProduct = useCallback((productId: string) => {
     setProductIds((prev) => {
       const set = new Set(prev);
-      if (set.has(productId)) set.delete(productId);
-      else set.add(productId);
+      if (set.has(productId)) {
+        if (requiredProductIds.has(productId)) return prev;
+        set.delete(productId);
+      } else {
+        set.add(productId);
+      }
       return Array.from(set);
     });
-  }, []);
+  }, [requiredProductIds]);
 
   const selectAllEventProducts = useCallback(() => {
     setProductIds(allProducts.map((p) => p.id));
   }, [allProducts]);
 
   const clearEventProducts = useCallback(() => {
-    setProductIds([]);
+    setProductIds(Array.from(requiredProductIds));
     setFeaturedProductIds([]);
-  }, []);
+  }, [requiredProductIds]);
 
   const applySellerDefaults = useCallback(() => {
     setError(null);
@@ -646,7 +784,10 @@ return validOrders.filter((o) => o.deliveryDate === filterDate);
     }
 
     const newDeliveryDates = deliveryDatesText.split("\n").map((s) => s.trim()).filter(Boolean);
-    const cleanedProductIds = uniqStrings(productIds);
+    const cleanedProductIds = uniqStrings([
+      ...productIds,
+      ...Array.from(requiredProductIds),
+    ]);
     const prodSet = new Set(cleanedProductIds);
     const fixedFeatured = uniqStrings(featuredProductIds).filter((pid) => prodSet.has(pid));
 
@@ -654,7 +795,12 @@ return validOrders.filter((o) => o.deliveryDate === filterDate);
     try {
       const productsById = new Map(allProducts.map((p) => [p.id, p]));
       const itemsSnap = await getDocs(collection(eventRef, "items"));
-      const existingItemIds = new Set(itemsSnap.docs.map((d) => d.id));
+      const existingItemIds = new Set<string>(itemsSnap.docs.map((d) => d.id));
+      const offersSnap = await getDocs(collection(eventRef, "offers"));
+      const existingOfferIds = new Set<string>(offersSnap.docs.map((d) => d.id));
+      const offersById = new Map(allOffers.map((offer) => [offer.id, offer]));
+      const cleanedOfferIds = uniqStrings(offerIds).filter((offerId) => offersById.has(offerId));
+      const selectedOfferIdSet = new Set(cleanedOfferIds);
 
       const batch = writeBatch(db);
 
@@ -677,6 +823,37 @@ return validOrders.filter((o) => o.deliveryDate === filterDate);
         batch.set(itemRef, payload, { merge: true });
       }
 
+      for (const oldOfferId of existingOfferIds) {
+        if (!selectedOfferIdSet.has(oldOfferId)) {
+          batch.delete(doc(eventRef, "offers", oldOfferId));
+        }
+      }
+
+      for (const offerId of cleanedOfferIds) {
+        const offer = offersById.get(offerId);
+        if (!offer) continue;
+
+        batch.set(
+          doc(eventRef, "offers", offerId),
+          {
+            schemaVersion: 2,
+            sourceOfferId: offer.id,
+            content: offer.content,
+            status: "active",
+            eligibleProductIds: offer.eligibleProductIds,
+            requiredQuantity: offer.requiredQuantity,
+            pricing: offer.pricing,
+            startsAt: offer.startsAt ?? null,
+            endsAt: offer.endsAt ?? null,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+            createdBy: authUser?.uid ?? sellerUid,
+            updatedBy: authUser?.uid ?? sellerUid,
+          },
+          { merge: true },
+        );
+      }
+
       batch.update(eventRef, {
         title: title.trim(),
         regionName: region.trim(),
@@ -689,6 +866,7 @@ return validOrders.filter((o) => o.deliveryDate === filterDate);
         deliveryDateLabel: newDeliveryDates.join(" • "),
         productIds: cleanedProductIds,
         featuredProductIds: fixedFeatured,
+        offerIds: cleanedOfferIds,
         updatedAt: serverTimestamp(),
       });
 
@@ -696,13 +874,14 @@ return validOrders.filter((o) => o.deliveryDate === filterDate);
 
       setProductIds(cleanedProductIds);
       setFeaturedProductIds(fixedFeatured);
+      setOfferIds(cleanedOfferIds);
       setSuccess(t("eventPanel.msg.saved"));
     } catch {
       setError(t("eventPanel.err.saveEvent"));
     } finally {
       setSaving(false);
     }
-  }, [eventRef, title, region, whatsapp, status, pickupLink, pickupNote, messengerId, deliveryDatesText, productIds, featuredProductIds, allProducts, t]);
+  }, [eventRef, title, region, whatsapp, status, pickupLink, pickupNote, messengerId, deliveryDatesText, productIds, requiredProductIds, featuredProductIds, allProducts, allOffers, offerIds, authUser?.uid, sellerUid, t]);
 
       const deliveryOrders = useMemo(() => {
   return orders.filter((o) => {
@@ -1165,6 +1344,75 @@ const markOrderMessagesAsRead = useCallback(
             <div className="sm:col-span-2"><Field label={t("eventPanel.config.field.deliveryDates")}><textarea className="w-full border border-neutral-200 dark:border-neutral-800 rounded-xl px-3 py-2.5 text-sm min-h-[100px] bg-white dark:bg-neutral-900 text-neutral-900 dark:text-white focus:outline-none resize-none" value={deliveryDatesText} onChange={(e) => setDeliveryDatesText(e.target.value)} /></Field></div>
           </div>
 
+          <div className="bg-orange-50/40 dark:bg-orange-950/10 p-6 border border-orange-200 dark:border-orange-900/40 rounded-3xl space-y-4">
+            <div className="flex items-center gap-3">
+              <Gift className="h-6 w-6 text-orange-500" />
+              <div>
+                <h3 className="text-xs font-black uppercase tracking-widest text-orange-700 dark:text-orange-300">
+                  {lang === "ja" ? "イベントのオファーとセット" : lang === "en" ? "Event offers and kits" : "Ofertas e kits do evento"}
+                </h3>
+                <p className="mt-1 text-[11px] font-bold text-neutral-500 dark:text-neutral-400">
+                  {lang === "ja"
+                    ? "選択すると対象商品も自動でイベントに追加されます。"
+                    : lang === "en"
+                      ? "Selecting an offer automatically includes all eligible products."
+                      : "Ao selecionar uma oferta, todos os produtos participantes entram automaticamente no evento."}
+                </p>
+              </div>
+            </div>
+
+            {allOffersLoading ? (
+              <p className="py-4 text-center text-xs font-bold text-neutral-400">{t("products.updating")}</p>
+            ) : allOffersError ? (
+              <p className="py-4 text-center text-xs font-bold text-red-500">{allOffersError}</p>
+            ) : selectableOffers.length === 0 ? (
+              <p className="py-4 text-center text-xs font-bold text-neutral-400">
+                {lang === "ja" ? "利用できるオファーはありません。" : lang === "en" ? "No eligible offers found." : "Nenhuma oferta disponível."}
+              </p>
+            ) : (
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {selectableOffers.map((offer) => {
+                  const checked = selectedOfferSet.has(offer.id);
+                  const localized = resolveLocalizedOfferText(
+                    offer.content,
+                    lang === "en" || lang === "ja" ? lang : "pt",
+                    lang === "en" || lang === "ja" ? lang : "pt",
+                  );
+                  const priceLabel =
+                    offer.pricing.mode === "fixed_total"
+                      ? `${formatMoneyMinor(offer.pricing.regularTotalMinor ?? 0, profile?.currency ?? "JPY", profile?.regionalLocale ?? "ja-JP")} → ${formatMoneyMinor(offer.pricing.promotionalTotalMinor ?? 0, profile?.currency ?? "JPY", profile?.regionalLocale ?? "ja-JP")}`
+                      : offer.pricing.mode === "fixed_discount"
+                        ? `- ${formatMoneyMinor(offer.pricing.discountMinor ?? 0, profile?.currency ?? "JPY", profile?.regionalLocale ?? "ja-JP")}`
+                        : `${offer.pricing.percentage ?? 0}%`;
+
+                  return (
+                    <label
+                      key={offer.id}
+                      className={`cursor-pointer rounded-2xl border p-4 transition ${checked ? "border-orange-500 bg-white ring-2 ring-orange-500/20 dark:bg-neutral-900" : "border-orange-200 bg-white/70 dark:border-orange-900/40 dark:bg-neutral-900/60"}`}
+                    >
+                      <div className="flex items-start gap-3">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleEventOffer(offer)}
+                          disabled={saving}
+                          className="mt-1 h-4 w-4 accent-orange-500"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-black text-neutral-900 dark:text-white">{localized.name}</p>
+                          <p className="mt-1 text-xs font-black text-orange-600 dark:text-orange-300">{priceLabel}</p>
+                          <p className="mt-2 text-[10px] font-bold text-neutral-400">
+                            {lang === "ja" ? "必要数" : lang === "en" ? "Required quantity" : "Quantidade necessária"}: {offer.requiredQuantity}
+                          </p>
+                        </div>
+                      </div>
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
           <div className="bg-white dark:bg-neutral-900 p-6 border border-neutral-200 dark:border-neutral-800 rounded-3xl space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
               <div>
@@ -1244,6 +1492,11 @@ const markOrderMessagesAsRead = useCallback(
                         <p className="text-[10px] font-bold text-neutral-400 truncate">
                           {yen(Number(p.price || 0))} {p.category ? `• ${p.category}` : ""}
                         </p>
+                        {requiredProductIds.has(p.id) && (
+                          <p className="text-[9px] font-black uppercase tracking-wider text-orange-500">
+                            {lang === "ja" ? "セット必須" : lang === "en" ? "Required by kit" : "Obrigatório pelo kit"}
+                          </p>
+                        )}
                         <p className="text-[10px] font-black text-neutral-400">
                           {lang === "ja" ? "在庫: " : lang === "en" ? "Stock: " : "Estoque: "}{p.stockQty ?? "—"}
                         </p>
