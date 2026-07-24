@@ -9,7 +9,6 @@ import {
   collection,
   deleteDoc,
   doc,
-  getDoc,
   onSnapshot,
   query,
   updateDoc,
@@ -20,6 +19,11 @@ import {
   setDoc,
 } from "firebase/firestore";
 import { ensureUserProfile } from "@/app/lib/ensureUserProfile";
+import { formatMoneyMajor } from "@/app/lib/money";
+import type {
+  RegionalLocale,
+  SupportedCurrency,
+} from "@/app/types/regional";
 import { useI18n } from "@/app/lib/i18n";
 import { getApp } from "firebase/app";
 import { getStorage, ref as storageRef, uploadBytes, getDownloadURL } from "firebase/storage";
@@ -39,6 +43,8 @@ type UserDoc = {
   subscriptionStatus?: SubscriptionStatus;
   maxProducts?: number;
   suspended?: boolean;
+  currency?: SupportedCurrency | null;
+  regionalLocale?: RegionalLocale | null;
 };
 
 type SellerCategoryDoc = {
@@ -88,6 +94,7 @@ interface ProductCardProps {
 interface FormFieldsProps {
   t: (key: string) => string;
   lang: string;
+  currency: SupportedCurrency;
   categories: string[];
   category: string;
   setCategory: (v: string) => void;
@@ -367,17 +374,24 @@ export default function ProductsCatalogPage() {
     return fromProfile || authUser?.uid || "";
   }, [profile?.sellerId, authUser?.uid]);
 
-  const locale = lang === "pt" ? "pt-BR" : lang === "en" ? "en-US" : "ja-JP";
+  const currency =
+    profile?.currency ?? "JPY";
+  const locale =
+    profile?.regionalLocale ??
+    (lang === "pt"
+      ? "pt-BR"
+      : lang === "en"
+        ? "en-US"
+        : "ja-JP");
 
   const yen = useCallback(
-    (n: number) => {
-      return new Intl.NumberFormat(locale, {
-        style: "currency",
-        currency: "JPY",
-        maximumFractionDigits: 0,
-      }).format(Math.round(n || 0));
-    },
-    [locale]
+    (amount: number) =>
+      formatMoneyMajor(
+        amount,
+        currency,
+        locale,
+      ),
+    [currency, locale],
   );
 
   useEffect(() => {
@@ -395,29 +409,61 @@ export default function ProductsCatalogPage() {
       setSuccessMsg("");
       setProfileMissing(false);
 
-      const snap = await getDoc(doc(db, "users", u.uid));
-      if (!snap.exists()) {
-        setProfileMissing(true);
-        return;
-      }
+      const result =
+        await ensureUserProfile(
+          u,
+          lang,
+        );
 
-      const data = snap.data() as any;
-      if (String(data.role || "") !== "seller") {
+      const data =
+        result.userDoc as UserDoc;
+
+      if (
+        data.role !== "seller" &&
+        data.role !== "admin"
+      ) {
         router.replace("/");
         return;
       }
 
       setProfile({
-        role: "seller",
-        sellerId: typeof data.sellerId === "string" ? data.sellerId : u.uid,
-        active: data.active !== false,
-        plan: data.plan === "pro" ? "pro" : data.plan === "business" ? "business" : "starter",
-        subscriptionStatus: data.subscriptionStatus || "none",
-        maxProducts: Number.isFinite(data.maxProducts) ? Number(data.maxProducts) : undefined,
-        suspended: data.suspended === true,
+        role:
+          data.role === "admin"
+            ? "admin"
+            : "seller",
+        sellerId:
+          typeof data.sellerId ===
+          "string"
+            ? data.sellerId
+            : u.uid,
+        active:
+          data.active !== false,
+        plan:
+          data.plan === "pro" ||
+          data.plan === "business"
+            ? data.plan
+            : "starter",
+        subscriptionStatus:
+          data.subscriptionStatus ??
+          "none",
+        maxProducts:
+          Number.isFinite(
+            data.maxProducts,
+          )
+            ? Number(
+                data.maxProducts,
+              )
+            : undefined,
+        suspended:
+          data.suspended === true,
+        currency:
+          data.currency ?? "JPY",
+        regionalLocale:
+          data.regionalLocale ??
+          "ja-JP",
       });
     },
-    [router]
+    [lang, router],
   );
 
   useEffect(() => {
@@ -1248,6 +1294,7 @@ export default function ProductsCatalogPage() {
           <FormFields
             t={t}
             lang={lang}
+            currency={currency}
             categories={categoriesForSellerSelect}
             category={category}
             setCategory={setCategory}
@@ -1734,6 +1781,7 @@ function ProductCard({
 function FormFields({
   t,
   lang,
+  currency,
   categories,
   category,
   setCategory,
@@ -1789,14 +1837,22 @@ function FormFields({
 
       <div className="space-y-1">
         <label className="text-xs font-black text-neutral-700 dark:text-neutral-300 uppercase tracking-wider">
-          {lang === "ja" ? "原価 (¥)" : lang === "en" ? "Cost price (¥)" : "Preço de custo (¥)"}
+          {lang === "ja"
+            ? `原価 (${currency})`
+            : lang === "en"
+              ? `Cost price (${currency})`
+              : `Preço de custo (${currency})`}
         </label>
         <input value={costPrice} onChange={(e) => setCostPrice(e.target.value)} inputMode="decimal" className="w-full border border-neutral-200 dark:border-neutral-800 rounded-xl px-3 py-2.5 text-sm bg-white dark:bg-neutral-900 text-neutral-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white" />
       </div>
 
       <div className="space-y-1">
         <label className="text-xs font-black text-neutral-700 dark:text-neutral-300 uppercase tracking-wider">
-          {lang === "ja" ? "販売価格 (¥)" : lang === "en" ? "Sale price (¥)" : "Preço de venda (¥)"}
+          {lang === "ja"
+            ? `販売価格 (${currency})`
+            : lang === "en"
+              ? `Sale price (${currency})`
+              : `Preço de venda (${currency})`}
         </label>
         <input value={sellPrice} onChange={(e) => setSellPrice(e.target.value)} inputMode="decimal" className="w-full border border-neutral-200 dark:border-neutral-800 rounded-xl px-3 py-2.5 text-sm bg-white dark:bg-neutral-900 text-neutral-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white" />
       </div>

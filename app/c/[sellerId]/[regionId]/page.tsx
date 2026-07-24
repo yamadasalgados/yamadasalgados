@@ -6,6 +6,8 @@ import { useParams } from "next/navigation";
 import { db } from "@/app/lib/firebase";
 import {
   collection,
+  doc,
+  getDoc,
   getDocs,
   limit,
   orderBy,
@@ -17,6 +19,15 @@ import {
 import PushSubscribeBanner from "@/app/_components/PushSubscribeBanner";
 import OpenInBrowserGate from "@/app/_components/OpenInBrowserGate";
 import { useI18n } from "@/app/lib/i18n";
+import {
+  normalizeSellerRegionalProfile,
+} from "@/app/lib/seller-regional-profile";
+import {
+  accessIsActive,
+} from "@/app/lib/access-control";
+import type {
+  OperatingCountry,
+} from "@/app/types/regional";
 
 type EventStatus = "active" | "closed" | "cancelled";
 
@@ -33,6 +44,7 @@ type FireEvent = {
 };
 
 type SellerProfile = {
+  storeName?: string;
   displayName?: string;
   whatsapp?: string;
   messengerId?: string;
@@ -40,29 +52,53 @@ type SellerProfile = {
   pickupNote?: string;
 };
 
-function fmtDateShort(ts?: Timestamp) {
+function fmtDateShort(
+  ts: Timestamp | undefined,
+  locale: string,
+  timeZone: string,
+) {
   if (!ts) return "";
   const d = ts.toDate();
 
-  return new Intl.DateTimeFormat("pt-BR", {
-    timeZone: "Asia/Tokyo",
+  return new Intl.DateTimeFormat(locale, {
+    timeZone,
     day: "2-digit",
     month: "2-digit",
     year: "2-digit",
   }).format(d);
 }
 
-function normalizePhoneToWhatsappLink(raw: string) {
-  const s = String(raw || "").trim();
-  if (!s) return "";
+function normalizePhoneToWhatsappLink(
+  raw: string,
+  country: OperatingCountry | null,
+) {
+  const source = String(raw || "").trim();
+  if (!source) return "";
 
-  let digits = s.replace(/[^\d]/g, "");
+  const hadInternationalPrefix =
+    source.startsWith("+");
+  let digits = source.replace(/[^\d]/g, "");
 
-  if (digits.startsWith("0")) {
-    digits = `81${digits.slice(1)}`;
+  if (!hadInternationalPrefix) {
+    const countryCode =
+      country === "BR"
+        ? "55"
+        : country === "US"
+          ? "1"
+          : "81";
+
+    if (digits.startsWith("0")) {
+      digits = digits.slice(1);
+    }
+
+    if (!digits.startsWith(countryCode)) {
+      digits = `${countryCode}${digits}`;
+    }
   }
 
-  return digits ? `https://wa.me/${digits}` : "";
+  return digits
+    ? `https://wa.me/${digits}`
+    : "";
 }
 
 function uniqByEventId(list: Array<{ id: string; data: FireEvent }>) {
@@ -98,6 +134,24 @@ export default function ClientRegionPage() {
   const [seller, setSeller] = useState<SellerProfile | null>(null);
   const [events, setEvents] = useState<Array<{ id: string; data: FireEvent }>>([]);
 
+  const regional = useMemo(
+    () =>
+      normalizeSellerRegionalProfile(
+        seller,
+        { fallbackSellerId: sellerId },
+      ),
+    [seller, sellerId],
+  );
+
+  const sellerAvailable =
+    useMemo(
+      () =>
+        seller
+          ? accessIsActive(seller)
+          : false,
+      [seller],
+    );
+
   const canLoad = useMemo(() => !!sellerId && !!regionId, [sellerId, regionId]);
 
   useEffect(() => {
@@ -107,28 +161,35 @@ export default function ClientRegionPage() {
 
     const fetchSeller = async () => {
       try {
-        const qSeller = query(
-          collection(db, "users"),
-          where("sellerId", "==", sellerId),
-          limit(1)
-        );
-
-        const snap = await getDocs(qSeller);
+        const snapshot =
+          await getDoc(
+            doc(
+              db,
+              "sellers",
+              sellerId,
+            ),
+          );
 
         if (!alive) return;
 
-        if (!snap.empty) {
-          setSeller(snap.docs[0].data() as SellerProfile);
-        } else {
+        setSeller(
+          snapshot.exists()
+            ? snapshot.data() as SellerProfile
+            : null,
+        );
+      } catch (error) {
+        console.warn(
+          "[ClientRegionPage] Seller read failed:",
+          error,
+        );
+
+        if (alive) {
           setSeller(null);
         }
-      } catch (e) {
-        console.warn("[ClientRegionPage] Seller profile public read failed:", e);
-        if (alive) setSeller(null);
       }
     };
 
-    fetchSeller();
+    void fetchSeller();
 
     return () => {
       alive = false;
@@ -140,130 +201,121 @@ export default function ClientRegionPage() {
 
     let alive = true;
 
-    const fetchRootEvents = async () => {
-      try {
-        const qRoot = query(
-          collection(db, "events"),
-          where("sellerId", "==", sellerId),
-          where("regionId", "==", regionId),
-          where("status", "==", "active"),
-          orderBy("createdAt", "desc"),
-          limit(30)
-        );
-
-        const snap = await getDocs(qRoot);
-
-        return snap.docs.map((d) => ({
-          id: d.id,
-          data: d.data() as FireEvent,
-        }));
-      } catch {
-        const qRootFallback = query(
-          collection(db, "events"),
-          where("sellerId", "==", sellerId),
-          where("regionId", "==", regionId),
-          where("status", "==", "active"),
-          limit(30)
-        );
-
-        const snap = await getDocs(qRootFallback);
-
-        return snap.docs.map((d) => ({
-          id: d.id,
-          data: d.data() as FireEvent,
-        }));
-      }
-    };
-
-    const fetchSellerEvents = async () => {
-      try {
-        const qSellerEvents = query(
-          collection(db, "sellers", sellerId, "events"),
-          where("regionId", "==", regionId),
-          where("status", "==", "active"),
-          orderBy("createdAt", "desc"),
-          limit(30)
-        );
-
-        const snap = await getDocs(qSellerEvents);
-
-        return snap.docs.map((d) => ({
-          id: d.id,
-          data: d.data() as FireEvent,
-        }));
-      } catch {
-        const qSellerEventsFallback = query(
-          collection(db, "sellers", sellerId, "events"),
-          where("regionId", "==", regionId),
-          where("status", "==", "active"),
-          limit(30)
-        );
-
-        const snap = await getDocs(qSellerEventsFallback);
-
-        return snap.docs.map((d) => ({
-          id: d.id,
-          data: d.data() as FireEvent,
-        }));
-      }
-    };
-
     const fetchData = async () => {
       setLoading(true);
       setErrMsg("");
 
       try {
-        const results = await Promise.allSettled([
-          fetchRootEvents(),
-          fetchSellerEvents(),
-        ]);
+        let snapshot;
 
-        const rootEvents =
-          results[0].status === "fulfilled" ? results[0].value : [];
-
-        const sellerEvents =
-          results[1].status === "fulfilled" ? results[1].value : [];
-
-        const merged = uniqByEventId([...sellerEvents, ...rootEvents]);
-
-        merged.sort((a, b) => {
-          const aTime = a.data.createdAt?.toMillis?.() || 0;
-          const bTime = b.data.createdAt?.toMillis?.() || 0;
-          return bTime - aTime;
-        });
+        try {
+          snapshot = await getDocs(
+            query(
+              collection(
+                db,
+                "sellers",
+                sellerId,
+                "events",
+              ),
+              where(
+                "regionId",
+                "==",
+                regionId,
+              ),
+              where(
+                "status",
+                "==",
+                "active",
+              ),
+              orderBy(
+                "createdAt",
+                "desc",
+              ),
+              limit(30),
+            ),
+          );
+        } catch {
+          snapshot = await getDocs(
+            query(
+              collection(
+                db,
+                "sellers",
+                sellerId,
+                "events",
+              ),
+              where(
+                "regionId",
+                "==",
+                regionId,
+              ),
+              where(
+                "status",
+                "==",
+                "active",
+              ),
+              limit(30),
+            ),
+          );
+        }
 
         if (!alive) return;
 
-        setEvents(merged);
+        const next = snapshot.docs.map(
+          (document) => ({
+            id: document.id,
+            data:
+              document.data() as FireEvent,
+          }),
+        );
 
-        if (results[0].status === "rejected" && results[1].status === "rejected") {
-          setErrMsg(
-            tr("clientRegion.errors.loadEvents", "Erro ao carregar os eventos.")
-          );
-        }
-      } catch (e) {
-        console.error("[ClientRegionPage] Load Error:", e);
+        next.sort((left, right) => {
+          const leftTime =
+            left.data.createdAt
+              ?.toMillis?.() || 0;
+          const rightTime =
+            right.data.createdAt
+              ?.toMillis?.() || 0;
+
+          return rightTime - leftTime;
+        });
+
+        setEvents(
+          uniqByEventId(next),
+        );
+      } catch (error) {
+        console.error(
+          "[ClientRegionPage] Load Error:",
+          error,
+        );
 
         if (!alive) return;
 
         setErrMsg(
-          tr("clientRegion.errors.loadEvents", "Erro ao carregar os eventos.")
+          tr(
+            "clientRegion.errors.loadEvents",
+            "Erro ao carregar os eventos.",
+          ),
         );
         setEvents([]);
       } finally {
-        if (alive) setLoading(false);
+        if (alive) {
+          setLoading(false);
+        }
       }
     };
 
-    fetchData();
+    void fetchData();
 
     return () => {
       alive = false;
     };
-  }, [canLoad, sellerId, regionId]);
+  }, [canLoad, regionId, sellerId]);
 
   const whatsappLink = seller?.whatsapp
-    ? normalizePhoneToWhatsappLink(seller.whatsapp)
+    ? normalizePhoneToWhatsappLink(
+        seller.whatsapp,
+        regional.operatingCountry,
+      )
     : "";
 
   const gateUrl = sellerId && regionId ? `/c/${sellerId}/${regionId}` : "/";
@@ -280,10 +332,10 @@ export default function ClientRegionPage() {
             </h1>
 
             <p className="text-sm font-medium text-neutral-500">
-              {seller?.displayName
+              {(seller?.storeName || seller?.displayName)
                 ? tr("clientRegion.organizedBy", "Organizado por {name}").replace(
                     "{name}",
-                    seller.displayName
+                    (seller.storeName || seller.displayName || "")
                   )
                 : tr(
                     "clientRegion.subtitle",
@@ -343,6 +395,13 @@ export default function ClientRegionPage() {
             <div className="text-center py-10 text-xs font-black text-neutral-400 uppercase animate-pulse">
               {tr("clientRegion.loading", "Carregando eventos...")}
             </div>
+          ) : seller && !sellerAvailable ? (
+            <div className="text-center p-12 border-2 border-dashed rounded-3xl dark:border-neutral-800 text-xs font-black uppercase text-neutral-400">
+              {tr(
+                "clientRegion.storeUnavailable",
+                "Esta loja não está recebendo pedidos no momento.",
+              )}
+            </div>
           ) : events.length === 0 ? (
             <div className="text-center p-12 border-2 border-dashed rounded-3xl dark:border-neutral-800 text-xs font-black uppercase text-neutral-400">
               {tr("clientRegion.empty", "Nenhum pedido ativo no momento.")}
@@ -375,7 +434,13 @@ export default function ClientRegionPage() {
                           <span className="text-[10px] font-bold text-neutral-400 uppercase">
                             {tr("clientRegion.startedOn", "Iniciado em {date}").replace(
                               "{date}",
-                              fmtDateShort(e.data.createdAt)
+                              fmtDateShort(
+                                e.data.createdAt,
+                                regional.regionalLocale ??
+                                  "pt-BR",
+                                regional.timeZone ||
+                                  "Asia/Tokyo",
+                              )
                             )}
                           </span>
                         )}

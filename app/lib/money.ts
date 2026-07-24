@@ -57,6 +57,29 @@ export function minorToMajor(
   return amountMinor / factor;
 }
 
+export function formatMoneyMajor(
+  amountMajor: number,
+  currency: SupportedCurrency,
+  locale?: string,
+): string {
+  const normalizedMajor =
+    Number.isFinite(amountMajor)
+      ? amountMajor
+      : 0;
+
+  return new Intl.NumberFormat(
+    locale || DEFAULT_LOCALE[currency],
+    {
+      style: "currency",
+      currency,
+      minimumFractionDigits:
+        getMinorUnitDigits(currency),
+      maximumFractionDigits:
+        getMinorUnitDigits(currency),
+    },
+  ).format(normalizedMajor);
+}
+
 export function formatMoneyMinor(
   amountMinor: number,
   currency: SupportedCurrency,

@@ -41,8 +41,21 @@ import {
 } from "@/app/lib/firebase";
 
 import {
+  accessIsActive,
+} from "@/app/lib/access-control";
+
+import {
   useI18n,
 } from "@/app/lib/i18n";
+
+import {
+  formatMoneyMajor,
+} from "@/app/lib/money";
+import {
+  isSupportedCurrency,
+  type RegionalLocale,
+  type SupportedCurrency,
+} from "@/app/types/regional";
 
 type Language =
   | "pt"
@@ -66,6 +79,9 @@ type StoreProfile = {
   logoUrl: string;
   bannerUrl: string;
   pickupNote: string;
+  currency: SupportedCurrency;
+  regionalLocale: RegionalLocale;
+  available: boolean;
 };
 
 type Product = {
@@ -603,6 +619,31 @@ function normalizeStoreProfile(
 ): StoreProfile {
   const raw =
     asRecord(rawValue);
+  const regional =
+    asRecord(raw.regional);
+  const currencyCandidate =
+    regional.currency ??
+    raw.currency;
+  const localeCandidate =
+    regional.locale ??
+    raw.regionalLocale;
+  const currency =
+    isSupportedCurrency(
+      currencyCandidate,
+    )
+      ? currencyCandidate
+      : "JPY";
+  const regionalLocale:
+    RegionalLocale =
+    localeCandidate === "pt-BR" ||
+    localeCandidate === "en-US" ||
+    localeCandidate === "ja-JP"
+      ? localeCandidate
+      : currency === "BRL"
+        ? "pt-BR"
+        : currency === "USD"
+          ? "en-US"
+          : "ja-JP";
 
   return {
     name:
@@ -636,21 +677,23 @@ function normalizeStoreProfile(
       asString(
         raw.storePickupNote,
       ),
+    currency,
+    regionalLocale,
+    available:
+      accessIsActive(raw),
   };
 }
 
 function formatCurrency(
   value: number,
   locale: string,
+  currency: SupportedCurrency,
 ): string {
-  return new Intl.NumberFormat(
+  return formatMoneyMajor(
+    value,
+    currency,
     locale,
-    {
-      style: "currency",
-      currency: "JPY",
-      maximumFractionDigits: 0,
-    },
-  ).format(value);
+  );
 }
 
 function cleanOrderItem(
@@ -851,6 +894,9 @@ export default function StoreClient({
       logoUrl: "",
       bannerUrl: "",
       pickupNote: "",
+      currency: "JPY",
+      regionalLocale: "ja-JP",
+      available: false,
     });
 
   const [products, setProducts] =
@@ -938,6 +984,18 @@ export default function StoreClient({
     setLoading(true);
     setLoadError("");
 
+    let sellerResolved = false;
+    let productsResolved = false;
+
+    const finishLoading = () => {
+      if (
+        sellerResolved &&
+        productsResolved
+      ) {
+        setLoading(false);
+      }
+    };
+
     const sellerReference =
       doc(
         db,
@@ -957,21 +1015,43 @@ export default function StoreClient({
       onSnapshot(
         sellerReference,
         (snapshot) => {
-          if (
-            snapshot.exists()
-          ) {
-            setStoreProfile(
-              normalizeStoreProfile(
-                snapshot.data(),
-              ),
+          sellerResolved = true;
+
+          if (!snapshot.exists()) {
+            setLoadError(
+              text.storeUnavailableBody,
             );
+            finishLoading();
+            return;
           }
+
+          const nextProfile =
+            normalizeStoreProfile(
+              snapshot.data(),
+            );
+
+          setStoreProfile(
+            nextProfile,
+          );
+
+          setLoadError(
+            nextProfile.available
+              ? ""
+              : text.storeUnavailableBody,
+          );
+
+          finishLoading();
         },
         (error) => {
           console.warn(
             "[StoreClient] Falha ao carregar dados da loja:",
             error,
           );
+          sellerResolved = true;
+          setLoadError(
+            text.storeUnavailableBody,
+          );
+          finishLoading();
         },
       );
 
@@ -1004,8 +1084,8 @@ export default function StoreClient({
             loadedProducts,
           );
 
-          setLoading(false);
-          setLoadError("");
+          productsResolved = true;
+          finishLoading();
         },
         (error) => {
           console.error(
@@ -1013,10 +1093,11 @@ export default function StoreClient({
             error,
           );
 
-          setLoading(false);
+          productsResolved = true;
           setLoadError(
             text.storeUnavailableBody,
           );
+          finishLoading();
         },
       );
 
@@ -1985,7 +2066,8 @@ const showingProducts =
                         <p className="shrink-0 text-lg font-black">
                           {formatCurrency(
                             product.price,
-                            locale,
+                            storeProfile.regionalLocale,
+                            storeProfile.currency,
                           )}
                         </p>
                       </div>
@@ -2364,7 +2446,8 @@ const showingProducts =
             <OrderSummary
               items={cartItems}
               total={total}
-              locale={locale}
+              locale={storeProfile.regionalLocale}
+              currency={storeProfile.currency}
               totalLabel={text.total}
             />
 
@@ -2421,7 +2504,8 @@ const showingProducts =
                 <span>
                   {formatCurrency(
                     total,
-                    locale,
+                    storeProfile.regionalLocale,
+                    storeProfile.currency,
                   )}
                 </span>
               </button>
@@ -2444,7 +2528,8 @@ const showingProducts =
               <span>
                 {formatCurrency(
                   total,
-                  locale,
+                  storeProfile.regionalLocale,
+                  storeProfile.currency,
                 )}
               </span>
             </button>
@@ -2456,7 +2541,8 @@ const showingProducts =
           items={cartItems}
           totalItems={totalItems}
           total={total}
-          locale={locale}
+          locale={storeProfile.regionalLocale}
+          currency={storeProfile.currency}
           text={text}
           onClose={() =>
             setCartOpen(false)
@@ -2481,7 +2567,8 @@ const showingProducts =
           imageIndex={
             selectedImageIndex
           }
-          locale={locale}
+          locale={storeProfile.regionalLocale}
+          currency={storeProfile.currency}
           text={text}
           onImageIndexChange={
             setSelectedImageIndex
@@ -2651,11 +2738,13 @@ function OrderSummary({
   items,
   total,
   locale,
+  currency,
   totalLabel,
 }: {
   items: CartItem[];
   total: number;
   locale: string;
+  currency: SupportedCurrency;
   totalLabel: string;
 }) {
   return (
@@ -2675,6 +2764,7 @@ function OrderSummary({
               {formatCurrency(
                 item.subtotal,
                 locale,
+                currency,
               )}
             </span>
           </div>
@@ -2688,6 +2778,7 @@ function OrderSummary({
           {formatCurrency(
             total,
             locale,
+            currency,
           )}
         </span>
       </div>
@@ -2700,6 +2791,7 @@ function CartDrawer({
   totalItems,
   total,
   locale,
+  currency,
   text,
   onClose,
   onContinue,
@@ -2709,6 +2801,7 @@ function CartDrawer({
   totalItems: number;
   total: number;
   locale: string;
+  currency: SupportedCurrency;
   text: (typeof TEXT)[Language];
   onClose: () => void;
   onContinue: () => void;
@@ -2778,6 +2871,7 @@ function CartDrawer({
                           {formatCurrency(
                             item.price,
                             locale,
+                            currency,
                           )}
                         </p>
                       </div>
@@ -2786,6 +2880,7 @@ function CartDrawer({
                         {formatCurrency(
                           item.subtotal,
                           locale,
+                          currency,
                         )}
                       </p>
                     </div>
@@ -2820,6 +2915,7 @@ function CartDrawer({
               {formatCurrency(
                 total,
                 locale,
+                currency,
               )}
             </span>
           </div>
@@ -2848,6 +2944,7 @@ function ProductModal({
   images,
   imageIndex,
   locale,
+  currency,
   text,
   onImageIndexChange,
   onClose,
@@ -2856,6 +2953,7 @@ function ProductModal({
   images: string[];
   imageIndex: number;
   locale: string;
+  currency: SupportedCurrency;
   text: (typeof TEXT)[Language];
   onImageIndexChange: (
     value: number,
@@ -2953,6 +3051,7 @@ function ProductModal({
               {formatCurrency(
                 product.price,
                 locale,
+                currency,
               )}
             </p>
           </div>

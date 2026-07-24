@@ -21,6 +21,12 @@ import {
   limit,
 } from "firebase/firestore";
 import { useI18n } from "@/app/lib/i18n";
+import { ensureUserProfile } from "@/app/lib/ensureUserProfile";
+import { formatMoneyMajor } from "@/app/lib/money";
+import type {
+  RegionalLocale,
+  SupportedCurrency,
+} from "@/app/types/regional";
 
 // --- 📝 Interfaces de Tipagem Estrita (TypeScript) ---
 
@@ -29,7 +35,9 @@ type OrderStatus = "pending" | "confirmed" | "delivered" | "cancelled";
 
 type UserDoc = {
   role?: "seller" | "admin";
+  sellerId?: string;
   active?: boolean;
+  suspended?: boolean;
   regionId?: string;
   displayName?: string;
   whatsapp?: string;
@@ -37,6 +45,9 @@ type UserDoc = {
   pickupLink?: string;
   pickupNote?: string;
   regionName?: string;
+  currency?: SupportedCurrency | null;
+  regionalLocale?: RegionalLocale | null;
+  timeZone?: string;
 };
 
 type EventDoc = {
@@ -134,7 +145,12 @@ export default function OrderDetailClient({ eventId, orderId }: { eventId: strin
   const [inactive, setInactive] = useState(false);
 
   const role = profile?.role ?? null;
-  const sellerUid = authUser?.uid || "";
+  const sellerUid =
+    String(
+      profile?.sellerId ??
+      authUser?.uid ??
+      "",
+    ).trim();
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -153,31 +169,51 @@ export default function OrderDetailClient({ eventId, orderId }: { eventId: strin
   const chatEndRef = useRef<HTMLDivElement | null>(null);
 
   const yen = useCallback(
-    (n: number) => {
-      const locale = lang === "pt" ? "pt-BR" : lang === "en" ? "en-US" : "ja-JP";
-      return new Intl.NumberFormat(locale, {
-        style: "currency",
-        currency: "JPY",
-        maximumFractionDigits: 0,
-      }).format(Math.round(n || 0));
-    },
-    [lang]
+    (amount: number) =>
+      formatMoneyMajor(
+        amount,
+        profile?.currency ?? "JPY",
+        profile?.regionalLocale ??
+          (lang === "pt"
+            ? "pt-BR"
+            : lang === "en"
+              ? "en-US"
+              : "ja-JP"),
+      ),
+    [
+      lang,
+      profile?.currency,
+      profile?.regionalLocale,
+    ],
   );
 
   const fmtDate = useCallback((ts?: Timestamp | null) => {
     if (!ts) return "";
-    return new Intl.DateTimeFormat("pt-BR", {
-      timeZone: "Asia/Tokyo",
-      day: "2-digit",
-      month: "2-digit",
-      year: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-    }).format(ts.toDate());
-  }, []);
+    return new Intl.DateTimeFormat(
+      profile?.regionalLocale ?? "pt-BR",
+      {
+        timeZone:
+          profile?.timeZone ||
+          "Asia/Tokyo",
+        day: "2-digit",
+        month: "2-digit",
+        year: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+      },
+    ).format(ts.toDate());
+  }, [
+    profile?.regionalLocale,
+    profile?.timeZone,
+  ]);
 
   const canEnter = useMemo(() => {
-    if (!authUser || !sellerUid || inactive || role !== "seller") return false;
+    if (
+      !authUser ||
+      !sellerUid ||
+      inactive ||
+      (role !== "seller" && role !== "admin")
+    ) return false;
     return true;
   }, [authUser, sellerUid, inactive, role]);
 
@@ -190,30 +226,90 @@ export default function OrderDetailClient({ eventId, orderId }: { eventId: strin
     return () => unsub();
   }, [router]);
 
-  const loadProfile = useCallback(async (u: User) => {
-    setProfileMissing(false);
-    setInactive(false);
+  const loadProfile = useCallback(
+    async (u: User) => {
+      setProfileMissing(false);
+      setInactive(false);
 
-    const snap = await getDoc(doc(db, "users", u.uid));
-    if (!snap.exists()) {
-      setProfileMissing(true);
-      return;
-    }
+      const result =
+        await ensureUserProfile(
+          u,
+          lang,
+        );
 
-    const data = snap.data() as UserDoc;
-    setProfile({
-      role: data.role === "admin" ? "admin" : data.role === "seller" ? "seller" : undefined,
-      active: data.active !== false,
-      regionId: typeof data.regionId === "string" ? data.regionId : "",
-      displayName: data.displayName || "",
-      whatsapp: data.whatsapp || "",
-      messengerId: data.messengerId || "",
-      pickupLink: data.pickupLink || "",
-      pickupNote: data.pickupNote || "",
-      regionName: data.regionName || "",
-    });
-    setInactive(data.active === false);
-  }, []);
+      const userData =
+        result.userDoc as UserDoc;
+      const sellerData =
+        result.sellerDoc ?? {};
+
+      setProfile({
+        role:
+          userData.role === "admin"
+            ? "admin"
+            : "seller",
+        sellerId:
+          String(
+            userData.sellerId ??
+            u.uid,
+          ).trim(),
+        active:
+          userData.active !== false,
+        regionId:
+          String(
+            sellerData.regionId ??
+            userData.regionId ??
+            "",
+          ),
+        displayName:
+          String(
+            sellerData.storeName ??
+            userData.displayName ??
+            "",
+          ),
+        whatsapp:
+          String(
+            sellerData.whatsapp ??
+            "",
+          ),
+        messengerId:
+          String(
+            sellerData.messengerId ??
+            "",
+          ),
+        pickupLink:
+          String(
+            sellerData.pickupLink ??
+            "",
+          ),
+        pickupNote:
+          String(
+            sellerData.pickupNote ??
+            "",
+          ),
+        regionName:
+          String(
+            sellerData.regionName ??
+            "",
+          ),
+        currency:
+          userData.currency ?? "JPY",
+        regionalLocale:
+          userData.regionalLocale ??
+          "ja-JP",
+        timeZone:
+          String(
+            userData.timeZone ??
+            "Asia/Tokyo",
+          ),
+      });
+
+      setInactive(
+        userData.active === false ||
+        userData.suspended === true,
+      );
+    },
+    [lang],
+  );
 
   useEffect(() => {
     if (!authUser) return;

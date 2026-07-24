@@ -21,14 +21,16 @@ export type SellerRegionalProfile = {
   timeZone: string;
   defaultLanguage: SupportedLanguage;
   onboardingComplete: boolean;
-  regionalVersion: number;
+  schemaVersion: number;
 };
 
 function asRecord(
   value: unknown,
 ): Record<string, unknown> {
-  return value && typeof value === "object"
-    ? (value as Record<string, unknown>)
+  return value &&
+    typeof value === "object" &&
+    !Array.isArray(value)
+    ? value as Record<string, unknown>
     : {};
 }
 
@@ -56,6 +58,9 @@ export function normalizeSellerRegionalProfile(
   },
 ): SellerRegionalProfile {
   const data = asRecord(value);
+  const regional = asRecord(data.regional);
+  const onboarding = asRecord(data.onboarding);
+
   const fallbackLanguage =
     options?.fallbackLanguage ?? "pt";
 
@@ -63,41 +68,62 @@ export function normalizeSellerRegionalProfile(
     text(data.sellerId) ||
     text(options?.fallbackSellerId);
 
+  const operatingCountryCandidate =
+    regional.operatingCountry ??
+    data.operatingCountry;
+
   const operatingCountry =
-    isOperatingCountry(data.operatingCountry)
-      ? data.operatingCountry
+    isOperatingCountry(
+      operatingCountryCandidate,
+    )
+      ? operatingCountryCandidate
       : null;
+
+  const requestedTimeZone =
+    text(
+      regional.timeZone ??
+      data.timeZone,
+    );
 
   const derivedRegional =
     operatingCountry
       ? getRegionalSettings(
           operatingCountry,
-          text(data.timeZone),
+          requestedTimeZone,
         )
       : null;
 
+  const storedCurrencyCandidate =
+    regional.currency ??
+    data.currency;
+
   const storedCurrency =
-    isSupportedCurrency(data.currency)
-      ? data.currency
+    isSupportedCurrency(
+      storedCurrencyCandidate,
+    )
+      ? storedCurrencyCandidate
       : null;
 
   const currency =
     derivedRegional &&
-    storedCurrency === derivedRegional.currency
+    storedCurrency ===
+      derivedRegional.currency
       ? storedCurrency
       : derivedRegional?.currency ?? null;
 
   const storedLocale =
-    normalizeLocale(data.regionalLocale);
+    normalizeLocale(
+      regional.locale ??
+      data.regionalLocale,
+    );
 
   const regionalLocale =
     derivedRegional &&
-    storedLocale === derivedRegional.regionalLocale
+    storedLocale ===
+      derivedRegional.regionalLocale
       ? storedLocale
-      : derivedRegional?.regionalLocale ?? null;
-
-  const requestedTimeZone =
-    text(data.timeZone);
+      : derivedRegional?.regionalLocale ??
+        null;
 
   const timeZone =
     operatingCountry &&
@@ -116,14 +142,19 @@ export function normalizeSellerRegionalProfile(
 
   const defaultLanguage =
     normalizeLanguage(
+      data.storefrontLanguage ??
       data.defaultLanguage ??
-        data.preferredLanguage ??
-        data.locale,
+      data.preferredLanguage ??
+      data.locale,
       fallbackLanguage,
     );
 
+  const completeFlag =
+    onboarding.complete === true ||
+    data.onboardingComplete === true;
+
   const complete = Boolean(
-    data.onboardingComplete === true &&
+    completeFlag &&
       storeName &&
       operatingCountry &&
       currency &&
@@ -140,10 +171,22 @@ export function normalizeSellerRegionalProfile(
     timeZone,
     defaultLanguage,
     onboardingComplete: complete,
-    regionalVersion:
-      Number.isFinite(data.regionalVersion)
-        ? Number(data.regionalVersion)
-        : 0,
+    schemaVersion:
+      Number.isFinite(data.schemaVersion)
+        ? Number(data.schemaVersion)
+        : Number.isFinite(
+            onboarding.schemaVersion,
+          )
+          ? Number(
+              onboarding.schemaVersion,
+            )
+          : Number.isFinite(
+              data.regionalVersion,
+            )
+            ? Number(
+                data.regionalVersion,
+              )
+            : 0,
   };
 }
 

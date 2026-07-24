@@ -13,11 +13,16 @@ import {
   limit,
   orderBy,
   query,
-  where,
   Timestamp,
   type DocumentData,
 } from "firebase/firestore";
 import { ensureUserProfile } from "@/app/lib/ensureUserProfile";
+import { firestoreDateToDate } from "@/app/lib/access-control";
+import { formatMoneyMajor } from "@/app/lib/money";
+import type {
+  RegionalLocale,
+  SupportedCurrency,
+} from "@/app/types/regional";
 import { useI18n } from "@/app/lib/i18n";
 
 // --- 📝 Interfaces de Tipagem Estrita (TypeScript) ---
@@ -29,6 +34,9 @@ type UserDoc = {
   sellerId?: string;
   regionId?: string;
   active?: boolean;
+  currency?: SupportedCurrency | null;
+  regionalLocale?: RegionalLocale | null;
+  timeZone?: string;
 };
 
 type FireEvent = {
@@ -66,7 +74,13 @@ function monthKey(ts: Timestamp | null) {
   return `${y}-${m}`;
 }
 
-function asClosedRow(id: string, e: FireEvent, fallbackTitle: string): Row | null {
+function asClosedRow(
+  id: string,
+  e: FireEvent,
+  fallbackTitle: string,
+  locale: string,
+  timeZone: string,
+): Row | null {
   if (String(e.status || "active") !== "closed") return null;
 
   const rev =
@@ -78,8 +92,8 @@ function asClosedRow(id: string, e: FireEvent, fallbackTitle: string): Row | nul
   const closedAt = e.closedAt || e.updatedAt || e.createdAt || null;
 
   const closedAtText = closedAt
-    ? new Intl.DateTimeFormat("pt-BR", {
-        timeZone: "Asia/Tokyo",
+    ? new Intl.DateTimeFormat(locale, {
+        timeZone,
         day: "2-digit",
         month: "2-digit",
         year: "2-digit",
@@ -98,39 +112,57 @@ function asClosedRow(id: string, e: FireEvent, fallbackTitle: string): Row | nul
   };
 }
 
-async function loadClosedEventsForSeller(sellerId: string, fallbackTitle: string): Promise<Row[]> {
+async function loadClosedEventsForSeller(
+  sellerId: string,
+  fallbackTitle: string,
+  locale: string,
+  timeZone: string,
+): Promise<Row[]> {
   if (!sellerId) return [];
 
-  const qNew = query(collection(db, "sellers", sellerId, "events"), orderBy("createdAt", "desc"), limit(500));
-  const qLegacy = query(collection(db, "events"), where("sellerId", "==", sellerId), orderBy("createdAt", "desc"), limit(500));
+  const snapshot =
+    await getDocs(
+      query(
+        collection(
+          db,
+          "sellers",
+          sellerId,
+          "events",
+        ),
+        orderBy(
+          "createdAt",
+          "desc",
+        ),
+        limit(500),
+      ),
+    );
 
-  const [snapNew, snapLegacy] = await Promise.all([
-    getDocs(qNew).catch(() => null),
-    getDocs(qLegacy).catch(() => null),
-  ]);
+  return snapshot.docs
+    .map((document) =>
+      asClosedRow(
+        document.id,
+        document.data() as FireEvent,
+        fallbackTitle,
+        locale,
+        timeZone,
+      ),
+    )
+    .filter(
+      (row): row is Row =>
+        row !== null,
+    )
+    .sort((left, right) => {
+      const leftTime =
+        left.closedAt?.toMillis?.()
+          ? left.closedAt.toMillis()
+          : 0;
+      const rightTime =
+        right.closedAt?.toMillis?.()
+          ? right.closedAt.toMillis()
+          : 0;
 
-  const map = new Map<string, Row>();
-
-  if (snapNew) {
-    snapNew.docs.forEach((d) => {
-      const row = asClosedRow(d.id, d.data() as FireEvent, fallbackTitle);
-      if (row) map.set(d.id, row);
+      return rightTime - leftTime;
     });
-  }
-
-  if (snapLegacy) {
-    snapLegacy.docs.forEach((d) => {
-      if (map.has(d.id)) return;
-      const row = asClosedRow(d.id, d.data() as FireEvent, fallbackTitle);
-      if (row) map.set(d.id, row);
-    });
-  }
-
-  return Array.from(map.values()).sort((a, b) => {
-    const at = a.closedAt?.toMillis?.() ? a.closedAt.toMillis() : 0;
-    const bt = b.closedAt?.toMillis?.() ? b.closedAt.toMillis() : 0;
-    return bt - at;
-  });
 }
 
 // --- 🚀 Componente Principal ---
@@ -153,16 +185,23 @@ export default function SellerReportsPage() {
   const regionId = typeof profile?.regionId === "string" ? profile.regionId : "";
   const inactive = profile?.active === false;
 
-  const yen = useCallback(
-    (n: number) => {
-      const locale = lang === "pt" ? "pt-BR" : lang === "en" ? "en-US" : "ja-JP";
-      return new Intl.NumberFormat(locale, {
-        style: "currency",
-        currency: "JPY",
-        maximumFractionDigits: 0,
-      }).format(Math.round(n || 0));
-    },
-    [lang]
+  const money = useCallback(
+    (amount: number) =>
+      formatMoneyMajor(
+        amount,
+        profile?.currency ?? "JPY",
+        profile?.regionalLocale ??
+          (lang === "pt"
+            ? "pt-BR"
+            : lang === "en"
+              ? "en-US"
+              : "ja-JP"),
+      ),
+    [
+      lang,
+      profile?.currency,
+      profile?.regionalLocale,
+    ],
   );
 
   const canLoad = useMemo(() => {
@@ -188,24 +227,47 @@ export default function SellerReportsPage() {
     setLoadingProfile(true);
 
     try {
-      const snap = await getDoc(doc(db, "users", u.uid));
-      if (!snap.exists()) {
-        setProfileMissing(true);
-        return;
-      }
-      const data = snap.data() as UserDoc;
+      const result = await ensureUserProfile(
+        u,
+        lang,
+      );
+      const data = result.userDoc;
+      const sellerData = result.sellerDoc;
+
       setProfile({
-        role: data.role === "admin" ? "admin" : data.role === "seller" ? "seller" : undefined,
-        sellerId: typeof data.sellerId === "string" ? data.sellerId : "",
-        regionId: typeof data.regionId === "string" ? data.regionId : "",
-        active: data.active !== false,
+        role:
+          data.role === "admin"
+            ? "admin"
+            : "seller",
+        sellerId: String(
+          data.sellerId ?? u.uid,
+        ),
+        regionId: String(
+          sellerData?.regionId ??
+            data.regionId ??
+            "default",
+        ),
+        active:
+          data.active !== false &&
+          data.suspended !== true,
+        currency:
+          data.currency ?? "JPY",
+        regionalLocale:
+          data.regionalLocale ??
+          "ja-JP",
+        timeZone:
+          String(
+            data.timeZone ??
+            "Asia/Tokyo",
+          ),
       });
     } catch {
+      setProfileMissing(true);
       setErrMsg(t("reports.err.profileLoad"));
     } finally {
       setLoadingProfile(false);
     }
-  }, [t]);
+  }, [lang, t]);
 
   useEffect(() => {
     if (!authUser) return;
@@ -241,7 +303,12 @@ export default function SellerReportsPage() {
       setLoadingReports(true);
       try {
         const fallbackTitle = t("reports.fallback.untitledEvent") || "Sales Event";
-        const list = await loadClosedEventsForSeller(sellerId, fallbackTitle);
+        const list = await loadClosedEventsForSeller(
+          sellerId,
+          fallbackTitle,
+          profile?.regionalLocale ?? "pt-BR",
+          profile?.timeZone || "Asia/Tokyo",
+        );
         setRows(list);
       } catch {
         setErrMsg(t("reports.err.reportsLoad"));
@@ -251,7 +318,13 @@ export default function SellerReportsPage() {
       }
     };
     run();
-  }, [canLoad, sellerId, t]);
+  }, [
+    canLoad,
+    profile?.regionalLocale,
+    profile?.timeZone,
+    sellerId,
+    t,
+  ]);
 
   const totalAll = useMemo(() => rows.reduce((acc, r) => acc + (r.revenueYen || 0), 0), [rows]);
 
@@ -271,11 +344,11 @@ export default function SellerReportsPage() {
   const out: Record<string, any> = {};
 
   Object.entries(data || {}).forEach(([key, value]) => {
-    if (value instanceof Timestamp) {
-      out[key] = value.toDate().toISOString();
-    } else {
-      out[key] = value;
-    }
+    const date = firestoreDateToDate(value);
+
+    out[key] = date
+      ? date.toISOString()
+      : value;
   });
 
   return out;
@@ -287,7 +360,10 @@ const downloadFullBackup = useCallback(async () => {
   try {
     setErrMsg("");
 
-    const userSnap = await getDoc(doc(db, "users", authUser.uid));
+    const [userSnap, sellerSnap] = await Promise.all([
+      getDoc(doc(db, "users", authUser.uid)),
+      getDoc(doc(db, "sellers", sellerId)),
+    ]);
 
     const productsSnap = await getDocs(
       query(collection(db, "sellers", sellerId, "products"), limit(1000))
@@ -345,7 +421,12 @@ const downloadFullBackup = useCallback(async () => {
       exportedAt: new Date().toISOString(),
       sellerId,
       userId: authUser.uid,
-      profile: userSnap.exists() ? cleanFirestoreData(userSnap.data()) : null,
+      user: userSnap.exists()
+        ? cleanFirestoreData(userSnap.data())
+        : null,
+      seller: sellerSnap.exists()
+        ? cleanFirestoreData(sellerSnap.data())
+        : null,
       reports: rows.map((r) => ({
         id: r.id,
         title: r.title,
@@ -499,9 +580,9 @@ const downloadCsv = useCallback(() => {
       {!loadingReports && (
         <>
           <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            <MiniCard title={t("reports.cards.total")} value={yen(totalAll)} hint={t("reports.cards.totalHint")} tone="good" />
+            <MiniCard title={t("reports.cards.total")} value={money(totalAll)} hint={t("reports.cards.totalHint")} tone="good" />
             <MiniCard title={t("reports.cards.count")} value={String(rows.length)} hint={t("reports.cards.countHint")} tone="neutral" />
-            <MiniCard title={t("reports.cards.average")} value={rows.length ? yen(totalAll / rows.length) : "—"} hint={t("reports.cards.averageHint")} tone="neutral" />
+            <MiniCard title={t("reports.cards.average")} value={rows.length ? money(totalAll / rows.length) : "—"} hint={t("reports.cards.averageHint")} tone="neutral" />
           </section>
 
           <section className="bg-neutral-50 dark:bg-neutral-900/40 border border-neutral-200 dark:border-neutral-800 rounded-[2.5rem] p-6 space-y-4">
@@ -523,7 +604,7 @@ const downloadCsv = useCallback(() => {
                       <tr key={m.key} className="hover:bg-neutral-50/50 dark:hover:bg-neutral-800/30 transition">
                         <td className="px-4 py-3 text-neutral-900 dark:text-neutral-200 font-bold">{m.key}</td>
                         <td className="px-4 py-3 text-center text-neutral-500 dark:text-neutral-400">{m.count}</td>
-                        <td className="px-4 py-3 text-right text-neutral-900 dark:text-white font-black">{yen(m.total)}</td>
+                        <td className="px-4 py-3 text-right text-neutral-900 dark:text-white font-black">{money(m.total)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -549,7 +630,7 @@ const downloadCsv = useCallback(() => {
 
                     <div className="space-y-1.5 border-t border-neutral-100 dark:border-neutral-800/80 pt-3 mt-4">
                       <p className="text-[11px] font-medium text-neutral-400 dark:text-neutral-500">{t("reports.list.closedAt")}: <span className="font-bold text-neutral-700 dark:text-neutral-300">{r.closedAtText || "—"}</span></p>
-                      <p className="text-[11px] font-medium text-neutral-400 dark:text-neutral-500">{t("reports.list.revenue")}: <span className="text-xs font-black text-neutral-900 dark:text-white">{yen(r.revenueYen)}</span></p>
+                      <p className="text-[11px] font-medium text-neutral-400 dark:text-neutral-500">{t("reports.list.revenue")}: <span className="text-xs font-black text-neutral-900 dark:text-white">{money(r.revenueYen)}</span></p>
                     </div>
 
                     <div className="mt-4 flex gap-2 w-full">

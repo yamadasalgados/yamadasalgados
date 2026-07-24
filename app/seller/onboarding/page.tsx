@@ -5,6 +5,7 @@ import {
   useEffect,
   useMemo,
   useState,
+  type ReactNode,
 } from "react";
 import {
   useRouter,
@@ -17,22 +18,21 @@ import {
   doc,
   serverTimestamp,
   writeBatch,
-  type DocumentData,
 } from "firebase/firestore";
 import {
   Building2,
-  Check,
   Clock3,
   Globe2,
   Languages,
-  MapPin,
-  type LucideIcon,
 } from "lucide-react";
 
 import {
   auth,
   db,
 } from "@/app/lib/firebase";
+import {
+  accessIsActive,
+} from "@/app/lib/access-control";
 import {
   ensureUserProfile,
   type EnsureResult,
@@ -63,56 +63,9 @@ function text(
   return String(value ?? "").trim();
 }
 
-function hasActivePlan(
-  seller: DocumentData | null,
-  user: DocumentData,
-): boolean {
-  const subscriptionStatus =
-    user.subscriptionStatus ??
-    seller?.subscriptionStatus;
-
-  if (
-    subscriptionStatus !== "active" ||
-    user.suspended === true ||
-    seller?.suspended === true ||
-    user.active === false ||
-    seller?.active === false
-  ) {
-    return false;
-  }
-
-  const periodEnd =
-    user.currentPeriodEnd ??
-    seller?.currentPeriodEnd;
-
-  if (!periodEnd) return true;
-
-  if (
-    typeof periodEnd === "object" &&
-    periodEnd !== null &&
-    "toDate" in periodEnd &&
-    typeof (
-      periodEnd as {
-        toDate?: unknown;
-      }
-    ).toDate === "function"
-  ) {
-    const date = (
-      periodEnd as {
-        toDate: () => Date;
-      }
-    ).toDate();
-
-    return date.getTime() > Date.now();
-  }
-
-  return false;
-}
-
 export default function SellerOnboardingPage() {
   const router = useRouter();
   const {
-    t,
     lang,
     setLang,
   } = useI18n();
@@ -129,7 +82,7 @@ export default function SellerOnboardingPage() {
     useState<OperatingCountry>("JP");
   const [timeZone, setTimeZone] =
     useState("Asia/Tokyo");
-  const [preferredLanguage, setPreferredLanguage] =
+  const [language, setLanguage] =
     useState<SupportedLanguage>(lang);
   const [loading, setLoading] =
     useState(true);
@@ -137,6 +90,58 @@ export default function SellerOnboardingPage() {
     useState(false);
   const [error, setError] =
     useState("");
+
+  const copy =
+    lang === "ja"
+      ? {
+          eyebrow: "初期設定",
+          title: "販売プロフィールを設定",
+          subtitle: "国を選択すると、通貨と地域設定が自動的に決まります。",
+          storeName: "店舗名",
+          storePlaceholder: "お客様に表示する店舗名",
+          country: "営業国",
+          timeZone: "タイムゾーン",
+          language: "管理画面の言語",
+          currency: "通貨",
+          save: "設定を保存",
+          saving: "保存中…",
+          required: "店舗名を入力してください。",
+          error: "設定を保存できませんでした。",
+          loading: "プロフィールを読み込んでいます…",
+        }
+      : lang === "en"
+        ? {
+            eyebrow: "Initial setup",
+            title: "Configure your seller profile",
+            subtitle: "Your country determines currency and regional formatting.",
+            storeName: "Store name",
+            storePlaceholder: "Public name shown to customers",
+            country: "Operating country",
+            timeZone: "Time zone",
+            language: "Dashboard language",
+            currency: "Currency",
+            save: "Save configuration",
+            saving: "Saving…",
+            required: "Enter the store name.",
+            error: "We could not save the configuration.",
+            loading: "Loading seller profile…",
+          }
+        : {
+            eyebrow: "Configuração inicial",
+            title: "Configure seu perfil de vendedor",
+            subtitle: "O país define automaticamente moeda e formato regional.",
+            storeName: "Nome da loja",
+            storePlaceholder: "Nome público exibido aos clientes",
+            country: "País de operação",
+            timeZone: "Fuso horário",
+            language: "Idioma do painel",
+            currency: "Moeda",
+            save: "Salvar configuração",
+            saving: "Salvando…",
+            required: "Informe o nome da loja.",
+            error: "Não foi possível salvar a configuração.",
+            loading: "Carregando perfil do vendedor…",
+          };
 
   const load = useCallback(
     async (currentUser: User) => {
@@ -177,7 +182,7 @@ export default function SellerOnboardingPage() {
           regional.onboardingComplete
         ) {
           router.replace(
-            hasActivePlan(
+            accessIsActive(
               ensured.sellerDoc,
               ensured.userDoc,
             )
@@ -190,14 +195,11 @@ export default function SellerOnboardingPage() {
         const browserTimeZone =
           detectBrowserTimeZone();
 
-        const detectedCountry =
-          countryFromTimeZone(
-            browserTimeZone,
-          );
-
         const initialCountry =
           regional.operatingCountry ??
-          detectedCountry ??
+          countryFromTimeZone(
+            browserTimeZone,
+          ) ??
           "JP";
 
         const initialTimeZone =
@@ -220,38 +222,36 @@ export default function SellerOnboardingPage() {
         );
         setStoreName(
           regional.storeName ||
-            text(
-              ensured.sellerDoc
-                ?.ownerName,
-            ) ||
-            text(
-              ensured.userDoc
-                .displayName,
-            ) ||
-            text(
-              currentUser.displayName,
-            ),
+          text(
+            ensured.userDoc
+              .displayName,
+          ) ||
+          text(
+            currentUser.displayName,
+          ),
         );
         setCountry(initialCountry);
         setTimeZone(initialTimeZone);
-        setPreferredLanguage(
+        setLanguage(
           regional.defaultLanguage ||
-            lang,
+          lang,
         );
-      } catch (loadError: any) {
+      } catch (loadError: unknown) {
         console.error(
-          "[Onboarding] Falha ao carregar:",
+          "[Onboarding] load:",
           loadError,
         );
+
         setError(
-          loadError?.message ||
-            t("onboarding.error.load"),
+          loadError instanceof Error
+            ? loadError.message
+            : copy.error,
         );
       } finally {
         setLoading(false);
       }
     },
-    [lang, router, t],
+    [copy.error, lang, router],
   );
 
   useEffect(() => {
@@ -293,14 +293,15 @@ export default function SellerOnboardingPage() {
       [country],
     );
 
-  const regional = useMemo(
-    () =>
-      getRegionalSettings(
-        country,
-        timeZone,
-      ),
-    [country, timeZone],
-  );
+  const regional =
+    useMemo(
+      () =>
+        getRegionalSettings(
+          country,
+          timeZone,
+        ),
+      [country, timeZone],
+    );
 
   const handleSave =
     useCallback(async () => {
@@ -316,9 +317,7 @@ export default function SellerOnboardingPage() {
         storeName.trim();
 
       if (!normalizedStoreName) {
-        setError(
-          t("onboarding.error.storeName"),
-        );
+        setError(copy.required);
         return;
       }
 
@@ -326,15 +325,17 @@ export default function SellerOnboardingPage() {
       setError("");
 
       try {
-        const selectedRegional =
+        const selected =
           getRegionalSettings(
             country,
             timeZone,
           );
 
-        const batch = writeBatch(db);
-        const completedAt =
+        const timestamp =
           serverTimestamp();
+
+        const batch =
+          writeBatch(db);
 
         batch.set(
           doc(
@@ -343,27 +344,31 @@ export default function SellerOnboardingPage() {
             sellerId,
           ),
           {
-            sellerId,
+            schemaVersion: 2,
             ownerUid: user.uid,
             storeName:
               normalizedStoreName,
-            defaultLanguage:
-              preferredLanguage,
+            storefrontLanguage:
+              language,
 
-            operatingCountry:
-              selectedRegional.operatingCountry,
-            currency:
-              selectedRegional.currency,
-            regionalLocale:
-              selectedRegional.regionalLocale,
-            timeZone:
-              selectedRegional.timeZone,
-            regionalVersion: 1,
+            regional: {
+              operatingCountry:
+                selected.operatingCountry,
+              currency:
+                selected.currency,
+              locale:
+                selected.regionalLocale,
+              timeZone:
+                selected.timeZone,
+            },
 
-            onboardingComplete: true,
-            onboardingCompletedAt:
-              completedAt,
-            updatedAt: completedAt,
+            onboarding: {
+              complete: true,
+              completedAt: timestamp,
+              schemaVersion: 2,
+            },
+
+            updatedAt: timestamp,
             updatedBy: user.uid,
           },
           {
@@ -371,30 +376,15 @@ export default function SellerOnboardingPage() {
           },
         );
 
-        // Espelho temporário para páginas antigas.
         batch.set(
-          doc(db, "users", user.uid),
+          doc(
+            db,
+            "users",
+            user.uid,
+          ),
           {
-            sellerId,
-            storeName:
-              normalizedStoreName,
-            locale:
-              preferredLanguage,
-            preferredLanguage,
-
-            operatingCountry:
-              selectedRegional.operatingCountry,
-            currency:
-              selectedRegional.currency,
-            regionalLocale:
-              selectedRegional.regionalLocale,
-            timeZone:
-              selectedRegional.timeZone,
-
-            onboardingComplete: true,
-            onboardingCompletedAt:
-              completedAt,
-            updatedAt: completedAt,
+            uiLanguage: language,
+            updatedAt: timestamp,
             updatedBy: user.uid,
           },
           {
@@ -403,187 +393,153 @@ export default function SellerOnboardingPage() {
         );
 
         await batch.commit();
-        setLang(preferredLanguage);
+        setLang(language);
 
         const destination =
-          hasActivePlan(
-            result.sellerDoc,
+          accessIsActive(
+            {
+              ...(result.sellerDoc ?? {}),
+              accountStatus:
+                result.sellerDoc
+                  ?.accountStatus ??
+                "active",
+            },
             result.userDoc,
           )
             ? "/seller"
             : "/seller/rent";
 
-        // Recarrega o SellerGuard com o perfil recém-concluído
-        // e evita redirecionamento usando estado antigo do layout.
-        window.location.replace(destination);
-      } catch (saveError: any) {
+        window.location.replace(
+          destination,
+        );
+      } catch (saveError: unknown) {
         console.error(
-          "[Onboarding] Falha ao salvar:",
+          "[Onboarding] save:",
           saveError,
         );
+
         setError(
-          saveError?.message ||
-            t("onboarding.error.save"),
+          saveError instanceof Error
+            ? saveError.message
+            : copy.error,
         );
       } finally {
         setSaving(false);
       }
-    },
-    [
+    }, [
+      copy.error,
+      copy.required,
       country,
-      preferredLanguage,
+      language,
       result,
-      router,
       sellerId,
       setLang,
       storeName,
-      t,
       timeZone,
       user,
     ]);
 
   if (loading) {
     return (
-      <main className="flex min-h-[70vh] flex-col items-center justify-center gap-4 bg-neutral-50 dark:bg-neutral-950">
-        <div className="h-10 w-10 animate-spin rounded-full border-4 border-neutral-200 border-t-black dark:border-neutral-800 dark:border-t-white" />
+      <main className="flex min-h-[70vh] items-center justify-center">
         <p className="text-sm font-bold text-neutral-500">
-          {t("onboarding.loading")}
+          {copy.loading}
         </p>
       </main>
     );
   }
 
   return (
-    <main className="min-h-screen bg-neutral-50 px-4 py-8 dark:bg-neutral-950 sm:py-12">
-      <div className="mx-auto max-w-4xl space-y-8">
-        <header className="space-y-3 text-center sm:text-left">
-          <div className="inline-flex items-center gap-2 rounded-full border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-bold text-amber-800 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-300">
-            <Globe2
-              className="h-4 w-4"
-              aria-hidden="true"
-            />
-            {t("onboarding.eyebrow")}
-          </div>
-
-          <h1 className="text-3xl font-black tracking-tight text-neutral-950 dark:text-white sm:text-4xl">
-            {t("onboarding.title")}
-          </h1>
-
-          <p className="max-w-2xl text-sm font-medium leading-relaxed text-neutral-600 dark:text-neutral-400 sm:text-base">
-            {t("onboarding.subtitle")}
+    <main className="mx-auto w-full max-w-3xl px-4 py-8 sm:py-12">
+      <section className="overflow-hidden rounded-[2rem] border border-neutral-200 bg-white shadow-xl dark:border-neutral-800 dark:bg-neutral-950">
+        <div className="border-b border-neutral-200 bg-neutral-50 px-6 py-8 dark:border-neutral-800 dark:bg-neutral-900 sm:px-10">
+          <p className="text-xs font-black uppercase tracking-[0.22em] text-orange-600">
+            {copy.eyebrow}
           </p>
-        </header>
+          <h1 className="mt-2 text-3xl font-black tracking-tight text-neutral-950 dark:text-white">
+            {copy.title}
+          </h1>
+          <p className="mt-2 max-w-2xl text-sm font-medium text-neutral-600 dark:text-neutral-400">
+            {copy.subtitle}
+          </p>
+        </div>
 
-        {error && (
-          <div
-            role="alert"
-            className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-300"
-          >
-            {error}
-          </div>
-        )}
-
-        <section className="space-y-6 rounded-[2rem] border border-neutral-200 bg-white p-5 shadow-sm dark:border-neutral-800 dark:bg-neutral-900 sm:p-8">
-          <FieldHeader
+        <div className="space-y-6 p-6 sm:p-10">
+          <Field
             icon={Building2}
-            title={t(
-              "onboarding.storeName",
-            )}
-            description={t(
-              "onboarding.storeName.help",
-            )}
-          />
-
-          <input
-            value={storeName}
-            onChange={(event) =>
-              setStoreName(
-                event.target.value,
-              )
-            }
-            maxLength={100}
-            autoComplete="organization"
-            placeholder={t(
-              "onboarding.storeName.placeholder",
-            )}
-            className="min-h-12 w-full rounded-2xl border border-neutral-200 bg-white px-4 text-base text-neutral-950 outline-none transition focus-visible:border-black focus-visible:ring-2 focus-visible:ring-black/10 dark:border-neutral-700 dark:bg-neutral-950 dark:text-white dark:focus-visible:border-white dark:focus-visible:ring-white/10"
-          />
-        </section>
-
-        <section className="space-y-6 rounded-[2rem] border border-neutral-200 bg-white p-5 shadow-sm dark:border-neutral-800 dark:bg-neutral-900 sm:p-8">
-          <FieldHeader
-            icon={MapPin}
-            title={t(
-              "onboarding.country",
-            )}
-            description={t(
-              "onboarding.country.help",
-            )}
-          />
-
-          <div className="grid gap-3 sm:grid-cols-3">
-            {(
-              Object.keys(
-                COUNTRY_DEFINITIONS,
-              ) as OperatingCountry[]
-            ).map((countryCode) => {
-              const definition =
-                getCountryDefinition(
-                  countryCode,
-                );
-              const selected =
-                country === countryCode;
-
-              return (
-                <button
-                  key={countryCode}
-                  type="button"
-                  onClick={() =>
-                    setCountry(countryCode)
-                  }
-                  aria-pressed={selected}
-                  className={`relative min-h-28 rounded-2xl border p-4 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black dark:focus-visible:ring-white ${
-                    selected
-                      ? "border-black bg-neutral-950 text-white shadow-lg dark:border-white dark:bg-white dark:text-black"
-                      : "border-neutral-200 bg-neutral-50 text-neutral-900 hover:border-neutral-400 dark:border-neutral-700 dark:bg-neutral-950 dark:text-white dark:hover:border-neutral-500"
-                  }`}
-                >
-                  {selected && (
-                    <span className="absolute right-3 top-3 flex h-6 w-6 items-center justify-center rounded-full bg-amber-400 text-black">
-                      <Check
-                        className="h-4 w-4"
-                        aria-hidden="true"
-                      />
-                    </span>
-                  )}
-
-                  <p className="text-xs font-bold uppercase tracking-wider opacity-60">
-                    {countryCode}
-                  </p>
-                  <p className="mt-2 text-base font-black">
-                    {definition.label[lang]}
-                  </p>
-                  <p className="mt-1 text-xs font-medium opacity-70">
-                    {definition.currency}
-                  </p>
-                </button>
-              );
-            })}
-          </div>
-        </section>
-
-        <section className="grid gap-6 rounded-[2rem] border border-neutral-200 bg-white p-5 shadow-sm dark:border-neutral-800 dark:bg-neutral-900 sm:grid-cols-2 sm:p-8">
-          <div className="space-y-4">
-            <FieldHeader
-              icon={Clock3}
-              title={t(
-                "onboarding.timeZone",
-              )}
-              description={t(
-                "onboarding.timeZone.help",
-              )}
+            label={copy.storeName}
+          >
+            <input
+              value={storeName}
+              onChange={(event) =>
+                setStoreName(
+                  event.target.value,
+                )
+              }
+              maxLength={120}
+              placeholder={
+                copy.storePlaceholder
+              }
+              className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm font-semibold text-neutral-950 outline-none focus:border-orange-500 focus:ring-4 focus:ring-orange-500/10 dark:border-neutral-700 dark:bg-neutral-900 dark:text-white"
             />
+          </Field>
 
+          <Field
+            icon={Globe2}
+            label={copy.country}
+          >
+            <div className="grid gap-3 sm:grid-cols-3">
+              {(
+                Object.keys(
+                  COUNTRY_DEFINITIONS,
+                ) as OperatingCountry[]
+              ).map((option) => {
+                const definition =
+                  getCountryDefinition(
+                    option,
+                  );
+
+                const selected =
+                  country === option;
+
+                return (
+                  <button
+                    key={option}
+                    type="button"
+                    onClick={() =>
+                      setCountry(option)
+                    }
+                    className={`rounded-2xl border p-4 text-left transition ${
+                      selected
+                        ? "border-orange-500 bg-orange-50 ring-4 ring-orange-500/10 dark:bg-orange-950/20"
+                        : "border-neutral-200 hover:border-neutral-400 dark:border-neutral-800"
+                    }`}
+                  >
+                    <p className="text-xs font-black text-neutral-400">
+                      {option}
+                    </p>
+                    <p className="mt-1 font-black">
+                      {
+                        definition.label[
+                          lang
+                        ]
+                      }
+                    </p>
+                    <p className="mt-1 text-xs text-neutral-500">
+                      {
+                        definition.currency
+                      }
+                    </p>
+                  </button>
+                );
+              })}
+            </div>
+          </Field>
+
+          <Field
+            icon={Clock3}
+            label={copy.timeZone}
+          >
             <select
               value={timeZone}
               onChange={(event) =>
@@ -591,7 +547,7 @@ export default function SellerOnboardingPage() {
                   event.target.value,
                 )
               }
-              className="min-h-12 w-full rounded-2xl border border-neutral-200 bg-white px-4 text-sm font-semibold text-neutral-950 outline-none transition focus-visible:border-black focus-visible:ring-2 focus-visible:ring-black/10 dark:border-neutral-700 dark:bg-neutral-950 dark:text-white dark:focus-visible:border-white"
+              className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm font-semibold dark:border-neutral-700 dark:bg-neutral-900"
             >
               {countryDefinition.allowedTimeZones.map(
                 (zone) => (
@@ -607,153 +563,84 @@ export default function SellerOnboardingPage() {
                 ),
               )}
             </select>
-          </div>
+          </Field>
 
-          <div className="space-y-4">
-            <FieldHeader
-              icon={Languages}
-              title={t(
-                "onboarding.language",
-              )}
-              description={t(
-                "onboarding.language.help",
-              )}
-            />
-
-            <div className="grid grid-cols-3 gap-2">
-              {(
-                [
-                  "pt",
-                  "en",
-                  "ja",
-                ] as SupportedLanguage[]
-              ).map((language) => {
-                const selected =
-                  preferredLanguage ===
-                  language;
-
-                return (
-                  <button
-                    key={language}
-                    type="button"
-                    onClick={() =>
-                      setPreferredLanguage(
-                        language,
-                      )
-                    }
-                    aria-pressed={selected}
-                    className={`min-h-12 rounded-2xl border text-sm font-black transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black dark:focus-visible:ring-white ${
-                      selected
-                        ? "border-black bg-black text-white dark:border-white dark:bg-white dark:text-black"
-                        : "border-neutral-200 bg-neutral-50 text-neutral-700 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-300"
-                    }`}
-                  >
-                    {language.toUpperCase()}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        </section>
-
-        <section className="rounded-[2rem] border border-amber-200 bg-amber-50 p-5 dark:border-amber-900/40 dark:bg-amber-950/20 sm:p-6">
-          <h2 className="text-sm font-black text-amber-950 dark:text-amber-200">
-            {t("onboarding.summary")}
-          </h2>
-
-          <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-3">
-            <SummaryItem
-              label={t(
-                "onboarding.country",
-              )}
-              value={
-                countryDefinition.label[lang]
+          <Field
+            icon={Languages}
+            label={copy.language}
+          >
+            <select
+              value={language}
+              onChange={(event) =>
+                setLanguage(
+                  event.target.value as SupportedLanguage,
+                )
               }
-            />
-            <SummaryItem
-              label={t(
-                "onboarding.currency",
-              )}
-              value={`${regional.currency} · ${t(
-                "onboarding.currency.auto",
-              )}`}
-            />
-            <SummaryItem
-              label={t(
-                "onboarding.timeZone",
-              )}
-              value={getTimeZoneLabel(
-                regional.timeZone,
-                lang,
-              )}
-            />
-          </dl>
-        </section>
+              className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm font-semibold dark:border-neutral-700 dark:bg-neutral-900"
+            >
+              <option value="pt">
+                Português
+              </option>
+              <option value="en">
+                English
+              </option>
+              <option value="ja">
+                日本語
+              </option>
+            </select>
+          </Field>
 
-        <button
-          type="button"
-          onClick={() =>
-            void handleSave()
-          }
-          disabled={
-            saving ||
-            !storeName.trim()
-          }
-          className="min-h-14 w-full rounded-2xl bg-black px-6 text-base font-black text-white shadow-xl transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-40 dark:bg-white dark:text-black dark:focus-visible:ring-white dark:focus-visible:ring-offset-neutral-950"
-        >
-          {saving
-            ? t("onboarding.saving")
-            : t("onboarding.save")}
-        </button>
-      </div>
+          <div className="rounded-2xl border border-neutral-200 bg-neutral-50 p-4 dark:border-neutral-800 dark:bg-neutral-900">
+            <p className="text-xs font-black uppercase tracking-widest text-neutral-400">
+              {copy.currency}
+            </p>
+            <p className="mt-1 text-xl font-black">
+              {regional.currency}
+            </p>
+          </div>
+
+          {error && (
+            <p className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm font-bold text-red-700 dark:border-red-900/30 dark:bg-red-950/20 dark:text-red-300">
+              {error}
+            </p>
+          )}
+
+          <button
+            type="button"
+            onClick={() =>
+              void handleSave()
+            }
+            disabled={saving}
+            className="w-full rounded-2xl bg-black px-5 py-4 text-sm font-black text-white transition hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-white dark:text-black"
+          >
+            {saving
+              ? copy.saving
+              : copy.save}
+          </button>
+        </div>
+      </section>
     </main>
   );
 }
 
-function FieldHeader({
+function Field({
   icon: Icon,
-  title,
-  description,
-}: {
-  icon: LucideIcon;
-  title: string;
-  description: string;
-}) {
-  return (
-    <div className="flex items-start gap-3">
-      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-neutral-100 text-neutral-900 dark:bg-neutral-800 dark:text-white">
-        <Icon
-          className="h-5 w-5"
-          aria-hidden="true"
-        />
-      </span>
-      <div>
-        <h2 className="text-base font-black text-neutral-950 dark:text-white">
-          {title}
-        </h2>
-        <p className="mt-1 text-xs font-medium leading-relaxed text-neutral-500 dark:text-neutral-400">
-          {description}
-        </p>
-      </div>
-    </div>
-  );
-}
-
-function SummaryItem({
   label,
-  value,
+  children,
 }: {
+  icon: typeof Building2;
   label: string;
-  value: string;
+  children: ReactNode;
 }) {
   return (
-    <div>
-      <dt className="text-xs font-bold uppercase tracking-wider text-amber-700 dark:text-amber-400">
-        {label}
-      </dt>
-      <dd className="mt-1 font-black text-amber-950 dark:text-amber-100">
-        {value}
-      </dd>
+    <div className="space-y-2">
+      <div className="flex items-center gap-2">
+        <Icon className="h-4 w-4 text-orange-600" />
+        <label className="text-sm font-black">
+          {label}
+        </label>
+      </div>
+      {children}
     </div>
   );
 }

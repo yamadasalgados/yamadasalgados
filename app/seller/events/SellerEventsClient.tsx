@@ -5,8 +5,14 @@ import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { auth, db } from "@/app/lib/firebase";
 import { onAuthStateChanged, type User } from "firebase/auth";
-import { collection, getDocs, limit, orderBy, query, doc, getDoc, Timestamp } from "firebase/firestore";
+import { collection, getDocs, limit, orderBy, query, Timestamp } from "firebase/firestore";
 import { useI18n } from "@/app/lib/i18n";
+import { ensureUserProfile } from "@/app/lib/ensureUserProfile";
+import { formatMoneyMajor } from "@/app/lib/money";
+import type {
+  RegionalLocale,
+  SupportedCurrency,
+} from "@/app/types/regional";
 
 type EventStatus = "active" | "closed" | "cancelled";
 
@@ -15,6 +21,9 @@ type UserDoc = {
   sellerId?: string;
   regionId?: string;
   active?: boolean;
+  currency?: SupportedCurrency | null;
+  regionalLocale?: RegionalLocale | null;
+  timeZone?: string;
 };
 
 type FireEvent = {
@@ -68,29 +77,42 @@ export default function SellerEventsPage() {
     return true;
   }, [authUser, inactive]);
 
-  const yen = useCallback(
-    (n: number) => {
-      const locale = lang === "pt" ? "pt-BR" : lang === "en" ? "en-US" : "ja-JP";
-      return new Intl.NumberFormat(locale, {
-        style: "currency",
-        currency: "JPY",
-        maximumFractionDigits: 0,
-      }).format(Math.round(n || 0));
-    },
-    [lang]
+  const money = useCallback(
+    (amount: number) =>
+      formatMoneyMajor(
+        amount,
+        profile?.currency ?? "JPY",
+        profile?.regionalLocale ??
+          (lang === "pt"
+            ? "pt-BR"
+            : lang === "en"
+              ? "en-US"
+              : "ja-JP"),
+      ),
+    [
+      lang,
+      profile?.currency,
+      profile?.regionalLocale,
+    ],
   );
 
   const fmtDate = useCallback((ts?: Timestamp) => {
     if (!ts) return "—";
-    return new Intl.DateTimeFormat("pt-BR", {
-      timeZone: "Asia/Tokyo",
+    return new Intl.DateTimeFormat(
+      profile?.regionalLocale ?? "pt-BR",
+      {
+      timeZone: profile?.timeZone || "Asia/Tokyo",
       day: "2-digit",
       month: "2-digit",
       year: "2-digit",
       hour: "2-digit",
       minute: "2-digit",
-    }).format(ts.toDate());
-  }, []);
+      },
+    ).format(ts.toDate());
+  }, [
+    profile?.regionalLocale,
+    profile?.timeZone,
+  ]);
 
   // 1) Monitor de Sessão
   useEffect(() => {
@@ -102,27 +124,59 @@ export default function SellerEventsPage() {
     return () => unsub();
   }, [router]);
 
-  // 2) Carregamento Resiliente do Perfil
+  // 2) Carregamento canônico do perfil e vínculo comercial
   useEffect(() => {
     if (!authUser) return;
 
     async function loadProfile() {
       setProfileMissing(false);
+
       try {
-        const snap = await getDoc(doc(db, "users", authUser!.uid));
-        if (!snap.exists()) {
-          setProfileMissing(true);
-          return;
-        }
-        const data = snap.data() as UserDoc;
-        setProfile(data);
-      } catch (e) {
-        console.error("Erro ao carregar perfil:", e);
+        const result = await ensureUserProfile(
+          authUser!,
+          lang,
+        );
+        const userData = result.userDoc;
+        const sellerData = result.sellerDoc;
+
+        setProfile({
+          role:
+            userData.role === "admin"
+              ? "admin"
+              : "seller",
+          sellerId: String(
+            userData.sellerId ?? authUser!.uid,
+          ),
+          regionId: String(
+            sellerData?.regionId ??
+              userData.regionId ??
+              "default",
+          ),
+          active:
+            userData.active !== false &&
+            userData.suspended !== true,
+          currency:
+            userData.currency ?? "JPY",
+          regionalLocale:
+            userData.regionalLocale ??
+            "ja-JP",
+          timeZone:
+            String(
+              userData.timeZone ??
+              "Asia/Tokyo",
+            ),
+        });
+      } catch (error) {
+        console.error(
+          "Erro ao carregar perfil:",
+          error,
+        );
+        setProfileMissing(true);
       }
     }
 
-    loadProfile();
-  }, [authUser]);
+    void loadProfile();
+  }, [authUser, lang]);
 
   // 3) Carregamento de Eventos
   useEffect(() => {
@@ -286,7 +340,7 @@ export default function SellerEventsPage() {
                 </div>
                 <div className="space-y-0.5">
                   <p className="text-[10px] font-black uppercase tracking-wider text-neutral-400">{t("events.revenue")}</p>
-                  <p className="text-xs font-black text-neutral-900 dark:text-white">{ev.status === "closed" ? yen(ev.revenueYen) : "—"}</p>
+                  <p className="text-xs font-black text-neutral-900 dark:text-white">{ev.status === "closed" ? money(ev.revenueYen) : "—"}</p>
                 </div>
               </div>
 

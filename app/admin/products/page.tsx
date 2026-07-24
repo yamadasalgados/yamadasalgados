@@ -1,329 +1,169 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { collection, getDocs, limit, orderBy, query, Timestamp } from "firebase/firestore";
-import { db } from "@/app/lib/firebase";
-import AdminGuard from "@/app/_components/AdminGuard";
+import {
+  useCallback,
+  useEffect,
+  useState,
+} from "react";
+import {
+  collection,
+  getCountFromServer,
+  getDocs,
+} from "firebase/firestore";
+import {
+  Boxes,
+  RefreshCw,
+} from "lucide-react";
 
-type ProductStatus = "active" | "inactive";
-
-type FireProduct = {
-  name?: string;
-  category?: string;
-  price?: number;
-  imageUrl?: string;
-  extraImageUrls?: string[];
-
-  sellerId?: string;
-  sellerEmail?: string;
-
-  status?: ProductStatus | string;
-  stockQty?: number;
-
-  createdAt?: Timestamp;
-  updatedAt?: Timestamp;
-};
+import {
+  db,
+} from "@/app/lib/firebase";
+import {
+  normalizeSellerRegionalProfile,
+} from "@/app/lib/seller-regional-profile";
+import {
+  useI18n,
+} from "@/app/lib/i18n";
 
 type Row = {
-  id: string;
-  name: string;
-  category: string;
-  price: number;
-  imageUrl: string;
-  status: ProductStatus;
-  stockQty: number;
   sellerId: string;
-  sellerEmail: string;
-  createdAt?: Timestamp;
-  updatedAt?: Timestamp;
+  storeName: string;
+  productCount: number;
 };
 
-function norm(s: any) {
-  return String(s || "").trim();
-}
-
-function yen(n: number) {
-  return `¥${Math.round(Number(n || 0)).toLocaleString("ja-JP")}`;
-}
-
-function normalizeStatus(s: any): ProductStatus {
-  const st = String(s || "active");
-  return st === "inactive" ? "inactive" : "active";
-}
-
-function badgeTone(status: ProductStatus) {
-  if (status === "active") return "bg-emerald-500/10 border-emerald-500/20 text-emerald-700";
-  return "bg-neutral-500/10 border-neutral-500/20 text-app";
-}
-
 export default function AdminProductsPage() {
-  return (
-    <AdminGuard>
-      {() => <Inner />}
-    </AdminGuard>
-  );
-}
-
-function Inner() {
-  const [loading, setLoading] = useState(true);
-  const [errMsg, setErrMsg] = useState("");
+  const { lang } = useI18n();
   const [rows, setRows] = useState<Row[]>([]);
-  const [qText, setQText] = useState("");
-  const [onlyActive, setOnlyActive] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
-  const [toast, setToast] = useState<string | null>(null);
+  const copy =
+    lang === "ja"
+      ? {
+          title: "商品カタログ",
+          subtitle: "商品は各販売者の sellers/{sellerId}/products に保存されます。",
+          refresh: "更新",
+          loading: "読み込み中…",
+          empty: "販売者がいません。",
+          products: "商品",
+          open: "カタログを開く",
+        }
+      : lang === "en"
+        ? {
+            title: "Product catalogs",
+            subtitle: "Products are stored only under sellers/{sellerId}/products.",
+            refresh: "Refresh",
+            loading: "Loading…",
+            empty: "No sellers found.",
+            products: "products",
+            open: "Open catalog",
+          }
+        : {
+            title: "Catálogos de produtos",
+            subtitle: "Os produtos ficam exclusivamente em sellers/{sellerId}/products.",
+            refresh: "Atualizar",
+            loading: "Carregando…",
+            empty: "Nenhum seller encontrado.",
+            products: "produtos",
+            open: "Abrir catálogo",
+          };
 
   const load = useCallback(async () => {
-    setErrMsg("");
     setLoading(true);
+    setError("");
 
     try {
-      // ✅ últimos produtos
-      const q = query(collection(db, "products"), orderBy("createdAt", "desc"), limit(500));
-      const snap = await getDocs(q);
+      const sellerSnapshot = await getDocs(collection(db, "sellers"));
+      const next = await Promise.all(
+        sellerSnapshot.docs.map(async (snapshot) => {
+          const profile = normalizeSellerRegionalProfile(snapshot.data(), {
+            fallbackSellerId: snapshot.id,
+          });
+          const countSnapshot = await getCountFromServer(
+            collection(db, "sellers", snapshot.id, "products"),
+          );
 
-      const list: Row[] = snap.docs.map((d) => {
-        const p = d.data() as FireProduct;
+          return {
+            sellerId: snapshot.id,
+            storeName: profile.storeName || snapshot.id,
+            productCount: countSnapshot.data().count,
+          };
+        }),
+      );
 
-        return {
-          id: d.id,
-          name: norm(p.name),
-          category: norm(p.category),
-          price: Number(p.price ?? 0),
-          imageUrl: norm(p.imageUrl),
-          status: normalizeStatus(p.status),
-          stockQty: Number(p.stockQty ?? 0),
-          sellerId: norm(p.sellerId),
-          sellerEmail: norm(p.sellerEmail),
-          createdAt: p.createdAt,
-          updatedAt: p.updatedAt,
-        };
-      });
-
-      setRows(list);
-    } catch (e: any) {
-      console.error(e);
-      setErrMsg(e?.message || "Falha ao carregar produtos.");
+      next.sort((left, right) =>
+        left.storeName.localeCompare(right.storeName),
+      );
+      setRows(next);
+    } catch (loadError: unknown) {
+      console.error("[AdminProducts] load:", loadError);
+      setError(loadError instanceof Error ? loadError.message : "PRODUCT_CATALOG_LOAD_FAILED");
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    load();
+    void load();
   }, [load]);
 
-  const filtered = useMemo(() => {
-    const t = qText.trim().toLowerCase();
-
-    return rows
-      .filter((r) => {
-        if (onlyActive && r.status !== "active") return false;
-        if (!t) return true;
-
-        const hay = `${r.name} ${r.category} ${r.id} ${r.sellerId} ${r.sellerEmail}`.toLowerCase();
-        return hay.includes(t);
-      })
-      .sort((a, b) => {
-        // ativos primeiro
-        if (a.status !== b.status) return a.status === "active" ? -1 : 1;
-        return 0;
-      });
-  }, [rows, qText, onlyActive]);
-
-  const counts = useMemo(() => {
-    const active = rows.filter((r) => r.status === "active").length;
-    const inactive = rows.length - active;
-    return { total: rows.length, active, inactive };
-  }, [rows]);
-
-  const copy = useCallback(async (txt: string, label = "Copiado!") => {
-    try {
-      await navigator.clipboard.writeText(txt);
-      setToast(label);
-      setTimeout(() => setToast(null), 2000);
-    } catch {
-      setErrMsg("Falha ao copiar.");
-    }
-  }, []);
-
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <section className="rounded-2xl border border-app bg-card-muted p-4 space-y-3">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="space-y-1">
-            <h2 className="text-sm font-semibold text-app">Produtos</h2>
-            <p className="text-sm text-muted">
-              Total: <span className="font-bold text-app">{counts.total}</span> • Ativos:{" "}
-              <span className="font-bold text-app">{counts.active}</span> • Inativos:{" "}
-              <span className="font-bold text-app">{counts.inactive}</span>
-            </p>
-          </div>
-
-          <div className="flex flex-wrap gap-2">
-            <Link
-              href="/admin/products/new"
-              className="rounded-full bg-[rgb(var(--primary))] text-black text-sm font-semibold px-4 py-2 hover:brightness-110"
-            >
-              + Novo
-            </Link>
-
-            <button
-              onClick={load}
-              className="rounded-full border border-app bg-card text-app text-sm font-semibold px-4 py-2 hover:brightness-[1.03]"
-            >
-              Recarregar
-            </button>
-          </div>
+    <main className="space-y-6">
+      <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h1 className="text-3xl font-black tracking-tight">{copy.title}</h1>
+          <p className="mt-2 text-sm font-medium text-neutral-500">{copy.subtitle}</p>
         </div>
+        <button
+          type="button"
+          onClick={() => void load()}
+          disabled={loading}
+          className="inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl border border-neutral-300 px-4 text-sm font-black disabled:opacity-50 dark:border-neutral-700"
+        >
+          <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+          {copy.refresh}
+        </button>
+      </header>
 
-        <div className="flex flex-col md:flex-row gap-3">
-          <input
-            value={qText}
-            onChange={(e) => setQText(e.target.value)}
-            placeholder="Buscar por nome, categoria, productId, sellerId, email..."
-            className="w-full p-3 rounded-xl border border-app bg-card text-app outline-none focus:ring-2 focus:ring-[rgb(var(--primary))]"
-          />
+      {error && (
+        <p className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm font-bold text-red-700">
+          {error}
+        </p>
+      )}
 
-          <label className="flex items-center gap-2 text-sm text-app whitespace-nowrap">
-            <input type="checkbox" checked={onlyActive} onChange={(e) => setOnlyActive(e.target.checked)} />
-            Mostrar só ativos
-          </label>
-        </div>
+      <section className="overflow-hidden rounded-3xl border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-950">
+        {loading ? (
+          <p className="p-6 text-sm text-neutral-500">{copy.loading}</p>
+        ) : rows.length === 0 ? (
+          <p className="p-6 text-sm text-neutral-500">{copy.empty}</p>
+        ) : (
+          <div className="divide-y divide-neutral-200 dark:divide-neutral-800">
+            {rows.map((row) => (
+              <article
+                key={row.sellerId}
+                className="grid gap-4 p-5 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
+              >
+                <div className="min-w-0">
+                  <p className="truncate font-black">{row.storeName}</p>
+                  <p className="mt-1 truncate text-xs text-neutral-500">{row.sellerId}</p>
+                  <p className="mt-2 inline-flex items-center gap-2 text-xs font-black text-neutral-600 dark:text-neutral-300">
+                    <Boxes className="h-4 w-4" />
+                    {row.productCount} {copy.products}
+                  </p>
+                </div>
+
+                <Link
+                  href={`/admin/sellers/${encodeURIComponent(row.sellerId)}/products`}
+                  className="inline-flex min-h-11 items-center justify-center rounded-2xl bg-black px-4 text-sm font-black text-white dark:bg-white dark:text-black"
+                >
+                  {copy.open}
+                </Link>
+              </article>
+            ))}
+          </div>
+        )}
       </section>
-
-      {toast && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-black text-white px-6 py-3 rounded-full text-sm font-black">
-          {toast}
-        </div>
-      )}
-
-      {errMsg && (
-        <div className="rounded-2xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-600">
-          {errMsg}
-        </div>
-      )}
-
-      {loading ? (
-        <div className="animate-pulse h-24 bg-card-muted rounded-2xl border border-app" />
-      ) : (
-        <section className="rounded-2xl border border-app bg-card p-4">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-xs uppercase tracking-wider text-muted border-b border-app">
-                  <th className="py-3 pr-3">Produto</th>
-                  <th className="py-3 pr-3">Preço</th>
-                  <th className="py-3 pr-3">Stock</th>
-                  <th className="py-3 pr-3">Status</th>
-                  <th className="py-3 pr-3">Seller</th>
-                  <th className="py-3 pr-3">Ações</th>
-                </tr>
-              </thead>
-
-              <tbody>
-                {filtered.map((r) => (
-                  <tr key={r.id} className="border-b border-app last:border-b-0 align-top">
-                    <td className="py-3 pr-3">
-                      <div className="flex gap-3">
-                        <div className="h-12 w-12 rounded-2xl border border-app bg-card-muted overflow-hidden shrink-0 flex items-center justify-center">
-                          {r.imageUrl ? (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img src={r.imageUrl} alt="" className="h-full w-full object-cover" />
-                          ) : (
-                            <span className="text-[10px] font-black text-muted">IMG</span>
-                          )}
-                        </div>
-
-                        <div className="min-w-0">
-                          <div className="font-semibold text-app truncate">{r.name || "—"}</div>
-                          <div className="text-xs text-muted truncate">{r.category || "—"}</div>
-                          <div className="text-[11px] text-muted mt-1">
-                            id: <code className="font-bold text-app">{r.id}</code>
-                          </div>
-                        </div>
-                      </div>
-                    </td>
-
-                    <td className="py-3 pr-3">
-                      <div className="font-semibold text-app">{yen(r.price)}</div>
-                    </td>
-
-                    <td className="py-3 pr-3">
-                      <div className="font-semibold text-app">{Math.max(0, Number(r.stockQty || 0))}</div>
-                    </td>
-
-                    <td className="py-3 pr-3">
-                      <span
-                        className={`inline-flex items-center px-2 py-1 rounded-full border text-xs font-bold ${badgeTone(
-                          r.status
-                        )}`}
-                      >
-                        {r.status}
-                      </span>
-                    </td>
-
-                    <td className="py-3 pr-3">
-                      <div className="text-xs text-muted">
-                        sellerId: <span className="font-bold text-app">{r.sellerId || "—"}</span>
-                      </div>
-                      <div className="text-xs text-muted">
-                        email: <span className="font-bold text-app">{r.sellerEmail || "—"}</span>
-                      </div>
-                    </td>
-
-                    <td className="py-3 pr-3">
-                      <div className="flex flex-wrap gap-2">
-                        <Link
-                          href={`/admin/products/${r.id}`}
-                          className="rounded-full border border-app bg-card text-app text-xs font-semibold px-3 py-2 hover:brightness-[1.03]"
-                        >
-                          Editar
-                        </Link>
-
-                        {/* Se você tem rota pública de produto, habilita. Se não tiver, pode apagar. */}
-                        <Link
-                          href={`/product/${r.id}`}
-                          target="_blank"
-                          className="rounded-full border border-app bg-card text-app text-xs font-semibold px-3 py-2 hover:brightness-[1.03]"
-                          title="Abrir página pública do produto"
-                        >
-                          Público
-                        </Link>
-
-                        <button
-                          onClick={() => copy(r.id, "ID copiado!")}
-                          className="rounded-full bg-neutral-500/10 border border-neutral-500/20 text-app text-xs font-bold px-3 py-2 hover:brightness-110"
-                        >
-                          Copiar ID
-                        </button>
-
-                        <button
-                          onClick={() => copy(r.imageUrl || "", "URL copiada!")}
-                          disabled={!r.imageUrl}
-                          className="rounded-full bg-neutral-500/10 border border-neutral-500/20 text-app text-xs font-bold px-3 py-2 hover:brightness-110 disabled:opacity-50"
-                        >
-                          Copiar IMG
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-
-                {!filtered.length && (
-                  <tr>
-                    <td colSpan={6} className="py-10 text-center text-muted">
-                      Nenhum produto encontrado.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      )}
-    </div>
+    </main>
   );
 }

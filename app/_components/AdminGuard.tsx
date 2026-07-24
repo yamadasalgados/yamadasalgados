@@ -1,172 +1,308 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
-import { usePathname, useRouter } from "next/navigation";
-import { auth, db } from "@/app/lib/firebase";
-import { onAuthStateChanged, signOut, type User } from "firebase/auth";
-import { doc, getDoc } from "firebase/firestore";
-import { useI18n } from "@/app/lib/i18n";
+import {
+  useCallback,
+  useEffect,
+  useState,
+  type ReactNode,
+} from "react";
+import {
+  useRouter,
+} from "next/navigation";
+import {
+  onAuthStateChanged,
+  signOut,
+  type User,
+} from "firebase/auth";
+import {
+  doc,
+  getDoc,
+} from "firebase/firestore";
 
-export type PlanId = "starter" | "pro" | "business";
-export type SubscriptionStatus = "none" | "pending" | "active" | "past_due" | "cancelled";
+import {
+  auth,
+  db,
+} from "@/app/lib/firebase";
+import {
+  normalizeAccountStatus,
+  type AccountStatus,
+} from "@/app/lib/access-control";
+import {
+  useI18n,
+} from "@/app/lib/i18n";
 
-export type UserDoc = {
-  role?: "seller" | "admin";
-  sellerId?: string;
-  regionId?: string;
-  active?: boolean;
-  plan?: PlanId;
-  subscriptionStatus?: SubscriptionStatus;
-  suspended?: boolean;
-  maxEvents?: number;
-  maxProducts?: number;
-  email?: string | null;
-  displayName?: string | null;
+export type AdminProfile = {
+  role: "admin";
+  sellerId: string;
+  email: string | null;
+  displayName: string | null;
+  accountStatus: AccountStatus;
 };
 
 export default function AdminGuard({
   children,
 }: {
-  children: (args: { user: User; profile: UserDoc }) => React.ReactNode;
+  children:
+    | ReactNode
+    | ((args: {
+        user: User;
+        profile: AdminProfile;
+      }) => ReactNode);
 }) {
   const router = useRouter();
-  const pathname = usePathname();
-  const { t } = useI18n();
+  const { lang } = useI18n();
 
-  const [checkingAuth, setCheckingAuth] = useState(true);
-  const [authUser, setAuthUser] = useState<User | null>(null);
-  const [profile, setProfile] = useState<UserDoc | null>(null);
-  const [profileMissing, setProfileMissing] = useState(false);
-  const [errMsg, setErrMsg] = useState("");
+  const [checking, setChecking] =
+    useState(true);
+  const [user, setUser] =
+    useState<User | null>(null);
+  const [profile, setProfile] =
+    useState<AdminProfile | null>(null);
+  const [missing, setMissing] =
+    useState(false);
+  const [error, setError] =
+    useState("");
 
-  useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (u) => {
-      setAuthUser(u || null);
-      setCheckingAuth(false);
-      if (!u) router.replace("/login");
-    });
-    return () => unsub();
-  }, [router]);
+  const copy =
+    lang === "ja"
+      ? {
+          loading: "管理者権限を確認しています…",
+          missing: "管理者プロフィールがありません",
+          denied: "管理者権限がありません",
+          blocked: "管理者アカウントが停止されています",
+          bootstrap: "bootstrap-admin-lifetime スクリプトを実行してください。",
+          seller: "販売者画面へ",
+          logout: "ログアウト",
+        }
+      : lang === "en"
+        ? {
+            loading: "Checking administrator access…",
+            missing: "Administrator profile not found",
+            denied: "Administrator access required",
+            blocked: "Administrator account is unavailable",
+            bootstrap: "Run the bootstrap-admin-lifetime script.",
+            seller: "Go to seller panel",
+            logout: "Sign out",
+          }
+        : {
+            loading: "Validando acesso administrativo…",
+            missing: "Perfil administrativo não encontrado",
+            denied: "Acesso exclusivo do administrador",
+            blocked: "Conta administrativa indisponível",
+            bootstrap: "Execute o script bootstrap-admin-lifetime.",
+            seller: "Ir para o painel do vendedor",
+            logout: "Sair",
+          };
 
-  const loadProfile = useCallback(async (u: User) => {
-    setErrMsg("");
-    setProfileMissing(false);
+  const load = useCallback(
+    async (currentUser: User) => {
+      setChecking(true);
+      setMissing(false);
+      setError("");
 
-    try {
-      const ref = doc(db, "users", u.uid);
-      const snap = await getDoc(ref);
+      try {
+        const snapshot =
+          await getDoc(
+            doc(
+              db,
+              "users",
+              currentUser.uid,
+            ),
+          );
 
-      if (!snap.exists()) {
-        setProfileMissing(true);
+        if (!snapshot.exists()) {
+          setMissing(true);
+          setProfile(null);
+          return;
+        }
+
+        const data = snapshot.data();
+
+        if (data.role !== "admin") {
+          setProfile(null);
+          setError("ADMIN_ROLE_REQUIRED");
+          return;
+        }
+
+        setProfile({
+          role: "admin",
+          sellerId:
+            String(
+              data.sellerId ??
+              currentUser.uid,
+            ).trim(),
+          email:
+            typeof data.email ===
+            "string"
+              ? data.email
+              : currentUser.email,
+          displayName:
+            typeof data.displayName ===
+            "string"
+              ? data.displayName
+              : currentUser.displayName,
+          accountStatus:
+            normalizeAccountStatus(
+              data.accountStatus,
+              {
+                active: data.active,
+                suspended:
+                  data.suspended,
+              },
+            ),
+        });
+      } catch (loadError: unknown) {
+        console.error(
+          "[AdminGuard] load:",
+          loadError,
+        );
+
         setProfile(null);
-        return;
+        setError(
+          loadError instanceof Error
+            ? loadError.message
+            : "ADMIN_PROFILE_LOAD_FAILED",
+        );
+      } finally {
+        setChecking(false);
       }
-
-      const data = snap.data() as any;
-      const normalized: UserDoc = {
-        role: data.role === "admin" ? "admin" : data.role === "seller" ? "seller" : undefined,
-        sellerId: String(data.sellerId || ""),
-        regionId: String(data.regionId || ""),
-        active: data.active !== false,
-        suspended: !!data.suspended,
-        plan: data.plan || "starter",
-        subscriptionStatus: data.subscriptionStatus || "none",
-        maxEvents: typeof data.maxEvents === "number" ? data.maxEvents : undefined,
-        maxProducts: typeof data.maxProducts === "number" ? data.maxProducts : undefined,
-        email: data.email ?? null,
-        displayName: data.displayName ?? null,
-      };
-
-      setProfile(normalized);
-    } catch (e: any) {
-      console.error("[AdminGuard] loadProfile erro:", e);
-      setErrMsg(t("eventPanel.err.profileLoad"));
-    }
-  }, [t]);
+    },
+    [],
+  );
 
   useEffect(() => {
-    if (!authUser) return;
-    loadProfile(authUser);
-  }, [authUser, loadProfile]);
+    const unsubscribe =
+      onAuthStateChanged(
+        auth,
+        (currentUser) => {
+          setUser(currentUser);
 
-  const handleLogout = async () => {
-    await signOut(auth);
-    router.replace("/login");
-  };
+          if (!currentUser) {
+            setChecking(false);
+            router.replace("/login");
+            return;
+          }
 
-  if (checkingAuth || (authUser && !profile && !profileMissing)) {
+          void load(currentUser);
+        },
+      );
+
+    return () => unsubscribe();
+  }, [load, router]);
+
+  const logout =
+    useCallback(async () => {
+      await signOut(auth);
+      router.replace("/login");
+    }, [router]);
+
+  if (checking) {
     return (
-      <main className="flex min-h-[65vh] flex-col items-center justify-center gap-4 bg-white dark:bg-neutral-950 transition-colors">
+      <main className="flex min-h-[65vh] flex-col items-center justify-center gap-4">
         <div className="h-9 w-9 animate-spin rounded-full border-4 border-neutral-200 border-t-neutral-900 dark:border-neutral-800 dark:border-t-white" />
-        <p className="text-sm font-black text-neutral-500 animate-pulse">Validando credenciais de administrador...</p>
+        <p className="text-sm font-black text-neutral-500">
+          {copy.loading}
+        </p>
       </main>
     );
   }
 
-  if (!authUser) return null;
+  if (!user) {
+    return null;
+  }
 
-  // Barreira técnica caso o documento raiz do Admin não tenha sido criado via console
-  if (profileMissing) {
+  if (missing) {
     return (
-      <main className="max-w-md mx-auto p-4 mt-12 space-y-4 text-center animate-fade-in">
-        <h1 className="text-2xl font-black text-neutral-900 dark:text-white tracking-tight">
-          {t("eventPanel.guard.profileMissing.title")}
-        </h1>
-
-        <div className="rounded-3xl border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-900 p-6 space-y-4">
-          <p className="text-sm text-neutral-600 dark:text-neutral-400 font-medium leading-relaxed">
-            Seu login foi validado, mas não existe um registro correspondente em <code className="font-mono font-black text-neutral-900 dark:text-white">users/{authUser.uid}</code>.
+      <main className="mx-auto mt-12 max-w-md p-4 text-center">
+        <div className="space-y-4 rounded-3xl border border-amber-200 bg-amber-50 p-8 dark:border-amber-900/30 dark:bg-amber-950/20">
+          <h1 className="text-xl font-black">
+            {copy.missing}
+          </h1>
+          <p className="text-sm text-neutral-600 dark:text-neutral-400">
+            {copy.bootstrap}
           </p>
-
-          <div className="rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950 p-4 text-left text-xs space-y-2">
-            <p className="font-black text-neutral-900 dark:text-white">Injeção Manual Obrigatória (Console):</p>
-            <ol className="list-decimal ml-5 space-y-1 text-neutral-600 dark:text-neutral-400 font-medium">
-              <li>Crie o documento <code className="font-bold">users/{authUser.uid}</code></li>
-              <li>Adicione a chave: <code className="font-bold">role: "admin"</code></li>
-              <li>Adicione a chave: <code className="font-bold">active: true</code></li>
-            </ol>
-          </div>
-
-          <button onClick={handleLogout} className="w-full rounded-2xl bg-black text-white dark:bg-white dark:text-black font-black py-3.5 shadow-md">
-            {t("common.logout")}
+          <code className="block break-all rounded-xl bg-black/5 p-3 text-xs dark:bg-white/10">
+            users/{user.uid}
+          </code>
+          <button
+            type="button"
+            onClick={() =>
+              void logout()
+            }
+            className="text-xs font-black underline"
+          >
+            {copy.logout}
           </button>
         </div>
       </main>
     );
   }
 
-  // Bloqueio estrito se um Seller tentar quebrar a URL digitando /admin manualmente
-  if (profile?.role !== "admin") {
+  if (!profile) {
     return (
-      <main className="max-w-md mx-auto p-4 mt-16 text-center space-y-4 animate-fade-in">
-        <div className="rounded-3xl border border-red-200 dark:border-red-900/30 bg-red-50/50 dark:bg-red-950/20 p-8 space-y-4 shadow-xl">
+      <main className="mx-auto mt-16 max-w-md p-4 text-center">
+        <div className="space-y-4 rounded-3xl border border-red-200 bg-red-50/50 p-8 dark:border-red-900/30 dark:bg-red-950/20">
           <div className="text-4xl">🛑</div>
-          <h1 className="text-xl font-black text-red-900 dark:text-red-200 tracking-tight">
-            {t("settings.guard.notAllowed.title")}
+          <h1 className="text-xl font-black text-red-900 dark:text-red-200">
+            {copy.denied}
           </h1>
-          <p className="text-sm text-neutral-500 dark:text-neutral-400 font-medium">
-            {t("settings.guard.notAllowed.role")}
-          </p>
-
-          <div className="flex flex-col gap-2 pt-2">
-            <Link
-              href="/seller"
-              className="w-full rounded-2xl bg-black text-white dark:bg-white dark:text-black font-black py-3 text-sm shadow-md"
-            >
-              Ir para Painel do Vendedor
-            </Link>
-            <button
-              onClick={handleLogout}
-              className="text-xs font-black underline text-neutral-400 dark:text-neutral-500 mt-2"
-            >
-              {t("common.logout")}
-            </button>
-          </div>
+          {error && (
+            <p className="break-words text-xs text-red-700 dark:text-red-300">
+              {error}
+            </p>
+          )}
+          <Link
+            href="/seller"
+            className="block rounded-2xl bg-black py-3 text-sm font-black text-white dark:bg-white dark:text-black"
+          >
+            {copy.seller}
+          </Link>
+          <button
+            type="button"
+            onClick={() =>
+              void logout()
+            }
+            className="text-xs font-black underline"
+          >
+            {copy.logout}
+          </button>
         </div>
       </main>
     );
   }
 
-  return <>{children({ user: authUser, profile: profile! })}</>;
+  if (
+    profile.accountStatus !== "active"
+  ) {
+    return (
+      <main className="mx-auto mt-16 max-w-md p-4 text-center">
+        <div className="space-y-4 rounded-3xl border border-red-200 bg-red-50/50 p-8 dark:border-red-900/30 dark:bg-red-950/20">
+          <h1 className="text-xl font-black">
+            {copy.blocked}
+          </h1>
+          <button
+            type="button"
+            onClick={() =>
+              void logout()
+            }
+            className="text-xs font-black underline"
+          >
+            {copy.logout}
+          </button>
+        </div>
+      </main>
+    );
+  }
+
+  return (
+    <>
+      {typeof children === "function"
+        ? children({
+            user,
+            profile,
+          })
+        : children}
+    </>
+  );
 }

@@ -21,6 +21,12 @@ import {
   type DocumentReference,
 } from "firebase/firestore";
 import { useI18n } from "@/app/lib/i18n";
+import { ensureUserProfile } from "@/app/lib/ensureUserProfile";
+import { formatMoneyMajor } from "@/app/lib/money";
+import type {
+  RegionalLocale,
+  SupportedCurrency,
+} from "@/app/types/regional";
 import {
   ORDER_STATUS,
   getOrderStatusLabel,
@@ -35,14 +41,19 @@ type EventStatus = "active" | "closed" | "cancelled";
 
 type UserDoc = {
   role?: "seller" | "admin";
+  sellerId?: string;
   regionId?: string;
   active?: boolean;
+  suspended?: boolean;
   displayName?: string;
   whatsapp?: string;
   messengerId?: string;
   pickupLink?: string;
   pickupNote?: string;
   regionName?: string;
+  currency?: SupportedCurrency | null;
+  regionalLocale?: RegionalLocale | null;
+  timeZone?: string;
 };
 
 type EventDoc = {
@@ -230,7 +241,12 @@ const [messageSummaries, setMessageSummaries] = useState<Record<string, MessageS
   const [inactive, setInactive] = useState(false);
 
   const role = profile?.role ?? null;
-  const sellerUid = authUser?.uid || "";
+  const sellerUid =
+    String(
+      profile?.sellerId ??
+      authUser?.uid ??
+      "",
+    ).trim();
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -263,28 +279,43 @@ const [messageSummaries, setMessageSummaries] = useState<Record<string, MessageS
   const [filterDate, setFilterDate] = useState<string>("todas");
 
   const yen = useCallback(
-    (n: number) => {
-      const locale = lang === "pt" ? "pt-BR" : lang === "en" ? "en-US" : "ja-JP";
-      return new Intl.NumberFormat(locale, {
-        style: "currency",
-        currency: "JPY",
-        maximumFractionDigits: 0,
-      }).format(Math.round(n || 0));
-    },
-    [lang]
+    (amount: number) =>
+      formatMoneyMajor(
+        amount,
+        profile?.currency ?? "JPY",
+        profile?.regionalLocale ??
+          (lang === "pt"
+            ? "pt-BR"
+            : lang === "en"
+              ? "en-US"
+              : "ja-JP"),
+      ),
+    [
+      lang,
+      profile?.currency,
+      profile?.regionalLocale,
+    ],
   );
 
   const fmtDate = useCallback((ts?: Timestamp | null) => {
     if (!ts) return "";
-    return new Intl.DateTimeFormat("pt-BR", {
-      timeZone: "Asia/Tokyo",
-      day: "2-digit",
-      month: "2-digit",
-      year: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-    }).format(ts.toDate());
-  }, []);
+    return new Intl.DateTimeFormat(
+      profile?.regionalLocale ?? "pt-BR",
+      {
+        timeZone:
+          profile?.timeZone ||
+          "Asia/Tokyo",
+        day: "2-digit",
+        month: "2-digit",
+        year: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+      },
+    ).format(ts.toDate());
+  }, [
+    profile?.regionalLocale,
+    profile?.timeZone,
+  ]);
 
   useEffect(() => {
     const ttab = (search.get("tab") as TabKey) || "orders";
@@ -310,30 +341,101 @@ const [messageSummaries, setMessageSummaries] = useState<Record<string, MessageS
     return () => unsub();
   }, [router]);
 
-  const loadProfile = useCallback(async (u: User) => {
-    setProfileMissing(false);
-    setInactive(false);
+  const loadProfile = useCallback(
+    async (u: User) => {
+      setProfileMissing(false);
+      setInactive(false);
 
-    const snap = await getDoc(doc(db, "users", u.uid));
-    if (!snap.exists()) {
-      setProfileMissing(true);
-      return;
-    }
+      const result =
+        await ensureUserProfile(
+          u,
+          lang,
+        );
 
-    const data = snap.data() as UserDoc;
-    setProfile({
-      role: data.role === "admin" ? "admin" : data.role === "seller" ? "seller" : undefined,
-      regionId: typeof data.regionId === "string" ? data.regionId : "",
-      active: data.active !== false,
-      displayName: data.displayName || "",
-      whatsapp: data.whatsapp || "",
-      messengerId: data.messengerId || "",
-      pickupLink: data.pickupLink || "",
-      pickupNote: data.pickupNote || "",
-      regionName: data.regionName || "",
-    });
-    setInactive(data.active === false);
-  }, []);
+      const userData =
+        result.userDoc as UserDoc;
+      const sellerData =
+        result.sellerDoc ?? {};
+
+      if (
+        !result.userDoc ||
+        (
+          userData.role !== "seller" &&
+          userData.role !== "admin"
+        )
+      ) {
+        setProfileMissing(true);
+        return;
+      }
+
+      setProfile({
+        role:
+          userData.role === "admin"
+            ? "admin"
+            : "seller",
+        sellerId:
+          String(
+            userData.sellerId ??
+            u.uid,
+          ).trim(),
+        regionId:
+          String(
+            sellerData.regionId ??
+            userData.regionId ??
+            "",
+          ),
+        active:
+          userData.active !== false,
+        displayName:
+          String(
+            sellerData.storeName ??
+            userData.displayName ??
+            "",
+          ),
+        whatsapp:
+          String(
+            sellerData.whatsapp ??
+            "",
+          ),
+        messengerId:
+          String(
+            sellerData.messengerId ??
+            "",
+          ),
+        pickupLink:
+          String(
+            sellerData.pickupLink ??
+            "",
+          ),
+        pickupNote:
+          String(
+            sellerData.pickupNote ??
+            "",
+          ),
+        regionName:
+          String(
+            sellerData.regionName ??
+            "",
+          ),
+        currency:
+          userData.currency ?? "JPY",
+        regionalLocale:
+          userData.regionalLocale ??
+          "ja-JP",
+        timeZone:
+          String(
+            userData.timeZone ??
+            "Asia/Tokyo",
+          ),
+      });
+
+      setInactive(
+        userData.active === false ||
+        userData.suspended === true,
+      );
+    },
+    [lang],
+  );
 
   useEffect(() => {
     if (!authUser) return;
@@ -341,7 +443,12 @@ const [messageSummaries, setMessageSummaries] = useState<Record<string, MessageS
   }, [authUser, loadProfile, t]);
 
   const canEnter = useMemo(() => {
-    if (!authUser || !sellerUid || inactive || role !== "seller") return false;
+    if (
+      !authUser ||
+      !sellerUid ||
+      inactive ||
+      (role !== "seller" && role !== "admin")
+    ) return false;
     return true;
   }, [authUser, sellerUid, inactive, role]);
 

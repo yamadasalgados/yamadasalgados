@@ -20,6 +20,9 @@ import {
   type EnsureResult,
 } from "@/app/lib/ensureUserProfile";
 import {
+  accessIsActive,
+} from "@/app/lib/access-control";
+import {
   hasCompleteSellerOnboarding,
 } from "@/app/lib/seller-regional-profile";
 import { useI18n } from "@/app/lib/i18n";
@@ -113,7 +116,7 @@ export default function LoginPage() {
           : "seller";
 
       if (role === "admin") {
-        router.replace("/admin/");
+        router.replace("/admin");
         return;
       }
 
@@ -128,18 +131,12 @@ export default function LoginPage() {
         return;
       }
 
-      const commercial =
-        sellerData ?? userData;
-
-      const isActive =
-        commercial.subscriptionStatus ===
-          "active" &&
-        commercial.suspended !== true &&
-        commercial.active !== false;
-
       router.replace(
-        isActive
-          ? "/seller/"
+        accessIsActive(
+          sellerData,
+          userData,
+        )
+          ? "/seller"
           : "/seller/rent",
       );
     },

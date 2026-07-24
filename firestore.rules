@@ -1,0 +1,849 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // =========================================================
+    // AUTH / IDENTITY
+    // =========================================================
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function userPath(uid) {
+      return /databases/$(database)/documents/users/$(uid);
+    }
+
+    function sellerPath(sellerId) {
+      return /databases/$(database)/documents/sellers/$(sellerId);
+    }
+
+    function currentUserExists() {
+      return isSignedIn()
+        && exists(userPath(request.auth.uid));
+    }
+
+    function currentUserData() {
+      return get(userPath(request.auth.uid)).data;
+    }
+
+    function currentSellerId() {
+      return currentUserExists()
+        && currentUserData().sellerId is string
+        ? currentUserData().sellerId
+        : "";
+    }
+
+    function isAdmin() {
+      return currentUserExists()
+        && currentUserData().role == "admin"
+        && currentUserData().accountStatus == "active";
+    }
+
+    function isSellerOwner(sellerId) {
+      return isSignedIn() && (
+        request.auth.uid == sellerId
+        || currentSellerId() == sellerId
+        || (
+          exists(sellerPath(sellerId))
+          && get(sellerPath(sellerId)).data.ownerUid
+            == request.auth.uid
+        )
+      );
+    }
+
+    // =========================================================
+    // SHARED VALIDATORS
+    // =========================================================
+
+    function validLanguage(value) {
+      return value in ["pt", "en", "ja"];
+    }
+
+    function validCountry(value) {
+      return value in ["JP", "BR", "US"];
+    }
+
+    function validCurrency(value) {
+      return value in ["JPY", "BRL", "USD"];
+    }
+
+    function validLocale(value) {
+      return value in ["ja-JP", "pt-BR", "en-US"];
+    }
+
+    function validCountryCurrency(country, currency) {
+      return (
+        country == "JP" && currency == "JPY"
+      ) || (
+        country == "BR" && currency == "BRL"
+      ) || (
+        country == "US" && currency == "USD"
+      );
+    }
+
+    function validCountryLocale(country, locale) {
+      return (
+        country == "JP" && locale == "ja-JP"
+      ) || (
+        country == "BR" && locale == "pt-BR"
+      ) || (
+        country == "US" && locale == "en-US"
+      );
+    }
+
+    function validCountryTimeZone(country, timeZone) {
+      return (
+        country == "JP"
+        && timeZone == "Asia/Tokyo"
+      ) || (
+        country == "BR"
+        && timeZone in [
+          "America/Sao_Paulo",
+          "America/Manaus",
+          "America/Cuiaba",
+          "America/Rio_Branco",
+          "America/Noronha"
+        ]
+      ) || (
+        country == "US"
+        && timeZone in [
+          "America/New_York",
+          "America/Chicago",
+          "America/Denver",
+          "America/Los_Angeles",
+          "America/Anchorage",
+          "Pacific/Honolulu"
+        ]
+      );
+    }
+
+    function validAccountStatus(value) {
+      return value in [
+        "active",
+        "suspended",
+        "disabled"
+      ];
+    }
+
+    function validPlan(value) {
+      return value in [
+        "starter",
+        "pro",
+        "business"
+      ];
+    }
+
+    function validBillingInterval(value) {
+      return value in [
+        "monthly",
+        "annual"
+      ];
+    }
+
+    function expectedMonthlyAmount(plan, country) {
+      return plan == "starter"
+        ? (
+          country == "JP" ? 2980
+          : country == "BR" ? 6900
+          : country == "US" ? 1900
+          : -1
+        )
+        : plan == "pro"
+          ? (
+            country == "JP" ? 5980
+            : country == "BR" ? 13900
+            : country == "US" ? 3900
+            : -1
+          )
+          : plan == "business"
+            ? (
+              country == "JP" ? 9980
+              : country == "BR" ? 22900
+              : country == "US" ? 6900
+              : -1
+            )
+            : -1;
+    }
+
+    function expectedPlanAmount(
+      plan,
+      country,
+      billingInterval
+    ) {
+      let monthly =
+        expectedMonthlyAmount(
+          plan,
+          country
+        );
+
+      return billingInterval == "annual"
+        ? monthly * 10
+        : monthly;
+    }
+
+    function planRank(plan) {
+      return plan == "starter"
+        ? 1
+        : plan == "pro"
+          ? 2
+          : plan == "business"
+            ? 3
+            : -1;
+    }
+
+    function accessIsCurrentlyActive(access) {
+      return access.status == "active"
+        && (
+          access.mode == "lifetime"
+          || (
+            access.mode == "subscription"
+            && access.currentPeriodEnd is timestamp
+            && access.currentPeriodEnd > request.time
+          )
+        );
+    }
+
+    function expectedRequestType(
+      currentPlan,
+      currentStatus,
+      requestedPlan
+    ) {
+      return currentStatus != "active"
+        ? "new"
+        : currentPlan == requestedPlan
+          ? "renew"
+          : planRank(requestedPlan)
+              > planRank(currentPlan)
+            ? "upgrade"
+            : "downgrade";
+    }
+
+    function expectedMaxEvents(plan) {
+      return plan == "starter"
+        ? 1
+        : plan == "pro"
+          ? 3
+          : plan == "business"
+            ? 10
+            : -1;
+    }
+
+    function expectedMaxProducts(plan) {
+      return plan == "starter"
+        ? 20
+        : plan == "pro"
+          ? 60
+          : plan == "business"
+            ? 200
+            : -1;
+    }
+
+    function validLimitsSnapshot(plan, limits) {
+      return limits is map
+        && limits.keys().hasOnly([
+          "maxEvents",
+          "maxProducts"
+        ])
+        && limits.maxEvents is int
+        && limits.maxProducts is int
+        && limits.maxEvents
+          == expectedMaxEvents(plan)
+        && limits.maxProducts
+          == expectedMaxProducts(plan);
+    }
+
+    // =========================================================
+    // USERS — IDENTITY AND ACCESS ROLE ONLY
+    // =========================================================
+
+    function validOwnUserCreate(userId) {
+      return isSignedIn()
+        && request.auth.uid == userId
+        && request.resource.data.keys().hasOnly([
+          "schemaVersion",
+          "role",
+          "sellerId",
+          "email",
+          "displayName",
+          "photoURL",
+          "uiLanguage",
+          "accountStatus",
+          "createdAt",
+          "updatedAt",
+          "createdBy",
+          "updatedBy"
+        ])
+        && request.resource.data.schemaVersion == 2
+        && request.resource.data.role == "seller"
+        && request.resource.data.sellerId == userId
+        && validLanguage(
+          request.resource.data.uiLanguage
+        )
+        && request.resource.data.accountStatus == "active"
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.createdBy == userId
+        && request.resource.data.updatedBy == userId;
+    }
+
+    function validOwnUserUpdate(userId) {
+      let changed =
+        request.resource.data
+          .diff(resource.data)
+          .affectedKeys();
+
+      return isSignedIn()
+        && request.auth.uid == userId
+        && changed.hasOnly([
+          "displayName",
+          "photoURL",
+          "uiLanguage",
+          "updatedAt",
+          "updatedBy"
+        ])
+        && (
+          !changed.hasAny(["uiLanguage"])
+          || validLanguage(
+            request.resource.data.uiLanguage
+          )
+        )
+        && (
+          !changed.hasAny(["updatedAt"])
+          || request.resource.data.updatedAt
+            == request.time
+        )
+        && (
+          !changed.hasAny(["updatedBy"])
+          || request.resource.data.updatedBy
+            == request.auth.uid
+        );
+    }
+
+    match /users/{userId} {
+      allow read:
+        if isAdmin()
+        || (
+          isSignedIn()
+          && request.auth.uid == userId
+        );
+
+      allow create:
+        if validOwnUserCreate(userId)
+        || isAdmin();
+
+      allow update:
+        if validOwnUserUpdate(userId)
+        || isAdmin();
+
+      allow delete:
+        if isAdmin();
+    }
+
+    // =========================================================
+    // SELLERS — COMMERCIAL PROFILE AND ACCESS
+    // =========================================================
+
+    function validRegional(regional, complete) {
+      return regional is map
+        && regional.keys().hasOnly([
+          "operatingCountry",
+          "currency",
+          "locale",
+          "timeZone"
+        ])
+        && (
+          complete == false
+          ? (
+            regional.operatingCountry == null
+            && regional.currency == null
+            && regional.locale == null
+            && regional.timeZone == null
+          )
+          : (
+            validCountry(
+              regional.operatingCountry
+            )
+            && validCurrency(
+              regional.currency
+            )
+            && validLocale(
+              regional.locale
+            )
+            && regional.timeZone is string
+            && validCountryCurrency(
+              regional.operatingCountry,
+              regional.currency
+            )
+            && validCountryLocale(
+              regional.operatingCountry,
+              regional.locale
+            )
+            && validCountryTimeZone(
+              regional.operatingCountry,
+              regional.timeZone
+            )
+          )
+        );
+    }
+
+    function validOnboarding(onboarding) {
+      return onboarding is map
+        && onboarding.keys().hasOnly([
+          "complete",
+          "completedAt",
+          "schemaVersion"
+        ])
+        && onboarding.complete is bool
+        && onboarding.schemaVersion == 2
+        && (
+          onboarding.complete == false
+          ? onboarding.completedAt == null
+          : onboarding.completedAt is timestamp
+        );
+    }
+
+    function validDefaultAccess(access) {
+      return access is map
+        && access.keys().hasOnly([
+          "planId",
+          "mode",
+          "billingInterval",
+          "status",
+          "source",
+          "currentPeriodStart",
+          "currentPeriodEnd",
+          "grantedAt",
+          "grantedBy",
+          "note"
+        ])
+        && access.planId == "starter"
+        && access.mode == "subscription"
+        && access.billingInterval == "monthly"
+        && access.status == "none"
+        && access.source == "purchase"
+        && access.currentPeriodStart == null
+        && access.currentPeriodEnd == null
+        && access.grantedAt == null
+        && access.grantedBy == null
+        && access.note == null;
+    }
+
+    function validOwnSellerCreate(sellerId) {
+      return isSignedIn()
+        && request.resource.data.keys().hasOnly([
+          "schemaVersion",
+          "ownerUid",
+          "storeName",
+          "storefrontLanguage",
+          "regional",
+          "onboarding",
+          "accountStatus",
+          "access",
+          "limitsOverride",
+          "regionId",
+          "regionName",
+          "whatsapp",
+          "messengerId",
+          "pickupLink",
+          "pickupNote",
+          "createdAt",
+          "updatedAt",
+          "createdBy",
+          "updatedBy"
+        ])
+        && request.resource.data.schemaVersion == 2
+        && request.resource.data.ownerUid == request.auth.uid
+        && (
+          sellerId == request.auth.uid
+          || sellerId == currentSellerId()
+        )
+        && request.resource.data.storeName == null
+        && validLanguage(
+          request.resource.data.storefrontLanguage
+        )
+        && validRegional(
+          request.resource.data.regional,
+          false
+        )
+        && validOnboarding(
+          request.resource.data.onboarding
+        )
+        && request.resource.data.onboarding.complete == false
+        && request.resource.data.accountStatus == "active"
+        && validDefaultAccess(
+          request.resource.data.access
+        )
+        && request.resource.data.limitsOverride == null
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.updatedBy == request.auth.uid;
+    }
+
+    function validOwnSellerUpdate(sellerId) {
+      let changed =
+        request.resource.data
+          .diff(resource.data)
+          .affectedKeys();
+
+      let complete =
+        request.resource.data.onboarding.complete;
+
+      return isSellerOwner(sellerId)
+        && changed.hasOnly([
+          "storeName",
+          "storefrontLanguage",
+          "regional",
+          "onboarding",
+          "regionId",
+          "regionName",
+          "whatsapp",
+          "messengerId",
+          "pickupLink",
+          "pickupNote",
+          "updatedAt",
+          "updatedBy"
+        ])
+        && request.resource.data.schemaVersion == 2
+        && request.resource.data.ownerUid
+          == resource.data.ownerUid
+        && request.resource.data.storeName is string
+        && request.resource.data.storeName.size() > 0
+        && request.resource.data.storeName.size() <= 120
+        && validLanguage(
+          request.resource.data.storefrontLanguage
+        )
+        && validOnboarding(
+          request.resource.data.onboarding
+        )
+        && complete == true
+        && validRegional(
+          request.resource.data.regional,
+          true
+        )
+        && (
+          !changed.hasAny(["onboarding"])
+          || request.resource.data.onboarding.completedAt
+            == request.time
+          || request.resource.data.onboarding
+            == resource.data.onboarding
+        )
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.updatedBy == request.auth.uid;
+    }
+
+    match /sellers/{sellerId} {
+      // O documento contém os dados necessários para a loja pública.
+      allow read: if true;
+
+      allow create:
+        if isAdmin()
+        || validOwnSellerCreate(sellerId);
+
+      allow update:
+        if isAdmin()
+        || validOwnSellerUpdate(sellerId);
+
+      allow delete:
+        if isAdmin();
+
+      // =======================================================
+      // PLAN REQUESTS
+      // =======================================================
+
+      function validPlanRequestCreate() {
+        return isSellerOwner(sellerId)
+          && request.resource.data.keys().hasOnly([
+            "schemaVersion",
+            "sellerId",
+            "ownerUid",
+            "planId",
+            "billingInterval",
+            "requestType",
+            "status",
+            "country",
+            "currency",
+            "amountMinor",
+            "limitsSnapshot",
+            "createdAt",
+            "createdBy",
+            "updatedAt",
+            "updatedBy",
+            "reviewedAt",
+            "reviewedBy",
+            "reviewNote"
+          ])
+          && request.resource.data.schemaVersion == 2
+          && request.resource.data.sellerId == sellerId
+          && get(sellerPath(sellerId)).data.ownerUid
+            == request.auth.uid
+          && request.resource.data.ownerUid
+            == get(sellerPath(sellerId)).data.ownerUid
+          && request.resource.data.country
+            == get(sellerPath(sellerId)).data.regional.operatingCountry
+          && request.resource.data.currency
+            == get(sellerPath(sellerId)).data.regional.currency
+          && validPlan(
+            request.resource.data.planId
+          )
+          && validBillingInterval(
+            request.resource.data.billingInterval
+          )
+          && request.resource.data.requestType in [
+            "new",
+            "renew",
+            "upgrade",
+            "downgrade"
+          ]
+          && !(
+            get(sellerPath(sellerId)).data.access.mode == "lifetime"
+            && accessIsCurrentlyActive(
+              get(sellerPath(sellerId)).data.access
+            )
+          )
+          && request.resource.data.requestType
+            == expectedRequestType(
+              get(sellerPath(sellerId)).data.access.planId,
+              accessIsCurrentlyActive(
+                get(sellerPath(sellerId)).data.access
+              )
+                ? "active"
+                : "past_due",
+              request.resource.data.planId
+            )
+          && request.resource.data.status == "pending"
+          && validCountry(
+            request.resource.data.country
+          )
+          && validCurrency(
+            request.resource.data.currency
+          )
+          && validCountryCurrency(
+            request.resource.data.country,
+            request.resource.data.currency
+          )
+          && request.resource.data.amountMinor is int
+          && request.resource.data.amountMinor
+            == expectedPlanAmount(
+              request.resource.data.planId,
+              request.resource.data.country,
+              request.resource.data.billingInterval
+            )
+          && validLimitsSnapshot(
+            request.resource.data.planId,
+            request.resource.data.limitsSnapshot
+          )
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.updatedAt == request.time
+          && request.resource.data.createdBy == request.auth.uid
+          && request.resource.data.updatedBy == request.auth.uid
+          && request.resource.data.reviewedAt == null
+          && request.resource.data.reviewedBy == null
+          && request.resource.data.reviewNote == null;
+      }
+
+      match /planRequests/{requestId} {
+        allow read:
+          if isAdmin()
+          || isSellerOwner(sellerId);
+
+        allow create:
+          if validPlanRequestCreate();
+
+        allow update, delete:
+          if isAdmin();
+      }
+
+      // =======================================================
+      // SELLER-OWNED CATALOG
+      // =======================================================
+
+      match /categories/{categoryId} {
+        allow read:
+          if true;
+
+        allow create, update, delete:
+          if isAdmin()
+          || isSellerOwner(sellerId);
+      }
+
+      match /products/{productId} {
+        allow read:
+          if true;
+
+        allow create, update, delete:
+          if isAdmin()
+          || isSellerOwner(sellerId);
+      }
+
+      // =======================================================
+      // STORE ORDERS
+      // =======================================================
+
+      match /storeOrders/{orderId} {
+        allow create:
+          if sellerAcceptsOrders(sellerId)
+          && isValidPublicOrderCreate()
+          && request.resource.data.channel == "store";
+
+        allow read, update:
+          if isAdmin()
+          || isSellerOwner(sellerId);
+
+        allow delete:
+          if isAdmin();
+      }
+
+      // =======================================================
+      // EVENTS
+      // =======================================================
+
+      match /events/{eventId} {
+        allow read: if true;
+
+        allow create, update, delete:
+          if isAdmin()
+          || isSellerOwner(sellerId);
+
+        match /products/{productId} {
+          allow read: if true;
+          allow create, update, delete:
+            if isAdmin()
+            || isSellerOwner(sellerId);
+        }
+
+        match /items/{itemId} {
+          allow read: if true;
+          allow create, update, delete:
+            if isAdmin()
+            || isSellerOwner(sellerId);
+        }
+
+        match /orders/{orderId} {
+          allow create:
+            if sellerAcceptsOrders(sellerId)
+            && isValidPublicOrderCreate();
+
+          allow read, update:
+            if isAdmin()
+            || isSellerOwner(sellerId);
+
+          allow delete:
+            if isAdmin();
+
+          match /messages/{messageId} {
+            allow read, create: if true;
+            allow update:
+              if isAdmin()
+              || isSellerOwner(sellerId);
+            allow delete:
+              if isAdmin();
+          }
+        }
+      }
+    }
+
+    function sellerAcceptsOrders(sellerId) {
+      let seller =
+        get(sellerPath(sellerId)).data;
+
+      return seller.accountStatus == "active"
+        && accessIsCurrentlyActive(
+          seller.access
+        );
+    }
+
+    // =========================================================
+    // PUBLIC ORDER VALIDATION
+    // =========================================================
+
+    function validOptionalLimitedString(
+      fieldName,
+      maxSize
+    ) {
+      return !(
+        fieldName in request.resource.data
+      )
+      || request.resource.data[fieldName] == null
+      || (
+        request.resource.data[fieldName] is string
+        && request.resource.data[fieldName].size()
+          <= maxSize
+      );
+    }
+
+    function isValidPublicOrderCreate() {
+      return request.resource.data.keys().hasOnly([
+        "customerName",
+        "customerPhone",
+        "customerEmail",
+        "note",
+        "quantities",
+        "items",
+        "totalItems",
+        "totalAmount",
+        "status",
+        "channel",
+        "deliveryDate",
+        "deliveryMode",
+        "deliveryTimeSlot",
+        "locationLink",
+        "address",
+        "customerClientId",
+        "sellerUnread",
+        "sellerReadAt",
+        "createdAt",
+        "updatedAt"
+      ])
+      && request.resource.data.customerName is string
+      && request.resource.data.customerName.size() > 0
+      && request.resource.data.customerName.size() <= 120
+      && request.resource.data.customerPhone is string
+      && request.resource.data.customerPhone.size() > 0
+      && request.resource.data.customerPhone.size() <= 50
+      && validOptionalLimitedString("customerEmail", 200)
+      && validOptionalLimitedString("note", 1500)
+      && validOptionalLimitedString("deliveryDate", 50)
+      && validOptionalLimitedString("deliveryMode", 30)
+      && validOptionalLimitedString("deliveryTimeSlot", 100)
+      && validOptionalLimitedString("locationLink", 2000)
+      && validOptionalLimitedString("address", 1000)
+      && validOptionalLimitedString("customerClientId", 200)
+      && request.resource.data.quantities is map
+      && request.resource.data.items is list
+      && request.resource.data.totalItems is int
+      && request.resource.data.totalItems > 0
+      && request.resource.data.totalItems <= 1000
+      && request.resource.data.totalAmount is number
+      && request.resource.data.totalAmount >= 0
+      && request.resource.data.status == "pending"
+      && request.resource.data.channel in ["pwa", "store"]
+      && request.resource.data.sellerUnread == true
+      && request.resource.data.sellerReadAt == null
+      && request.resource.data.createdAt == request.time
+      && request.resource.data.updatedAt == request.time;
+    }
+
+    // =========================================================
+    // LEGACY ROOT COLLECTIONS — PERMANENTLY BLOCKED
+    // =========================================================
+
+    match /events/{document=**} {
+      allow read, write: if false;
+    }
+
+    match /products/{document=**} {
+      allow read, write: if false;
+    }
+
+    // =========================================================
+    // DEFAULT DENY
+    // =========================================================
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

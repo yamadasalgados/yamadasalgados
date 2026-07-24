@@ -1,24 +1,25 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState, useCallback, useRef } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { auth, db } from "@/app/lib/firebase";
 import { onAuthStateChanged, signOut, type User } from "firebase/auth";
 import {
   collection,
   doc,
-  getDoc,
   getDocs,
   limit,
   orderBy,
   query,
-  where,
   Timestamp,
-  updateDoc,
-  serverTimestamp,
 } from "firebase/firestore";
 import { ensureUserProfile } from "@/app/lib/ensureUserProfile";
+import { formatMoneyMajor } from "@/app/lib/money";
+import type {
+  RegionalLocale,
+  SupportedCurrency,
+} from "@/app/types/regional";
 import { useI18n } from "@/app/lib/i18n";
 import StoreOrdersCard from "@/app/store/StoreOrdersCard";
 import EventOrdersAlerts from "@/app/seller/events/EventOrdersAlerts";
@@ -37,6 +38,9 @@ type UserDoc = {
   currentPeriodEnd?: Timestamp;
   requestedPlanAt?: Timestamp;
   suspended?: boolean;
+  currency?: SupportedCurrency | null;
+  regionalLocale?: RegionalLocale | null;
+  timeZone?: string;
 };
 
 type FireEvent = {
@@ -147,7 +151,6 @@ const dashboardText =
   const [stats, setStats] = useState<Stats | null>(null);
 
   const [autoFixedIds, setAutoFixedIds] = useState(false);
-  const didAutoFixRef = useRef(false);
 
   const sellerId =
     (typeof profile?.sellerId === "string" && profile.sellerId.trim()) ||
@@ -159,16 +162,29 @@ const dashboardText =
   const inactive = profile?.active === false;
   const suspended = profile?.suspended === true;
 
-  const yen = useCallback(
-    (n: number) => {
-      const locale = lang === "pt" ? "pt-BR" : lang === "en" ? "en-US" : "ja-JP";
-      return new Intl.NumberFormat(locale, {
-        style: "currency",
-        currency: "JPY",
-        maximumFractionDigits: 0,
-      }).format(Math.round(n || 0));
+  const money = useCallback(
+    (amount: number) => {
+      const currency =
+        profile?.currency ?? "JPY";
+      const locale =
+        profile?.regionalLocale ??
+        (lang === "pt"
+          ? "pt-BR"
+          : lang === "en"
+            ? "en-US"
+            : "ja-JP");
+
+      return formatMoneyMajor(
+        amount,
+        currency,
+        locale,
+      );
     },
-    [lang]
+    [
+      lang,
+      profile?.currency,
+      profile?.regionalLocale,
+    ],
   );
 
   const canLoad = useMemo(() => {
@@ -185,46 +201,43 @@ const dashboardText =
     return () => unsub();
   }, [router]);
 
-  const loadProfile = useCallback(async (u: User) => {
-    setErrMsg("");
-    setProfileMissing(false);
+  const loadProfile = useCallback(
+    async (u: User) => {
+      setErrMsg("");
+      setProfileMissing(false);
 
-    const ref = doc(db, "users", u.uid);
-    const snap = await getDoc(ref);
+      const result =
+        await ensureUserProfile(
+          u,
+          lang,
+        );
 
-    if (!snap.exists()) {
-      setProfileMissing(true);
-      return;
-    }
+      const data =
+        result.userDoc as UserDoc;
 
-    const data = snap.data() as UserDoc;
-    const normalizedRole: "admin" | "seller" = data.role === "admin" ? "admin" : "seller";
-    const nextProfile: UserDoc = { ...data, role: normalizedRole };
-    setProfile(nextProfile);
+      setProfile({
+        ...data,
+        role:
+          data.role === "admin"
+            ? "admin"
+            : "seller",
+        sellerId:
+          String(
+            data.sellerId ??
+            u.uid,
+          ).trim(),
+        regionId:
+          String(
+            data.regionId ??
+            "default",
+          ).trim() ||
+          "default",
+      });
 
-    const missingSellerId = !String(data.sellerId || "").trim();
-    const missingRegionId = !String(data.regionId || "").trim();
-
-    if (!didAutoFixRef.current && (missingSellerId || missingRegionId)) {
-      didAutoFixRef.current = true;
-      try {
-        await updateDoc(ref, {
-          sellerId: missingSellerId ? u.uid : data.sellerId,
-          regionId: missingRegionId ? "default" : data.regionId,
-          updatedAt: serverTimestamp(),
-        });
-
-        setAutoFixedIds(true);
-        setProfile((prev) => ({
-          ...(prev || {}),
-          sellerId: missingSellerId ? u.uid : prev?.sellerId,
-          regionId: missingRegionId ? "default" : prev?.regionId,
-        }));
-      } catch (e) {
-        console.warn("Best-effort auto-fix IDs falhou:", e);
-      }
-    }
-  }, []);
+      setAutoFixedIds(false);
+    },
+    [lang],
+  );
 
   useEffect(() => {
     if (!authUser) return;
@@ -298,34 +311,12 @@ const showPlanWarning =
         });
 
         setStats({ sellerId, regionId, activeEvents, closedEvents, revenueClosedSum });
-      } catch (e1: any) {
-        try {
-          const eventsQ2 = query(
-            collection(db, "events"),
-            where("sellerId", "==", sellerId),
-            orderBy("createdAt", "desc"),
-            limit(300)
-          );
-          const eventsSnap2 = await getDocs(eventsQ2);
-
-          let activeEvents = 0;
-          let closedEvents = 0;
-          let revenueClosedSum = 0;
-
-          eventsSnap2.docs.forEach((d) => {
-            const e = d.data() as FireEvent;
-            if (e.status === "active") activeEvents++;
-            if (e.status === "closed") {
-              closedEvents++;
-              revenueClosedSum += e.revenueYen || e.revenue || 0;
-            }
-          });
-
-          setStats({ sellerId, regionId, activeEvents, closedEvents, revenueClosedSum });
-        } catch (e2: any) {
-          setErrMsg(e2?.message || e1?.message || t("dashboard.err.load"));
-          setStats(null);
-        }
+      } catch (error: any) {
+        setErrMsg(
+          error?.message ||
+          t("dashboard.err.load"),
+        );
+        setStats(null);
       } finally {
         setLoading(false);
       }
@@ -463,7 +454,7 @@ const showPlanWarning =
 
     <Card
       title={dashboardText.statsRevenue}
-      value={yen(stats.revenueClosedSum)}
+      value={money(stats.revenueClosedSum)}
       hint={dashboardText.statsRevenueHint}
       tone="neutral"
       href="/seller/reports"

@@ -12,6 +12,14 @@ export const PLAN_IDS = [
 export type PlanId =
   (typeof PLAN_IDS)[number];
 
+export const BILLING_INTERVALS = [
+  "monthly",
+  "annual",
+] as const;
+
+export type BillingInterval =
+  (typeof BILLING_INTERVALS)[number];
+
 export type PlanLimits = {
   maxEvents: number;
   maxProducts: number;
@@ -21,16 +29,39 @@ export type RegionalPlanPrice = {
   country: OperatingCountry;
   currency: SupportedCurrency;
   amountMinor: number;
+  billingInterval: BillingInterval;
 };
+
+type RegionalPriceTable = Record<
+  OperatingCountry,
+  {
+    country: OperatingCountry;
+    currency: SupportedCurrency;
+    monthlyAmountMinor: number;
+    annualAmountMinor: number;
+  }
+>;
 
 export type PlanDefinition = {
   id: PlanId;
   limits: PlanLimits;
-  prices: Record<
-    OperatingCountry,
-    RegionalPlanPrice
-  >;
+  prices: RegionalPriceTable;
 };
+
+function price(
+  country: OperatingCountry,
+  currency: SupportedCurrency,
+  monthlyAmountMinor: number,
+) {
+  return {
+    country,
+    currency,
+    monthlyAmountMinor,
+    // Dois meses gratuitos: 12 meses pelo valor de 10.
+    annualAmountMinor:
+      monthlyAmountMinor * 10,
+  };
+}
 
 export const PLAN_CATALOG: Record<
   PlanId,
@@ -43,21 +74,9 @@ export const PLAN_CATALOG: Record<
       maxProducts: 20,
     },
     prices: {
-      JP: {
-        country: "JP",
-        currency: "JPY",
-        amountMinor: 2980,
-      },
-      BR: {
-        country: "BR",
-        currency: "BRL",
-        amountMinor: 6900,
-      },
-      US: {
-        country: "US",
-        currency: "USD",
-        amountMinor: 1900,
-      },
+      JP: price("JP", "JPY", 2980),
+      BR: price("BR", "BRL", 6900),
+      US: price("US", "USD", 1900),
     },
   },
 
@@ -68,21 +87,9 @@ export const PLAN_CATALOG: Record<
       maxProducts: 60,
     },
     prices: {
-      JP: {
-        country: "JP",
-        currency: "JPY",
-        amountMinor: 5980,
-      },
-      BR: {
-        country: "BR",
-        currency: "BRL",
-        amountMinor: 13900,
-      },
-      US: {
-        country: "US",
-        currency: "USD",
-        amountMinor: 3900,
-      },
+      JP: price("JP", "JPY", 5980),
+      BR: price("BR", "BRL", 13900),
+      US: price("US", "USD", 3900),
     },
   },
 
@@ -93,21 +100,9 @@ export const PLAN_CATALOG: Record<
       maxProducts: 200,
     },
     prices: {
-      JP: {
-        country: "JP",
-        currency: "JPY",
-        amountMinor: 9980,
-      },
-      BR: {
-        country: "BR",
-        currency: "BRL",
-        amountMinor: 22900,
-      },
-      US: {
-        country: "US",
-        currency: "USD",
-        amountMinor: 6900,
-      },
+      JP: price("JP", "JPY", 9980),
+      BR: price("BR", "BRL", 22900),
+      US: price("US", "USD", 6900),
     },
   },
 };
@@ -127,9 +122,20 @@ export function getPlanLimits(
 export function getPlanPrice(
   planId: PlanId,
   country: OperatingCountry,
+  billingInterval: BillingInterval = "monthly",
 ): RegionalPlanPrice {
-  return getPlanDefinition(planId)
-    .prices[country];
+  const regional =
+    getPlanDefinition(planId).prices[country];
+
+  return {
+    country,
+    currency: regional.currency,
+    amountMinor:
+      billingInterval === "annual"
+        ? regional.annualAmountMinor
+        : regional.monthlyAmountMinor,
+    billingInterval,
+  };
 }
 
 export function normalizePlanId(
@@ -139,4 +145,12 @@ export function normalizePlanId(
     value === "business"
     ? value
     : "starter";
+}
+
+export function normalizeBillingInterval(
+  value: unknown,
+): BillingInterval {
+  return value === "annual"
+    ? "annual"
+    : "monthly";
 }

@@ -14,21 +14,31 @@ import {
   type User,
 } from "firebase/auth";
 import {
-  doc,
+  addDoc,
+  collection,
+  getDocs,
+  limit,
+  orderBy,
+  query,
   serverTimestamp,
-  writeBatch,
   type DocumentData,
 } from "firebase/firestore";
 import {
+  CalendarDays,
   Check,
-  CreditCard,
-  Globe2,
+  Crown,
+  Gift,
+  Loader2,
 } from "lucide-react";
 
 import {
   auth,
   db,
 } from "@/app/lib/firebase";
+import {
+  accessIsActive,
+  getEffectiveSellerAccess,
+} from "@/app/lib/access-control";
 import {
   ensureUserProfile,
 } from "@/app/lib/ensureUserProfile";
@@ -39,6 +49,7 @@ import {
   getPlanDefinition,
   getPlanPrice,
   PLAN_IDS,
+  type BillingInterval,
   type PlanId,
 } from "@/app/lib/plan-catalog";
 import {
@@ -52,709 +63,621 @@ import {
 } from "@/app/lib/i18n";
 import type {
   OperatingCountry,
-  RegionalLocale,
-  SupportedCurrency,
 } from "@/app/types/regional";
 
-type SubscriptionStatus =
-  | "none"
+type RequestStatus =
   | "pending"
-  | "active"
-  | "past_due"
+  | "approved"
+  | "rejected"
   | "cancelled";
 
-type PlanRequestType =
-  | "new"
-  | "renew"
-  | "upgrade"
-  | "downgrade";
-
-type CommercialProfile = {
-  sellerId: string;
-  plan: PlanId;
-  subscriptionStatus: SubscriptionStatus;
-  requestedPlan?: PlanId;
-  planRequestStatus?: string;
-  active: boolean;
-  suspended: boolean;
-  operatingCountry: OperatingCountry;
-  currency: SupportedCurrency;
-  regionalLocale: RegionalLocale;
+type PlanRequest = {
+  id: string;
+  planId: PlanId;
+  billingInterval: BillingInterval;
+  status: RequestStatus;
+  amountMinor: number;
+  createdAt?: unknown;
 };
 
-function normalizeStatus(
-  value: unknown,
-): SubscriptionStatus {
-  switch (value) {
-    case "pending":
-    case "active":
-    case "past_due":
-    case "cancelled":
-    case "none":
-      return value;
+const ORDER: Record<PlanId, number> = {
+  starter: 1,
+  pro: 2,
+  business: 3,
+};
 
-    default:
-      return "none";
+function requestType(
+  currentPlan: PlanId,
+  requestedPlan: PlanId,
+  currentStatus: string,
+): "new" | "renew" | "upgrade" | "downgrade" {
+  if (currentStatus !== "active") {
+    return "new";
   }
-}
 
-function normalizePlan(
-  value: unknown,
-): PlanId {
-  return value === "pro" ||
-    value === "business"
-    ? value
-    : "starter";
-}
-
-function optionalPlan(
-  value: unknown,
-): PlanId | undefined {
-  return value === "starter" ||
-    value === "pro" ||
-    value === "business"
-    ? value
-    : undefined;
-}
-
-function requestTypeFor(
-  current: PlanId,
-  requested: PlanId,
-): PlanRequestType {
-  if (current === requested) {
+  if (currentPlan === requestedPlan) {
     return "renew";
   }
 
-  const rank: Record<PlanId, number> = {
-    starter: 1,
-    pro: 2,
-    business: 3,
-  };
-
-  return rank[requested] > rank[current]
+  return ORDER[requestedPlan] >
+    ORDER[currentPlan]
     ? "upgrade"
     : "downgrade";
 }
 
-function paymentMethods(
-  country: OperatingCountry,
-  language: "pt" | "en" | "ja",
-): string {
-  const values = {
-    JP: {
-      pt: "PayPay ou transferência bancária",
-      en: "PayPay or bank transfer",
-      ja: "PayPay または銀行振込",
-    },
-    BR: {
-      pt: "Pix ou transferência bancária",
-      en: "Pix or bank transfer",
-      ja: "Pix または銀行振込",
-    },
-    US: {
-      pt: "Transferência bancária ou método combinado com o suporte",
-      en: "Bank transfer or another method arranged with support",
-      ja: "銀行振込またはサポートと相談した方法",
-    },
-  } as const;
-
-  return values[country][language];
-}
-
-function buildCommercialProfile(
-  userData: DocumentData,
-  sellerData: DocumentData,
-): CommercialProfile | null {
-  const sellerId = String(
-    sellerData.sellerId ??
-      userData.sellerId ??
-      "",
-  ).trim();
-
-  const regional =
-    normalizeSellerRegionalProfile(
-      sellerData,
-      {
-        fallbackSellerId: sellerId,
-        fallbackLanguage:
-          userData.locale === "en" ||
-          userData.locale === "ja"
-            ? userData.locale
-            : "pt",
-      },
-    );
-
-  if (
-    !regional.onboardingComplete ||
-    !regional.operatingCountry ||
-    !regional.currency ||
-    !regional.regionalLocale
-  ) {
-    return null;
-  }
-
-  return {
-    sellerId,
-    // Compatibilidade: o admin atual ainda grava assinatura em users/{uid}.
-    plan: normalizePlan(
-      userData.plan ?? sellerData.plan,
-    ),
-    subscriptionStatus:
-      normalizeStatus(
-        userData.subscriptionStatus ??
-          sellerData.subscriptionStatus,
-      ),
-    requestedPlan: optionalPlan(
-      sellerData.requestedPlan ??
-        userData.requestedPlan,
-    ),
-    planRequestStatus:
-      typeof (
-        sellerData.planRequestStatus ??
-        userData.planRequestStatus
-      ) === "string"
-        ? String(
-            sellerData.planRequestStatus ??
-              userData.planRequestStatus,
-          )
-        : undefined,
-    active:
-      sellerData.active !== false &&
-      userData.active !== false,
-    suspended:
-      sellerData.suspended === true ||
-      userData.suspended === true,
-    operatingCountry:
-      regional.operatingCountry,
-    currency: regional.currency,
-    regionalLocale:
-      regional.regionalLocale,
-  };
-}
-
-export default function RentPage() {
+export default function SellerRentPage() {
   const router = useRouter();
-  const {
-    t,
-    lang,
-  } = useI18n();
+  const { lang } = useI18n();
 
-  const tt = useCallback(
-    (key: string, fallback: string) => {
-      const value = t(key);
-      return value === key
-        ? fallback
-        : value;
-    },
-    [t],
-  );
-
-  const [checking, setChecking] =
-    useState(true);
   const [user, setUser] =
     useState<User | null>(null);
-  const [profile, setProfile] =
-    useState<CommercialProfile | null>(
-      null,
-    );
-  const [busy, setBusy] =
-    useState(false);
-  const [message, setMessage] =
-    useState<string | null>(null);
-  const [error, setError] =
-    useState<string | null>(null);
-  const [confirmPlanId, setConfirmPlanId] =
+  const [sellerId, setSellerId] =
+    useState("");
+  const [seller, setSeller] =
+    useState<DocumentData | null>(null);
+  const [country, setCountry] =
+    useState<OperatingCountry>("JP");
+  const [billingInterval, setBillingInterval] =
+    useState<BillingInterval>("monthly");
+  const [pending, setPending] =
+    useState<PlanRequest | null>(null);
+  const [loading, setLoading] =
+    useState(true);
+  const [submitting, setSubmitting] =
     useState<PlanId | null>(null);
+  const [error, setError] =
+    useState("");
+  const [success, setSuccess] =
+    useState("");
+
+  const copy =
+    lang === "ja"
+      ? {
+          title: "プランを選択",
+          subtitle: "月額または年額を選択できます。年額は2か月分お得です。",
+          monthly: "月額",
+          annual: "年額",
+          annualBadge: "2か月無料",
+          events: "イベント",
+          products: "商品",
+          choose: "申し込む",
+          pending: "申請確認中",
+          active: "現在のアクセス",
+          lifetime: "Lifetimeアクセス",
+          lifetimeBody: "有効期限なし。管理者のみ付与・取り消しできます。",
+          loading: "プランを読み込んでいます…",
+          success: "申請を送信しました。",
+          error: "申請を送信できませんでした。",
+          current: "現在",
+          perMonth: "/月",
+          perYear: "/年",
+        }
+      : lang === "en"
+        ? {
+            title: "Choose your plan",
+            subtitle: "Choose monthly or annual. Annual includes two free months.",
+            monthly: "Monthly",
+            annual: "Annual",
+            annualBadge: "2 months free",
+            events: "events",
+            products: "products",
+            choose: "Request plan",
+            pending: "Request under review",
+            active: "Current access",
+            lifetime: "Lifetime access",
+            lifetimeBody: "No automatic expiration. Only an administrator can grant or revoke it.",
+            loading: "Loading plans…",
+            success: "Plan request submitted.",
+            error: "We could not submit the request.",
+            current: "Current",
+            perMonth: "/month",
+            perYear: "/year",
+          }
+        : {
+            title: "Escolha seu plano",
+            subtitle: "Escolha mensal ou anual. No anual, você recebe dois meses grátis.",
+            monthly: "Mensal",
+            annual: "Anual",
+            annualBadge: "2 meses grátis",
+            events: "eventos",
+            products: "produtos",
+            choose: "Solicitar plano",
+            pending: "Solicitação em análise",
+            active: "Acesso atual",
+            lifetime: "Acesso Lifetime",
+            lifetimeBody: "Sem vencimento automático. Somente o administrador pode conceder ou revogar.",
+            loading: "Carregando planos…",
+            success: "Solicitação enviada.",
+            error: "Não foi possível enviar a solicitação.",
+            current: "Atual",
+            perMonth: "/mês",
+            perYear: "/ano",
+          };
+
+  const loadPending = useCallback(
+    async (resolvedSellerId: string) => {
+      const snapshot =
+        await getDocs(
+          query(
+            collection(
+              db,
+              "sellers",
+              resolvedSellerId,
+              "planRequests",
+            ),
+            orderBy(
+              "createdAt",
+              "desc",
+            ),
+            limit(1),
+          ),
+        );
+
+      const document =
+        snapshot.docs[0];
+
+      if (!document) {
+        setPending(null);
+        return;
+      }
+
+      const data = document.data();
+
+      setPending({
+        id: document.id,
+        planId:
+          data.planId === "pro" ||
+          data.planId === "business"
+            ? data.planId
+            : "starter",
+        billingInterval:
+          data.billingInterval === "annual"
+            ? "annual"
+            : "monthly",
+        status:
+          data.status === "approved" ||
+          data.status === "rejected" ||
+          data.status === "cancelled"
+            ? data.status
+            : "pending",
+        amountMinor:
+          Number.isFinite(
+            data.amountMinor,
+          )
+            ? Number(
+                data.amountMinor,
+              )
+            : 0,
+        createdAt:
+          data.createdAt,
+      });
+    },
+    [],
+  );
+
+  const load = useCallback(
+    async (currentUser: User) => {
+      setLoading(true);
+      setError("");
+
+      try {
+        const result =
+          await ensureUserProfile(
+            currentUser,
+            lang,
+          );
+
+        if (
+          result.userDoc.role ===
+          "admin"
+        ) {
+          router.replace("/admin");
+          return;
+        }
+
+        const resolvedSellerId =
+          String(
+            result.userDoc.sellerId ??
+            currentUser.uid,
+          ).trim();
+
+        const regional =
+          normalizeSellerRegionalProfile(
+            result.sellerDoc,
+            {
+              fallbackSellerId:
+                resolvedSellerId,
+              fallbackLanguage: lang,
+            },
+          );
+
+        if (
+          !regional.onboardingComplete
+        ) {
+          router.replace(
+            "/seller/onboarding",
+          );
+          return;
+        }
+
+        if (
+          accessIsActive(
+            result.sellerDoc,
+            result.userDoc,
+          )
+        ) {
+          // Lifetime ou assinatura válida pode continuar vendo
+          // a página somente pelo redirecionamento do guard.
+        }
+
+        setUser(currentUser);
+        setSellerId(
+          resolvedSellerId,
+        );
+        setSeller(
+          result.sellerDoc,
+        );
+        setCountry(
+          regional.operatingCountry ??
+          "JP",
+        );
+
+        await loadPending(
+          resolvedSellerId,
+        );
+      } catch (loadError: unknown) {
+        console.error(
+          "[Rent] load:",
+          loadError,
+        );
+
+        setError(
+          loadError instanceof Error
+            ? loadError.message
+            : copy.error,
+        );
+      } finally {
+        setLoading(false);
+      }
+    },
+    [
+      copy.error,
+      lang,
+      loadPending,
+      router,
+    ],
+  );
 
   useEffect(() => {
     const unsubscribe =
       onAuthStateChanged(
         auth,
-        async (currentUser) => {
+        (currentUser) => {
           if (!currentUser) {
             router.replace("/login");
             return;
           }
 
-          setUser(currentUser);
-
-          try {
-            const ensured =
-              await ensureUserProfile(
-                currentUser,
-                lang,
-              );
-
-            if (
-              ensured.userDoc.role ===
-              "admin"
-            ) {
-              router.replace("/admin");
-              return;
-            }
-
-            const commercial =
-              buildCommercialProfile(
-                ensured.userDoc,
-                ensured.sellerDoc ?? {},
-              );
-
-            if (!commercial) {
-              router.replace(
-                "/seller/onboarding",
-              );
-              return;
-            }
-
-            setProfile(commercial);
-
-          } catch (loadError: any) {
-            console.error(
-              "[Rent] Falha ao carregar:",
-              loadError,
-            );
-            setError(
-              loadError?.message ||
-                tt(
-                  "guard.err.loadProfile",
-                  "Erro ao carregar perfil.",
-                ),
-            );
-          } finally {
-            setChecking(false);
-          }
+          void load(currentUser);
         },
       );
 
     return () => unsubscribe();
-  }, [lang, router, tt]);
+  }, [load, router]);
 
-  const plans = useMemo(() => {
-    if (!profile) return [];
-
-    return PLAN_IDS.map((planId) => {
-      const definition =
-        getPlanDefinition(planId);
-      const regionalPrice =
-        getPlanPrice(
-          planId,
-          profile.operatingCountry,
-        );
-
-      return {
-        id: planId,
-        name: tt(
-          `plan.${planId}.name`,
-          planId,
+  const access =
+    useMemo(
+      () =>
+        getEffectiveSellerAccess(
+          seller,
         ),
-        price: formatMoneyMinor(
-          regionalPrice.amountMinor,
-          regionalPrice.currency,
-          profile.regionalLocale,
-        ),
-        features: (
-          tt(
-            `plan.${planId}.features`,
-            "",
-          ) || ""
-        )
-          .split("\n")
-          .map((feature) =>
-            feature.replace(/^•\s*/, "").trim(),
-          )
-          .filter(Boolean),
-        limits: definition.limits,
-        regionalPrice,
-      };
-    });
-  }, [profile, tt]);
+      [seller],
+    );
 
-  const requestPlan = useCallback(
+  const locale =
+    getCountryDefinition(
+      country,
+    ).regionalLocale;
+
+  const submit = useCallback(
     async (planId: PlanId) => {
-      if (!user || !profile) return;
+      if (
+        !user ||
+        !sellerId ||
+        (
+          access.mode === "lifetime" &&
+          access.status === "active"
+        )
+      ) {
+        return;
+      }
 
-      const selected = plans.find(
-        (plan) => plan.id === planId,
-      );
-
-      if (!selected) return;
-
-      setBusy(true);
-      setError(null);
-      setMessage(null);
+      setSubmitting(planId);
+      setError("");
+      setSuccess("");
 
       try {
-        const requestType =
-          profile.subscriptionStatus ===
-            "none" &&
-          !profile.requestedPlan
-            ? "new"
-            : requestTypeFor(
-                profile.plan,
-                planId,
-              );
+        const definition =
+          getPlanDefinition(planId);
+        const price =
+          getPlanPrice(
+            planId,
+            country,
+            billingInterval,
+          );
 
-        const requestedAt =
-          serverTimestamp();
-
-        const requestSnapshot = {
-          requestedPlan: planId,
-          planRequestType: requestType,
-          planRequestStatus: "pending",
-          requestedPlanAt: requestedAt,
-
-          requestedCountry:
-            selected.regionalPrice.country,
-          requestedCurrency:
-            selected.regionalPrice.currency,
-          requestedAmountMinor:
-            selected.regionalPrice.amountMinor,
-
-          requestedLimits: {
-            ...selected.limits,
-          },
-          updatedAt: requestedAt,
-          updatedBy: user.uid,
-        };
-
-        const batch = writeBatch(db);
-
-        batch.set(
-          doc(
+        await addDoc(
+          collection(
             db,
             "sellers",
-            profile.sellerId,
+            sellerId,
+            "planRequests",
           ),
-          requestSnapshot,
           {
-            merge: true,
+            schemaVersion: 2,
+            sellerId,
+            ownerUid: user.uid,
+
+            planId,
+            billingInterval,
+            requestType:
+              requestType(
+                access.planId,
+                planId,
+                access.status,
+              ),
+            status:
+              "pending" as const,
+
+            country:
+              price.country,
+            currency:
+              price.currency,
+            amountMinor:
+              price.amountMinor,
+            limitsSnapshot:
+              definition.limits,
+
+            createdAt:
+              serverTimestamp(),
+            createdBy:
+              user.uid,
+            updatedAt:
+              serverTimestamp(),
+            updatedBy:
+              user.uid,
+
+            reviewedAt: null,
+            reviewedBy: null,
+            reviewNote: null,
           },
         );
 
-        // Espelho temporário para o admin legado.
-        batch.set(
-          doc(db, "users", user.uid),
-          requestSnapshot,
-          {
-            merge: true,
-          },
+        setSuccess(copy.success);
+        await loadPending(
+          sellerId,
         );
-
-        await batch.commit();
-
-        setProfile((current) =>
-          current
-            ? {
-                ...current,
-                requestedPlan: planId,
-                planRequestStatus:
-                  "pending",
-              }
-            : current,
-        );
-
-        setMessage(
-          tt(
-            "rent.requested",
-            "Solicitação enviada! Aguarde a ativação.",
-          ),
-        );
-      } catch (requestError: any) {
+      } catch (submitError: unknown) {
         console.error(
-          "[Rent] Falha ao solicitar plano:",
-          requestError,
+          "[Rent] submit:",
+          submitError,
         );
+
         setError(
-          requestError?.message ||
-            tt(
-              "settings.err.save",
-              "Falha ao solicitar plano.",
-            ),
+          submitError instanceof Error
+            ? submitError.message
+            : copy.error,
         );
       } finally {
-        setBusy(false);
+        setSubmitting(null);
       }
-    }, [plans, profile, tt, user]);
+    },
+    [
+      access.mode,
+      access.planId,
+      access.status,
+      billingInterval,
+      copy.error,
+      copy.success,
+      country,
+      loadPending,
+      sellerId,
+      user,
+    ],
+  );
 
-  if (checking || !profile) {
+  if (loading) {
     return (
-      <main className="flex min-h-[75vh] items-center justify-center bg-white dark:bg-neutral-950">
-        <div className="h-9 w-9 animate-spin rounded-full border-4 border-neutral-200 border-t-black dark:border-neutral-800 dark:border-t-white" />
+      <main className="flex min-h-[65vh] items-center justify-center">
+        <p className="text-sm font-bold text-neutral-500">
+          {copy.loading}
+        </p>
       </main>
     );
   }
 
-  const countryDefinition =
-    getCountryDefinition(
-      profile.operatingCountry,
-    );
-
   return (
-    <main className="min-h-screen bg-neutral-50 pb-20 transition-colors dark:bg-neutral-950">
-      <div className="mx-auto max-w-6xl space-y-8 px-4 pt-8 sm:px-6">
-        <header className="space-y-4 text-center sm:text-left">
-          <div className="inline-flex items-center gap-2 rounded-full border border-neutral-200 bg-white px-3 py-1.5 text-xs font-bold text-neutral-700 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-300">
-            <Globe2
-              className="h-4 w-4"
-              aria-hidden="true"
-            />
-            {countryDefinition.label[lang]}
-            <span className="text-neutral-400">·</span>
-            {profile.currency}
-          </div>
+    <main className="mx-auto w-full max-w-6xl px-4 py-8">
+      <header className="mx-auto max-w-3xl text-center">
+        <h1 className="text-3xl font-black tracking-tight sm:text-4xl">
+          {copy.title}
+        </h1>
+        <p className="mt-3 text-sm font-medium text-neutral-600 dark:text-neutral-400">
+          {copy.subtitle}
+        </p>
 
-          <div>
-            <h1 className="text-3xl font-black tracking-tight text-neutral-900 dark:text-white">
-              {tt(
-                "rent.title",
-                "Planos de acesso",
+        <div className="mx-auto mt-6 inline-flex rounded-2xl border border-neutral-200 bg-neutral-100 p-1 dark:border-neutral-800 dark:bg-neutral-900">
+          {(
+            [
+              "monthly",
+              "annual",
+            ] as BillingInterval[]
+          ).map((interval) => (
+            <button
+              key={interval}
+              type="button"
+              onClick={() =>
+                setBillingInterval(
+                  interval,
+                )
+              }
+              className={`rounded-xl px-5 py-2.5 text-sm font-black transition ${
+                billingInterval === interval
+                  ? "bg-white text-black shadow dark:bg-white"
+                  : "text-neutral-500"
+              }`}
+            >
+              {interval === "annual"
+                ? copy.annual
+                : copy.monthly}
+              {interval === "annual" && (
+                <span className="ml-2 rounded-full bg-green-100 px-2 py-0.5 text-[10px] text-green-700">
+                  {copy.annualBadge}
+                </span>
               )}
-            </h1>
-            <p className="mt-2 max-w-2xl text-sm font-medium text-neutral-500 dark:text-neutral-400">
-              {tt(
-                "rent.subtitle",
-                "Selecione a assinatura ideal para expandir suas vendas e gerenciar seus pedidos.",
-              )}
-            </p>
-          </div>
-        </header>
-
-        {(message || error) && (
-          <div
-            role="status"
-            className={`rounded-2xl border px-4 py-3.5 text-sm font-bold ${
-              error
-                ? "border-red-200 bg-red-50 text-red-700 dark:border-red-900/30 dark:bg-red-950/20 dark:text-red-400"
-                : "border-green-200 bg-green-50 text-green-700 dark:border-green-900/30 dark:bg-green-950/20 dark:text-green-400"
-            }`}
-          >
-            {error ?? message}
-          </div>
-        )}
-
-        <div className="grid gap-6 lg:grid-cols-3">
-          {plans.map((plan) => {
-            const isCurrent =
-              profile.plan === plan.id;
-            const isPending =
-              profile.planRequestStatus ===
-                "pending" &&
-              profile.requestedPlan ===
-                plan.id;
-
-            return (
-              <article
-                key={plan.id}
-                className={`relative flex flex-col rounded-[2rem] border p-6 transition ${
-                  isCurrent
-                    ? "border-black bg-neutral-950 text-white shadow-xl dark:border-white"
-                    : "border-neutral-200 bg-white text-neutral-900 shadow-sm hover:-translate-y-1 hover:shadow-lg dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-100"
-                }`}
-              >
-                {isPending && (
-                  <div className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-amber-400 px-4 py-1.5 text-xs font-black text-black shadow">
-                    {tt(
-                      "rent.status.pending",
-                      "Pendente",
-                    )}
-                  </div>
-                )}
-
-                <div className="space-y-3">
-                  <h2 className="text-sm font-black uppercase tracking-wider opacity-60">
-                    {plan.name}
-                  </h2>
-                  <p className="text-4xl font-black tracking-tight">
-                    {plan.price}
-                  </p>
-                  <p className="text-xs font-semibold opacity-60">
-                    {t("rent.price.month")}
-                  </p>
-                </div>
-
-                <ul className="my-6 flex-1 space-y-3 border-t border-current/10 pt-5">
-                  {plan.features.map(
-                    (feature) => (
-                      <li
-                        key={feature}
-                        className="flex items-start gap-2.5 text-sm font-semibold"
-                      >
-                        <Check
-                          className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500"
-                          aria-hidden="true"
-                        />
-                        <span>{feature}</span>
-                      </li>
-                    ),
-                  )}
-                </ul>
-
-                <button
-                  type="button"
-                  disabled={busy || isPending}
-                  onClick={() =>
-                    setConfirmPlanId(plan.id)
-                  }
-                  className={`min-h-12 w-full rounded-2xl px-4 text-sm font-black transition disabled:cursor-not-allowed disabled:opacity-40 ${
-                    isCurrent
-                      ? "bg-white text-black hover:bg-neutral-100"
-                      : "bg-black text-white hover:opacity-85 dark:bg-white dark:text-black"
-                  }`}
-                >
-                  {isPending
-                    ? tt(
-                        "rent.requested",
-                        "Solicitado",
-                      )
-                    : isCurrent
-                      ? tt(
-                          "rent.currentPlan",
-                          "Plano atual",
-                        )
-                      : tt(
-                          "rent.requestPlan",
-                          "Escolher este",
-                        )}
-                </button>
-              </article>
-            );
-          })}
+            </button>
+          ))}
         </div>
+      </header>
 
-        <section className="grid gap-5 rounded-[2rem] border border-amber-200 bg-amber-50 p-6 dark:border-amber-900/30 dark:bg-amber-950/20 md:grid-cols-[auto_1fr]">
-          <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-400 text-black">
-            <CreditCard
-              className="h-6 w-6"
-              aria-hidden="true"
-            />
-          </span>
-
-          <div>
-            <h2 className="text-sm font-black text-amber-950 dark:text-amber-200">
-              {tt(
-                "rent.payment.title",
-                "Formas de pagamento",
-              )}
-            </h2>
-            <p className="mt-2 text-sm font-semibold text-amber-800 dark:text-amber-300">
-              {paymentMethods(
-                profile.operatingCountry,
-                lang,
-              )}
-            </p>
-            <p className="mt-2 text-xs font-medium leading-relaxed text-amber-700 dark:text-amber-400">
-              {tt(
-                "rent.payment.note",
-                "Após o pagamento, o admin ativa seu plano e libera o acesso ao painel.",
-              )}
-            </p>
-          </div>
-        </section>
-
-        <section className="rounded-[2rem] border border-red-200 bg-red-50 p-6 dark:border-red-900/30 dark:bg-red-950/10">
-          <h2 className="text-sm font-black text-red-900 dark:text-red-300">
-            {tt(
-              "rent.dataPolicy.title",
-              "Política de dados e inatividade",
-            )}
-          </h2>
-          <p className="mt-2 text-sm font-medium leading-relaxed text-red-800 dark:text-red-300">
-            {tt(
-              "rent.dataPolicy.body",
-              "Contas sem assinatura ativa por mais de 30 dias poderão ser excluídas permanentemente.",
-            )}
-          </p>
-        </section>
-
-        {confirmPlanId && (
-          <div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="plan-confirm-title"
-          >
-            <div className="w-full max-w-md space-y-5 rounded-[2rem] border border-neutral-200 bg-white p-6 shadow-2xl dark:border-neutral-800 dark:bg-neutral-900">
+      {access.mode === "lifetime" &&
+        access.status === "active" && (
+          <section className="mx-auto mt-8 max-w-3xl rounded-3xl border border-violet-200 bg-violet-50 p-6 dark:border-violet-900/40 dark:bg-violet-950/20">
+            <div className="flex items-start gap-4">
+              <Gift className="mt-1 h-6 w-6 text-violet-600" />
               <div>
-                <h2
-                  id="plan-confirm-title"
-                  className="text-xl font-black text-neutral-900 dark:text-white"
-                >
-                  {tt(
-                    "rent.confirm.title",
-                    "Confirmar solicitação",
-                  )}
+                <p className="text-xs font-black uppercase tracking-widest text-violet-600">
+                  {copy.active}
+                </p>
+                <h2 className="mt-1 text-xl font-black">
+                  {copy.lifetime} · {access.planId.toUpperCase()}
                 </h2>
-
-                <p className="mt-2 text-sm font-medium leading-relaxed text-neutral-500 dark:text-neutral-400">
-                  {tt(
-                    "rent.confirm.body",
-                    "Confirme o plano e o preço regional apresentados.",
-                  )}
+                <p className="mt-2 text-sm text-neutral-600 dark:text-neutral-400">
+                  {copy.lifetimeBody}
                 </p>
               </div>
-
-              {(() => {
-                const selected = plans.find(
-                  (plan) =>
-                    plan.id ===
-                    confirmPlanId,
-                );
-
-                if (!selected) return null;
-
-                return (
-                  <div className="rounded-2xl border border-neutral-200 bg-neutral-50 p-4 dark:border-neutral-700 dark:bg-neutral-950">
-                    <p className="text-sm font-black text-neutral-900 dark:text-white">
-                      {selected.name}
-                    </p>
-                    <p className="mt-1 text-2xl font-black text-neutral-950 dark:text-white">
-                      {selected.price}
-                    </p>
-                    <p className="mt-1 text-xs font-semibold text-neutral-500">
-                      {countryDefinition.label[lang]} · {selected.regionalPrice.currency}
-                    </p>
-                  </div>
-                );
-              })()}
-
-              <div className="flex gap-3">
-                <button
-                  type="button"
-                  onClick={() =>
-                    setConfirmPlanId(null)
-                  }
-                  className="min-h-12 flex-1 rounded-2xl border border-neutral-200 text-sm font-black text-neutral-700 dark:border-neutral-700 dark:text-neutral-300"
-                >
-                  {t("common.cancel")}
-                </button>
-
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => {
-                    const planId =
-                      confirmPlanId;
-                    setConfirmPlanId(null);
-                    void requestPlan(planId);
-                  }}
-                  className="min-h-12 flex-1 rounded-2xl bg-black text-sm font-black text-white disabled:opacity-40 dark:bg-white dark:text-black"
-                >
-                  {busy
-                    ? t("common.saving")
-                    : tt(
-                        "rent.confirm.accept",
-                        "Confirmar",
-                      )}
-                </button>
-              </div>
             </div>
-          </div>
+          </section>
         )}
 
-        <footer className="pb-8 text-center text-xs font-bold text-neutral-400">
-          Yamada Order System
-        </footer>
+      {pending?.status === "pending" && (
+        <section className="mx-auto mt-6 max-w-3xl rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm font-bold text-amber-800 dark:border-amber-900/40 dark:bg-amber-950/20 dark:text-amber-200">
+          {copy.pending}:{" "}
+          {pending.planId.toUpperCase()} ·{" "}
+          {pending.billingInterval === "annual"
+            ? copy.annual
+            : copy.monthly} ·{" "}
+          {formatMoneyMinor(
+            pending.amountMinor,
+            getPlanPrice(
+              pending.planId,
+              country,
+              pending.billingInterval,
+            ).currency,
+            locale,
+          )}
+        </section>
+      )}
+
+      <div className="mt-10 grid gap-5 lg:grid-cols-3">
+        {PLAN_IDS.map((planId) => {
+          const definition =
+            getPlanDefinition(planId);
+          const price =
+            getPlanPrice(
+              planId,
+              country,
+              billingInterval,
+            );
+          const current =
+            access.planId === planId &&
+            access.status === "active";
+
+          return (
+            <article
+              key={planId}
+              className={`relative rounded-[2rem] border bg-white p-6 shadow-sm dark:bg-neutral-950 ${
+                planId === "pro"
+                  ? "border-orange-400 ring-4 ring-orange-500/10"
+                  : "border-neutral-200 dark:border-neutral-800"
+              }`}
+            >
+              {planId === "business" && (
+                <Crown className="absolute right-5 top-5 h-5 w-5 text-amber-500" />
+              )}
+
+              <h2 className="text-2xl font-black capitalize">
+                {planId}
+              </h2>
+
+              <p className="mt-5 text-3xl font-black">
+                {formatMoneyMinor(
+                  price.amountMinor,
+                  price.currency,
+                  locale,
+                )}
+                <span className="ml-1 text-xs font-bold text-neutral-400">
+                  {billingInterval === "annual"
+                    ? copy.perYear
+                    : copy.perMonth}
+                </span>
+              </p>
+
+              <ul className="mt-6 space-y-3 text-sm font-semibold text-neutral-600 dark:text-neutral-400">
+                <li className="flex gap-2">
+                  <Check className="h-4 w-4 text-green-600" />
+                  {definition.limits.maxEvents} {copy.events}
+                </li>
+                <li className="flex gap-2">
+                  <Check className="h-4 w-4 text-green-600" />
+                  {definition.limits.maxProducts} {copy.products}
+                </li>
+                <li className="flex gap-2">
+                  <CalendarDays className="h-4 w-4 text-green-600" />
+                  {billingInterval === "annual"
+                    ? copy.annualBadge
+                    : copy.monthly}
+                </li>
+              </ul>
+
+              <button
+                type="button"
+                onClick={() =>
+                  void submit(planId)
+                }
+                disabled={
+                  submitting !== null ||
+                  pending?.status ===
+                    "pending" ||
+                  (
+                    access.mode === "lifetime" &&
+                    access.status === "active"
+                  )
+                }
+                className="mt-8 flex w-full items-center justify-center gap-2 rounded-2xl bg-black py-3.5 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-50 dark:bg-white dark:text-black"
+              >
+                {submitting === planId
+                  ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  )
+                  : current
+                    ? copy.current
+                    : copy.choose}
+              </button>
+            </article>
+          );
+        })}
       </div>
+
+      {(error || success) && (
+        <p className={`mx-auto mt-6 max-w-3xl rounded-2xl border p-4 text-sm font-bold ${
+          error
+            ? "border-red-200 bg-red-50 text-red-700"
+            : "border-green-200 bg-green-50 text-green-700"
+        }`}>
+          {error || success}
+        </p>
+      )}
     </main>
   );
 }
