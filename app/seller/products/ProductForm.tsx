@@ -37,6 +37,10 @@ type Props = {
   setLowStockThreshold: (value: string) => void;
   inventoryTracked: boolean;
   setInventoryTracked: (value: boolean) => void;
+  postalEligible: boolean;
+  setPostalEligible: (value: boolean) => void;
+  shippingWeightGrams: string;
+  setShippingWeightGrams: (value: string) => void;
   status: ProductStatus;
   setStatus: (value: ProductStatus) => void;
   existingImageUrl: string;
@@ -71,16 +75,17 @@ export default function ProductForm(props: Props) {
     setLegacyName, content, setContent, costPrice, setCostPrice, sellPrice,
     setSellPrice, quantity, setQuantity, stockQty, setStockQty,
     lowStockThreshold, setLowStockThreshold, inventoryTracked,
-    setInventoryTracked, status, setStatus, existingImageUrl,
+    setInventoryTracked, postalEligible, setPostalEligible,
+    shippingWeightGrams, setShippingWeightGrams, status, setStatus, existingImageUrl,
     existingExtraUrls, mainPreview, extraPreviews, onPickMain, onPickExtras,
     removeExistingExtra, clearSelectedExtras,
   } = props;
 
   const copy = lang === "ja"
-    ? { translations: "商品内容（多言語）", defaultName: "標準商品名", short: "短い説明", details: "詳細", ingredients: "原材料", allergens: "アレルゲン", units: "販売単位", stock: "在庫数", threshold: "在庫不足の基準", track: "在庫を管理する", main: "メイン画像", extras: "追加画像", current: "現在の画像（クリックで削除）", queue: "アップロード予定", creating: "作成中...", madeToOrder: "受注生産", madeToOrderHelp: "通常在庫ではなく、事前予約で販売する商品です。" }
+    ? { translations: "商品内容（多言語）", defaultName: "標準商品名", short: "短い説明", details: "詳細", ingredients: "原材料", allergens: "アレルゲン", units: "販売単位", stock: "在庫数", threshold: "在庫不足の基準", track: "在庫を管理する", main: "メイン画像", extras: "追加画像", current: "現在の画像（クリックで削除）", queue: "アップロード予定", creating: "作成中...", madeToOrder: "受注生産", madeToOrderHelp: "通常在庫ではなく、事前予約で販売する商品です。", postal: "郵送対象", postalHelp: "この商品を通常ストアから郵送できます。", weight: "発送重量 (g)", weightHelp: "重量別送料を使う場合に必要です。梱包後のおおよその重量を入力してください。" }
     : lang === "en"
-      ? { translations: "Multilingual product content", defaultName: "Default product name", short: "Short description", details: "Details", ingredients: "Ingredients", allergens: "Allergens", units: "Units per sale", stock: "Available stock", threshold: "Low-stock threshold", track: "Track inventory", main: "Main image", extras: "Extra images", current: "Current images (click to remove)", queue: "Upload queue", creating: "Creating...", madeToOrder: "Made to order", madeToOrderHelp: "This item is sold by advance reservation rather than regular stock." }
-      : { translations: "Conteúdo multilíngue do produto", defaultName: "Nome padrão do produto", short: "Descrição curta", details: "Detalhes", ingredients: "Ingredientes", allergens: "Alérgenos", units: "Unidades por venda", stock: "Estoque disponível", threshold: "Limite de estoque baixo", track: "Controlar estoque", main: "Imagem principal", extras: "Imagens extras", current: "Imagens atuais (clique para remover)", queue: "Fila de upload", creating: "Criando...", madeToOrder: "Sob encomenda", madeToOrderHelp: "Este item é vendido mediante reserva antecipada, fora do estoque comum." };
+      ? { translations: "Multilingual product content", defaultName: "Default product name", short: "Short description", details: "Details", ingredients: "Ingredients", allergens: "Allergens", units: "Units per sale", stock: "Available stock", threshold: "Low-stock threshold", track: "Track inventory", main: "Main image", extras: "Extra images", current: "Current images (click to remove)", queue: "Upload queue", creating: "Creating...", madeToOrder: "Made to order", madeToOrderHelp: "This item is sold by advance reservation rather than regular stock.", postal: "Postal eligible", postalHelp: "This product may be shipped from the permanent store.", weight: "Shipping weight (g)", weightHelp: "Required for weight-based shipping. Enter the approximate packed weight." }
+      : { translations: "Conteúdo multilíngue do produto", defaultName: "Nome padrão do produto", short: "Descrição curta", details: "Detalhes", ingredients: "Ingredientes", allergens: "Alérgenos", units: "Unidades por venda", stock: "Estoque disponível", threshold: "Limite de estoque baixo", track: "Controlar estoque", main: "Imagem principal", extras: "Imagens extras", current: "Imagens atuais (clique para remover)", queue: "Fila de upload", creating: "Criando...", madeToOrder: "Sob encomenda", madeToOrderHelp: "Este item é vendido mediante reserva antecipada, fora do estoque comum.", postal: "Disponível para envio por correio", postalHelp: "Permite enviar este produto pela Store permanente.", weight: "Peso para envio (g)", weightHelp: "Necessário para frete por peso. Informe o peso aproximado já considerando a embalagem." };
 
   const updateContent = (language: ProductLanguage, field: keyof ProductContent[ProductLanguage], value: string) => {
     setContent({ ...content, [language]: { ...content[language], [field]: value } });
@@ -130,6 +135,23 @@ export default function ProductForm(props: Props) {
     <div className="space-y-1"><label className="text-xs font-black uppercase tracking-wider">{copy.stock}</label><input value={stockQty} onChange={(e) => setStockQty(e.target.value)} inputMode="numeric" disabled={disabled || !inventoryTracked} className={fieldClass(Boolean(errors.stockQty))} /><FieldError message={errors.stockQty} /></div>
     <div className="space-y-1"><label className="text-xs font-black uppercase tracking-wider">{copy.threshold}</label><input value={lowStockThreshold} onChange={(e) => setLowStockThreshold(e.target.value)} inputMode="numeric" disabled={disabled || !inventoryTracked} className={fieldClass(Boolean(errors.lowStockThreshold))} /><FieldError message={errors.lowStockThreshold} /></div>
     <div className="flex items-center gap-3 rounded-xl border border-neutral-200 px-3 dark:border-neutral-800"><input id="inventory-tracked" type="checkbox" checked={inventoryTracked} onChange={(e) => setInventoryTracked(e.target.checked)} disabled={disabled} /><label htmlFor="inventory-tracked" className="py-3 text-sm font-bold">{copy.track}</label></div>
+
+    <section className="space-y-3 rounded-2xl border border-blue-200 bg-blue-50/60 p-4 dark:border-blue-900/50 dark:bg-blue-950/20 sm:col-span-2">
+      <label className="flex cursor-pointer items-center justify-between gap-4">
+        <div>
+          <p className="text-sm font-black">{copy.postal}</p>
+          <p className="mt-1 text-xs font-semibold text-blue-800/80 dark:text-blue-200/80">{copy.postalHelp}</p>
+        </div>
+        <input type="checkbox" checked={postalEligible} onChange={(e) => setPostalEligible(e.target.checked)} disabled={disabled} className="h-5 w-5 accent-blue-700" />
+      </label>
+      {postalEligible && <div className="space-y-1">
+        <label className="text-xs font-black uppercase tracking-wider">{copy.weight}</label>
+        <input value={shippingWeightGrams} onChange={(e) => setShippingWeightGrams(e.target.value)} inputMode="numeric" disabled={disabled} placeholder="500" className={fieldClass(Boolean(errors.shippingWeightGrams))} />
+        <p className="text-[11px] font-semibold text-neutral-500 dark:text-neutral-400">{copy.weightHelp}</p>
+        <FieldError message={errors.shippingWeightGrams} />
+      </div>}
+    </section>
+
     <div className="space-y-1 sm:col-span-2">
       <label className="text-xs font-black uppercase tracking-wider">{t("products.form.status")}</label>
       <select value={status} onChange={(e) => setStatus(e.target.value as ProductStatus)} disabled={disabled} className={`${fieldClass()} h-[46px]`}>

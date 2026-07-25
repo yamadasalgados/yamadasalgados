@@ -75,6 +75,11 @@ export const STORE_ORDER_TEXT = {
     subtotal: "Subtotal",
     discount: "Desconto",
     deliveryFee: "Taxa de entrega",
+    shippingFee: "Frete",
+    shippingCollect: "Frete a cobrar",
+    shippingArrange: "Frete a combinar",
+    totalWeight: "Peso estimado",
+    recipient: "Destinatário",
     total: "Total",
     history: "Histórico",
     historyEmpty: "Nenhuma alteração registrada.",
@@ -90,6 +95,7 @@ export const STORE_ORDER_TEXT = {
     dateAndTime: "Data e horário",
     pickup: "Retirada",
     delivery: "Entrega",
+    postal: "Correio",
     none: "A combinar",
     authRequired: "Você precisa entrar na conta do vendedor.",
     invalidOrderId: "O identificador do pedido é inválido.",
@@ -122,6 +128,11 @@ export const STORE_ORDER_TEXT = {
     subtotal: "Subtotal",
     discount: "Discount",
     deliveryFee: "Delivery fee",
+    shippingFee: "Shipping",
+    shippingCollect: "Shipping paid on delivery",
+    shippingArrange: "Shipping to be arranged",
+    totalWeight: "Estimated weight",
+    recipient: "Recipient",
     total: "Total",
     history: "History",
     historyEmpty: "No changes have been recorded.",
@@ -137,6 +148,7 @@ export const STORE_ORDER_TEXT = {
     dateAndTime: "Date and time",
     pickup: "Pickup",
     delivery: "Delivery",
+    postal: "Postal shipping",
     none: "To be arranged",
     authRequired: "You must sign in to the seller account.",
     invalidOrderId: "The order identifier is invalid.",
@@ -169,6 +181,11 @@ export const STORE_ORDER_TEXT = {
     subtotal: "小計",
     discount: "割引",
     deliveryFee: "配送料",
+    shippingFee: "送料",
+    shippingCollect: "送料着払い",
+    shippingArrange: "送料要相談",
+    totalWeight: "推定重量",
+    recipient: "受取人",
     total: "合計",
     history: "履歴",
     historyEmpty: "変更履歴はありません。",
@@ -184,6 +201,7 @@ export const STORE_ORDER_TEXT = {
     dateAndTime: "日時",
     pickup: "受取",
     delivery: "配達",
+    postal: "郵送",
     none: "要相談",
     authRequired: "販売者アカウントにログインしてください。",
     invalidOrderId: "注文IDが無効です。",
@@ -273,12 +291,17 @@ export function getDeliveryModeLabel(
     return text.delivery;
   }
 
+  if (mode === "postal") {
+    return text.postal;
+  }
+
   return text.none;
 }
 
 export function formatStoreOrderCurrency(
   value: number | undefined,
   localeOrLanguage?: string,
+  currency: "JPY" | "BRL" | "USD" = "JPY",
 ): string {
   return new Intl.NumberFormat(
     getStoreOrderLocale(
@@ -286,8 +309,8 @@ export function formatStoreOrderCurrency(
     ),
     {
       style: "currency",
-      currency: "JPY",
-      maximumFractionDigits: 0,
+      currency,
+      maximumFractionDigits: currency === "JPY" ? 0 : 2,
     },
   ).format(value ?? 0);
 }

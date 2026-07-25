@@ -252,7 +252,65 @@ export default function CustomerCard({
           </div>
         </div>
 
-        {(order.address ||
+        {order.deliveryMode === "postal" && order.shipping && (
+          <div className="rounded-2xl border border-sky-200 bg-sky-50 p-4 dark:border-sky-900/60 dark:bg-sky-950/25">
+            <div className="flex items-start gap-3">
+              <Mail
+                className="mt-1 shrink-0 text-sky-600 dark:text-sky-300"
+                size={20}
+              />
+
+              <div className="min-w-0 space-y-3">
+                <div>
+                  <p className="text-xs font-bold uppercase text-sky-700 dark:text-sky-300">
+                    {text.recipient}
+                  </p>
+                  <p className="mt-1 font-black">
+                    {order.shipping.recipientName || order.customerName || "—"}
+                  </p>
+                </div>
+
+                <div>
+                  <p className="text-xs font-bold uppercase text-sky-700 dark:text-sky-300">
+                    {text.address}
+                  </p>
+                  <p className="mt-1 whitespace-pre-wrap break-words font-medium">
+                    {[
+                      order.shipping.postalCode,
+                      order.shipping.prefecture,
+                      order.shipping.city,
+                      order.shipping.addressLine1,
+                      order.shipping.addressLine2,
+                    ].filter(Boolean).join(" ") || order.address || "—"}
+                  </p>
+                </div>
+
+                <div className="text-xs font-bold text-sky-800 dark:text-sky-200">
+                  {order.shipping.pricingMode === "collect"
+                    ? text.shippingCollect
+                    : order.shipping.pricingMode === "arrange"
+                      ? text.shippingArrange
+                      : text.shippingFee}
+                  {typeof order.shipping.totalWeightGrams === "number" && (
+                    <>
+                      {" · "}{text.totalWeight}: {order.shipping.totalWeightGrams >= 1000
+                        ? `${(order.shipping.totalWeightGrams / 1000).toLocaleString(locale, { maximumFractionDigits: 2 })} kg`
+                        : `${order.shipping.totalWeightGrams} g`}
+                    </>
+                  )}
+                </div>
+
+                {order.shipping.instructions && (
+                  <p className="whitespace-pre-wrap text-xs text-sky-800 dark:text-sky-200">
+                    {order.shipping.instructions}
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {order.deliveryMode !== "postal" && (order.address ||
           order.locationLink) && (
           <div className="rounded-2xl border border-neutral-200 bg-white p-4 dark:border-neutral-700 dark:bg-neutral-950/40">
             <div className="flex items-start justify-between gap-3">

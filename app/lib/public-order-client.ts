@@ -1,6 +1,6 @@
 export type PublicOrderSource = "store" | "event";
 export type PublicOrderLanguage = "pt" | "en" | "ja";
-export type PublicOrderDeliveryMode = "pickup" | "delivery" | "none";
+export type PublicOrderDeliveryMode = "pickup" | "delivery" | "postal" | "none";
 
 export type PublicOrderErrorCode =
   | "INVALID_REQUEST"
@@ -8,6 +8,7 @@ export type PublicOrderErrorCode =
   | "EVENT_UNAVAILABLE"
   | "PRODUCT_UNAVAILABLE"
   | "OFFER_UNAVAILABLE"
+  | "SHIPPING_UNAVAILABLE"
   | "IDEMPOTENCY_CONFLICT"
   | "TOO_MANY_REQUESTS"
   | "NETWORK_ERROR"
@@ -33,6 +34,14 @@ export type CreatePublicOrderInput = {
     address?: string;
     locationLink?: string;
     note?: string;
+    shipping?: {
+      recipientName: string;
+      postalCode: string;
+      prefecture: string;
+      city: string;
+      addressLine1: string;
+      addressLine2?: string;
+    };
   };
 };
 
@@ -44,9 +53,11 @@ export type CreatePublicOrderResult = {
   currency: "JPY" | "BRL" | "USD";
   subtotalMinor: number;
   discountMinor: number;
+  shippingFeeMinor: number;
   totalAmountMinor: number;
   subtotal: number;
   discount: number;
+  shippingFee: number;
   totalAmount: number;
   orderStatus: "pending" | "ready";
   replayed: boolean;
@@ -154,6 +165,7 @@ function isKnownErrorCode(value: unknown): value is PublicOrderErrorCode {
     value === "EVENT_UNAVAILABLE" ||
     value === "PRODUCT_UNAVAILABLE" ||
     value === "OFFER_UNAVAILABLE" ||
+    value === "SHIPPING_UNAVAILABLE" ||
     value === "IDEMPOTENCY_CONFLICT" ||
     value === "TOO_MANY_REQUESTS" ||
     value === "NETWORK_ERROR" ||

@@ -1,5 +1,6 @@
 import type { Timestamp } from "firebase/firestore";
 import type { ProductContent } from "@/app/lib/product-schema";
+import type { ProductShipping } from "@/app/lib/shipping-schema";
 
 export type CategoryId = string;
 export type ProductStatus = "active" | "made_to_order" | "inactive";
@@ -33,6 +34,9 @@ export type ProductDoc = {
   inventory: ProductInventory;
   stockQty: number;
   lowStockThreshold: number;
+  shipping: ProductShipping;
+  postalEligible: boolean;
+  shippingWeightGrams: number | null;
   status: ProductStatus;
   imageUrl: string;
   extraImageUrls?: string[];
@@ -46,6 +50,7 @@ export type ProductFormField =
   | "quantity"
   | "stockQty"
   | "lowStockThreshold"
+  | "shippingWeightGrams"
   | "image";
 
 export type ProductFormErrors = Partial<Record<ProductFormField, string>>;

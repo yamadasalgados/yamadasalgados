@@ -68,15 +68,18 @@ export default function ItemsCard({
   const discount =
     order?.discount ?? 0;
 
-  const deliveryFee =
-    order?.deliveryFee ?? 0;
+  const shippingFee =
+    order?.shippingFee ??
+    order?.shipping?.shippingFee ??
+    order?.deliveryFee ??
+    0;
 
   const total =
     order?.totalAmount ??
     Math.max(
       0,
       subtotal +
-        deliveryFee -
+        shippingFee -
         discount,
     );
 
@@ -186,6 +189,7 @@ export default function ItemsCard({
                         {formatStoreOrderCurrency(
                           subtotalValue,
                           locale,
+                          order?.currency,
                         )}
                       </p>
                     </div>
@@ -212,6 +216,7 @@ export default function ItemsCard({
                                   ? ` (${formatStoreOrderCurrency(
                                       option.price,
                                       locale,
+                                      order?.currency,
                                     )})`
                                   : ""}
                               </li>
@@ -258,6 +263,7 @@ export default function ItemsCard({
                       ? discount
                       : 0,
                     locale,
+                    order?.currency,
                   )}
                 </span>
               </div>
@@ -272,6 +278,7 @@ export default function ItemsCard({
           value={formatStoreOrderCurrency(
             subtotal,
             locale,
+            order?.currency,
           )}
         />
 
@@ -281,19 +288,32 @@ export default function ItemsCard({
             value={`- ${formatStoreOrderCurrency(
               discount,
               locale,
+              order?.currency,
             )}`}
           />
         )}
 
-        {deliveryFee > 0 && (
+        {order?.deliveryMode === "postal" ? (
+          <SummaryRow
+            label={
+              order.shipping?.pricingMode === "collect"
+                ? text.shippingCollect
+                : order.shipping?.pricingMode === "arrange"
+                  ? text.shippingArrange
+                  : text.shippingFee
+            }
+            value={
+              shippingFee > 0
+                ? formatStoreOrderCurrency(shippingFee, locale, order?.currency)
+                : "—"
+            }
+          />
+        ) : shippingFee > 0 ? (
           <SummaryRow
             label={text.deliveryFee}
-            value={formatStoreOrderCurrency(
-              deliveryFee,
-              locale,
-            )}
+            value={formatStoreOrderCurrency(shippingFee, locale, order?.currency)}
           />
-        )}
+        ) : null}
 
         <div className="flex items-center justify-between border-t border-neutral-200 pt-4 text-xl font-black dark:border-neutral-800">
           <span>{text.total}</span>
@@ -302,6 +322,7 @@ export default function ItemsCard({
             {formatStoreOrderCurrency(
               total,
               locale,
+              order?.currency,
             )}
           </span>
         </div>

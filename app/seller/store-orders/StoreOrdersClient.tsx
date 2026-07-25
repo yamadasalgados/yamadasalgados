@@ -537,6 +537,7 @@ export default function StoreOrdersClient() {
                         {formatStoreOrderCurrency(
                           order.totalAmount,
                           locale,
+                          order.currency,
                         )}
                       </p>
                     </div>

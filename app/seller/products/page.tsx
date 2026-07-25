@@ -20,6 +20,7 @@ import { Plus } from "lucide-react";
 
 import { auth, db } from "@/app/lib/firebase";
 import { normalizeInventory, normalizeProductContent, normalizeProductPriceMajor } from "@/app/lib/product-schema";
+import { normalizeProductShipping } from "@/app/lib/shipping-schema";
 import { ensureUserProfile } from "@/app/lib/ensureUserProfile";
 import { useI18n } from "@/app/lib/i18n";
 import { formatMoneyMajor } from "@/app/lib/money";
@@ -417,6 +418,9 @@ export default function ProductsCatalogPage() {
             inventory: normalizeInventory(data.inventory, data.stockQty ?? data.stock, data.lowStockThreshold),
             stockQty: normalizeInventory(data.inventory, data.stockQty ?? data.stock, data.lowStockThreshold).quantity,
             lowStockThreshold: normalizeInventory(data.inventory, data.stockQty ?? data.stock, data.lowStockThreshold).lowStockThreshold,
+            shipping: normalizeProductShipping(data.shipping, data.postalEligible, data.shippingWeightGrams),
+            postalEligible: normalizeProductShipping(data.shipping, data.postalEligible, data.shippingWeightGrams).postalEligible,
+            shippingWeightGrams: normalizeProductShipping(data.shipping, data.postalEligible, data.shippingWeightGrams).weightGrams,
             status: (
               data.status === "inactive"
                 ? "inactive"

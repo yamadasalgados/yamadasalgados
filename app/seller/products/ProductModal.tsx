@@ -34,6 +34,7 @@ import {
   type ProductContent,
   type ProductLanguage,
 } from "@/app/lib/product-schema";
+import { normalizeProductShipping } from "@/app/lib/shipping-schema";
 import type {
   SupportedCurrency,
 } from "@/app/types/regional";
@@ -80,6 +81,8 @@ type Snapshot = {
   stockQty: string;
   lowStockThreshold: string;
   inventoryTracked: boolean;
+  postalEligible: boolean;
+  shippingWeightGrams: string;
   content: ProductContent;
   existingImageUrl: string;
   existingExtraUrls: string[];
@@ -144,6 +147,8 @@ export default function ProductModal({
   const [stockQty, setStockQty] = useState("0");
   const [lowStockThreshold, setLowStockThreshold] = useState("5");
   const [inventoryTracked, setInventoryTracked] = useState(true);
+  const [postalEligible, setPostalEligible] = useState(false);
+  const [shippingWeightGrams, setShippingWeightGrams] = useState("");
   const [content, setContent] = useState<ProductContent>(() => emptyProductContent());
 
   const [creatingCategory, setCreatingCategory] = useState(false);
@@ -188,6 +193,7 @@ export default function ProductModal({
             invalidSale: "無効な販売価格です。",
             invalidUnits: "販売単位は1以上で入力してください。",
             invalidStock: "在庫数は0以上で入力してください。",
+            invalidShippingWeight: "発送重量は1g以上で入力してください。",
             imageRequired: "メイン画像を選択してください。",
             help: "商品情報と画像を入力してください。",
           }
@@ -211,6 +217,7 @@ export default function ProductModal({
               invalidSale: "Invalid sale price.",
               invalidUnits: "Units per sale must be at least 1.",
               invalidStock: "Stock must be zero or greater.",
+              invalidShippingWeight: "Shipping weight must be at least 1 gram.",
               imageRequired: "Select a main image.",
               help: "Fill in the product information and images.",
             }
@@ -233,6 +240,7 @@ export default function ProductModal({
               invalidSale: "Preço de venda inválido.",
               invalidUnits: "As unidades por venda devem ser pelo menos 1.",
               invalidStock: "O estoque deve ser zero ou maior.",
+              invalidShippingWeight: "O peso para envio deve ser pelo menos 1 grama.",
               imageRequired: "Selecione uma imagem principal.",
               help: "Preencha as informações e imagens do produto.",
             },
@@ -272,6 +280,8 @@ export default function ProductModal({
         stockQty,
         lowStockThreshold,
         inventoryTracked,
+        postalEligible,
+        shippingWeightGrams,
         content,
         existingImageUrl,
         existingExtraUrls,
@@ -290,6 +300,8 @@ export default function ProductModal({
       stockQty,
       lowStockThreshold,
       inventoryTracked,
+      postalEligible,
+      shippingWeightGrams,
       content,
     ],
   );
@@ -332,6 +344,8 @@ export default function ProductModal({
       stockQty: String(activeProduct?.inventory?.quantity ?? activeProduct?.stockQty ?? 0),
       lowStockThreshold: String(activeProduct?.inventory?.lowStockThreshold ?? activeProduct?.lowStockThreshold ?? 5),
       inventoryTracked: activeProduct?.inventory?.tracked ?? true,
+      postalEligible: normalizeProductShipping(activeProduct?.shipping, activeProduct?.postalEligible, activeProduct?.shippingWeightGrams).postalEligible,
+      shippingWeightGrams: String(normalizeProductShipping(activeProduct?.shipping, activeProduct?.postalEligible, activeProduct?.shippingWeightGrams).weightGrams ?? ""),
       content: normalizeProductContent(activeProduct?.content, activeProduct?.name || "", activeProduct?.description || ""),
       existingImageUrl: activeProduct?.imageUrl || "",
       existingExtraUrls: activeProduct?.extraImageUrls || [],
@@ -347,6 +361,8 @@ export default function ProductModal({
     setStockQty(nextState.stockQty);
     setLowStockThreshold(nextState.lowStockThreshold);
     setInventoryTracked(nextState.inventoryTracked);
+    setPostalEligible(nextState.postalEligible);
+    setShippingWeightGrams(nextState.shippingWeightGrams);
     setContent(nextState.content);
     setExistingImageUrl(nextState.existingImageUrl);
     setExistingExtraUrls(nextState.existingExtraUrls);
@@ -452,6 +468,7 @@ export default function ProductModal({
     const parsedQuantity = toNum(quantity);
     const parsedStock = toNum(stockQty);
     const parsedThreshold = toNum(lowStockThreshold);
+    const parsedShippingWeight = shippingWeightGrams.trim() === "" ? null : toNum(shippingWeightGrams);
 
     const translatedNameExists = Object.values(content).some((entry) => entry.name.trim());
     if (!name.trim() && !translatedNameExists) {
@@ -486,6 +503,14 @@ export default function ProductModal({
       errors.lowStockThreshold = copy.invalidStock;
     }
 
+    if (
+      postalEligible &&
+      parsedShippingWeight !== null &&
+      (Number.isNaN(parsedShippingWeight) || parsedShippingWeight < 1)
+    ) {
+      errors.shippingWeightGrams = copy.invalidShippingWeight;
+    }
+
     if (!existingImageUrl && !mainFile) {
       errors.image = copy.imageRequired;
     }
@@ -511,6 +536,7 @@ export default function ProductModal({
       parsedQuantity,
       parsedStock,
       parsedThreshold,
+      parsedShippingWeight,
     };
   }, [
     category,
@@ -519,6 +545,7 @@ export default function ProductModal({
     copy.invalidSale,
     copy.invalidStock,
     copy.invalidUnits,
+    copy.invalidShippingWeight,
     costPrice,
     creatingCategory,
     editing,
@@ -532,6 +559,8 @@ export default function ProductModal({
     sellPrice,
     stockQty,
     lowStockThreshold,
+    postalEligible,
+    shippingWeightGrams,
     content,
     t,
   ]);
@@ -596,6 +625,9 @@ export default function ProductModal({
     const units = Math.floor(validation.parsedQuantity);
     const stock = Math.floor(validation.parsedStock);
     const threshold = Math.floor(validation.parsedThreshold);
+    const weightGrams = validation.parsedShippingWeight === null
+      ? null
+      : Math.max(1, Math.round(validation.parsedShippingWeight));
     const normalizedCategory = normalizeCategoryLabel(category);
 
     setSaving(true);
@@ -695,6 +727,12 @@ export default function ProductModal({
           quantity: stock,
           lowStockThreshold: threshold,
         },
+        shipping: {
+          postalEligible,
+          weightGrams,
+        },
+        postalEligible,
+        shippingWeightGrams: weightGrams,
         costPrice: cost,
         sellPrice: sale,
         shadowCost: cost,
@@ -756,6 +794,9 @@ export default function ProductModal({
           inventory: payload.inventory,
           stockQty: stock,
           lowStockThreshold: threshold,
+          shipping: payload.shipping,
+          postalEligible,
+          shippingWeightGrams: weightGrams,
           status,
           imageUrl: nextMainUrl,
           extraImageUrls: nextExtraUrls,
@@ -772,6 +813,8 @@ export default function ProductModal({
         stockQty: String(savedProduct.stockQty || 0),
         lowStockThreshold: String(savedProduct.lowStockThreshold || 0),
         inventoryTracked: savedProduct.inventory.tracked,
+        postalEligible: savedProduct.shipping.postalEligible,
+        shippingWeightGrams: String(savedProduct.shipping.weightGrams ?? ""),
         content: savedProduct.content,
         existingImageUrl: savedProduct.imageUrl,
         existingExtraUrls: savedProduct.extraImageUrls || [],
@@ -806,12 +849,16 @@ export default function ProductModal({
     authUser.uid,
     busy,
     category,
+    content,
+    currency,
     copy.created,
     copy.unexpected,
     copy.updated,
     existingExtraUrls,
     existingImageUrl,
     extraFiles,
+    inventoryTracked,
+    lang,
     mainFile,
     name,
     onClose,
@@ -820,6 +867,7 @@ export default function ProductModal({
     revokePreviews,
     sellerId,
     status,
+    postalEligible,
     validate,
   ]);
 
@@ -950,6 +998,13 @@ export default function ProductModal({
                 }}
                 inventoryTracked={inventoryTracked}
                 setInventoryTracked={setInventoryTracked}
+                postalEligible={postalEligible}
+                setPostalEligible={setPostalEligible}
+                shippingWeightGrams={shippingWeightGrams}
+                setShippingWeightGrams={(value) => {
+                  setShippingWeightGrams(value);
+                  clearFieldError("shippingWeightGrams");
+                }}
                 content={content}
                 setContent={setContent}
                 legacyName={name}

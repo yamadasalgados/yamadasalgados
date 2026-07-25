@@ -37,7 +37,28 @@ export type StoreOrderDate =
 export type StoreOrderDeliveryMode =
   | "pickup"
   | "delivery"
+  | "postal"
   | "none";
+
+export type StoreOrderPostalPricingMode =
+  | "collect"
+  | "arrange"
+  | "weight_table";
+
+export interface StoreOrderShipping {
+  pricingMode: StoreOrderPostalPricingMode;
+  quoteStatus: "collect" | "pending" | "calculated" | "unavailable";
+  recipientName?: string;
+  postalCode?: string;
+  prefecture?: string;
+  city?: string;
+  addressLine1?: string;
+  addressLine2?: string;
+  totalWeightGrams?: number | null;
+  shippingFeeMinor?: number | null;
+  shippingFee?: number | null;
+  instructions?: string;
+}
 
 export interface StoreOrderOption {
   id?: string;
@@ -60,6 +81,10 @@ export interface StoreOrderItem {
   stockAvailable?: number | null;
   stockShortage?: number;
   stockState?: "available" | "insufficient" | "not_tracked" | "made_to_order";
+  shipping?: {
+    postalEligible: boolean;
+    weightGrams: number | null;
+  };
   options?: StoreOrderOption[];
 }
 
@@ -92,6 +117,9 @@ export interface StoreOrder {
   subtotal?: number;
   discount?: number;
   deliveryFee?: number;
+  shippingFee?: number;
+  shipping?: StoreOrderShipping;
+  currency?: "JPY" | "BRL" | "USD";
   totalAmount: number;
 
   createdAt?: StoreOrderDate;

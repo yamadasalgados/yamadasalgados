@@ -696,6 +696,15 @@ service cloud.firestore {
           || isSellerOwner(sellerId);
       }
 
+      match /settings/{settingId} {
+        // A loja pública lê somente a configuração de envio postal.
+        allow read: if settingId == "shipping";
+
+        allow create, update, delete:
+          if isAdmin()
+          || isSellerOwner(sellerId);
+      }
+
       /*
        * Marcadores privados de idempotência criados pelo backend.
        * Nem clientes públicos nem sellers precisam acessar esta coleção.
@@ -782,124 +791,6 @@ service cloud.firestore {
           }
         }
       }
-    }
-
-    function sellerAcceptsOrders(sellerId) {
-      let seller =
-        get(sellerPath(sellerId)).data;
-
-      return seller.accountStatus == "active"
-        && accessIsCurrentlyActive(
-          seller.access
-        );
-    }
-
-    // =========================================================
-    // PUBLIC ORDER VALIDATION
-    // =========================================================
-
-    function validOptionalLimitedString(
-      fieldName,
-      maxSize
-    ) {
-      return !(
-        fieldName in request.resource.data
-      )
-      || request.resource.data[fieldName] == null
-      || (
-        request.resource.data[fieldName] is string
-        && request.resource.data[fieldName].size()
-          <= maxSize
-      );
-    }
-
-    function isValidPublicOrderCreate() {
-      return request.resource.data.keys().hasOnly([
-        "customerName",
-        "customerPhone",
-        "customerEmail",
-        "note",
-        "quantities",
-        "items",
-        "totalItems",
-        "subtotal",
-        "discount",
-        "totalAmount",
-        "offersApplied",
-        "status",
-        "channel",
-        "deliveryDate",
-        "deliveryMode",
-        "deliveryTimeSlot",
-        "locationLink",
-        "address",
-        "customerClientId",
-        "sellerUnread",
-        "sellerReadAt",
-        "createdAt",
-        "updatedAt"
-      ])
-      && request.resource.data.customerName is string
-      && request.resource.data.customerName.size() > 0
-      && request.resource.data.customerName.size() <= 120
-      && request.resource.data.customerPhone is string
-      && request.resource.data.customerPhone.size() > 0
-      && request.resource.data.customerPhone.size() <= 50
-      && validOptionalLimitedString("customerEmail", 200)
-      && validOptionalLimitedString("note", 1500)
-      && validOptionalLimitedString("deliveryDate", 50)
-      && validOptionalLimitedString("deliveryMode", 30)
-      && validOptionalLimitedString("deliveryTimeSlot", 100)
-      && validOptionalLimitedString("locationLink", 2000)
-      && validOptionalLimitedString("address", 1000)
-      && validOptionalLimitedString("customerClientId", 200)
-      && request.resource.data.quantities is map
-      && request.resource.data.items is list
-      && request.resource.data.totalItems is int
-      && request.resource.data.totalItems > 0
-      && request.resource.data.totalItems <= 1000
-      && (
-        !("subtotal" in request.resource.data)
-        || (
-          request.resource.data.subtotal is number
-          && request.resource.data.subtotal >= 0
-        )
-      )
-      && (
-        !("discount" in request.resource.data)
-        || (
-          request.resource.data.discount is number
-          && request.resource.data.discount >= 0
-        )
-      )
-      && (
-        !("subtotal" in request.resource.data)
-        || !("discount" in request.resource.data)
-        || request.resource.data.discount
-          <= request.resource.data.subtotal
-      )
-      && request.resource.data.totalAmount is number
-      && request.resource.data.totalAmount >= 0
-      && (
-        !("subtotal" in request.resource.data)
-        || !("discount" in request.resource.data)
-        || request.resource.data.totalAmount
-          == request.resource.data.subtotal
-            - request.resource.data.discount
-      )
-      && (
-        !("offersApplied" in request.resource.data)
-        || (
-          request.resource.data.offersApplied is list
-          && request.resource.data.offersApplied.size() <= 1
-        )
-      )
-      && request.resource.data.status == "pending"
-      && request.resource.data.channel in ["pwa", "store"]
-      && request.resource.data.sellerUnread == true
-      && request.resource.data.sellerReadAt == null
-      && request.resource.data.createdAt == request.time
-      && request.resource.data.updatedAt == request.time;
     }
 
     // =========================================================

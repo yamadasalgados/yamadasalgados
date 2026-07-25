@@ -14,6 +14,7 @@ import type {
   StoreOrderHistory,
   StoreOrderItem,
   StoreOrderOption,
+  StoreOrderShipping,
   StoreOrderStatus,
   StoreOrderTimestampLike,
 } from "@/app/types/store-order";
@@ -94,6 +95,7 @@ export function normalizeDeliveryMode(
   if (
     value === "pickup" ||
     value === "delivery" ||
+    value === "postal" ||
     value === "none"
   ) {
     return value;
@@ -230,6 +232,19 @@ export function normalizeStoreOrderItems(
           rawItem.stockState === "made_to_order"
             ? rawItem.stockState
             : "available",
+        shipping: {
+          postalEligible:
+            isRecord(rawItem.shipping)
+              ? rawItem.shipping.postalEligible === true
+              : rawItem.postalEligible === true,
+          weightGrams: (() => {
+            const shipping = isRecord(rawItem.shipping) ? rawItem.shipping : {};
+            const value = toOptionalNumber(
+              shipping.weightGrams ?? rawItem.shippingWeightGrams,
+            );
+            return value !== undefined && value > 0 ? Math.round(value) : null;
+          })(),
+        },
         options:
           options.length > 0
             ? options
@@ -539,6 +554,52 @@ function normalizeAppliedOffers(
     );
 }
 
+function normalizeOrderShipping(
+  value: unknown,
+): StoreOrderShipping | undefined {
+  if (!isRecord(value)) return undefined;
+
+  const pricingSnapshot = isRecord(value.pricingSnapshot)
+    ? value.pricingSnapshot
+    : {};
+  const pricingMode =
+    value.pricingMode === "collect" ||
+    value.pricingMode === "weight_table"
+      ? value.pricingMode
+      : "arrange";
+  const quoteStatus =
+    value.quoteStatus === "collect" ||
+    value.quoteStatus === "calculated" ||
+    value.quoteStatus === "unavailable"
+      ? value.quoteStatus
+      : "pending";
+
+  return {
+    pricingMode,
+    quoteStatus,
+    recipientName: toSafeString(value.recipientName) || undefined,
+    postalCode: toSafeString(value.postalCode) || undefined,
+    prefecture: toSafeString(value.prefecture) || undefined,
+    city: toSafeString(value.city) || undefined,
+    addressLine1: toSafeString(value.addressLine1) || undefined,
+    addressLine2: toSafeString(value.addressLine2) || undefined,
+    totalWeightGrams:
+      value.totalWeightGrams === null
+        ? null
+        : toOptionalNumber(value.totalWeightGrams),
+    shippingFeeMinor:
+      value.shippingFeeMinor === null
+        ? null
+        : toOptionalNumber(value.shippingFeeMinor),
+    shippingFee:
+      value.shippingFee === null
+        ? null
+        : toOptionalNumber(value.shippingFee),
+    instructions:
+      toSafeString(pricingSnapshot.instructions) || undefined,
+  };
+}
+
 export function parseStoreOrder(
   id: string,
   data: Record<string, unknown>,
@@ -565,10 +626,15 @@ export function parseStoreOrder(
       data.discount,
     ) ?? 0;
 
+  const shippingFee =
+    toOptionalNumber(
+      data.shippingFee,
+    ) ?? 0;
+
   const deliveryFee =
     toOptionalNumber(
       data.deliveryFee,
-    ) ?? 0;
+    ) ?? shippingFee;
 
   const totalAmount =
     toOptionalNumber(
@@ -671,6 +737,12 @@ export function parseStoreOrder(
     subtotal,
     discount,
     deliveryFee,
+    shippingFee,
+    shipping: normalizeOrderShipping(data.shipping),
+    currency:
+      data.currency === "BRL" || data.currency === "USD"
+        ? data.currency
+        : "JPY",
     totalAmount,
 
     createdAt:

@@ -25,6 +25,7 @@ import {
   ImageIcon,
   Loader2,
   MapPin,
+  Mail,
   Minus,
   Package,
   Plus,
@@ -72,6 +73,15 @@ import {
   type OfferEvaluation,
 } from "@/app/lib/offer-schema";
 import {
+  DEFAULT_SELLER_SHIPPING_SETTINGS,
+  evaluatePostalShipping,
+  formatWeightGrams,
+  normalizeProductShipping,
+  normalizeSellerShippingSettings,
+  type ProductShipping,
+  type SellerShippingSettings,
+} from "@/app/lib/shipping-schema";
+import {
   isSupportedCurrency,
   type RegionalLocale,
   type SupportedCurrency,
@@ -95,6 +105,7 @@ type CheckoutStep =
 type DeliveryMode =
   | "pickup"
   | "delivery"
+  | "postal"
   | "none";
 
 type StoreProfile = {
@@ -124,6 +135,7 @@ type Product = {
     | "stock"
     | "inventory"
     | "quantity";
+  shipping: ProductShipping;
 };
 
 type CartItem = Product & {
@@ -144,6 +156,12 @@ type DeliveryForm = {
   address: string;
   locationLink: string;
   note: string;
+  recipientName: string;
+  postalCode: string;
+  prefecture: string;
+  city: string;
+  addressLine1: string;
+  addressLine2: string;
 };
 
 const TEXT = {
@@ -191,6 +209,26 @@ const TEXT = {
     pickup: "Retirada",
     delivery: "Entrega",
     arrange: "A combinar",
+    postal: "Correio",
+    postalHelp: "Receba o pedido no endereço informado.",
+    postalUnavailable: "O correio não está disponível para os produtos atuais.",
+    postalProductBlocked: "Não pode ser enviado: {products}",
+    postalWeightMissing: "Há produto sem peso cadastrado para calcular o frete.",
+    postalWeightExceeded: "O peso excede as faixas de frete configuradas.",
+    postalRequired: "Preencha os dados obrigatórios do endereço postal.",
+    recipientName: "Nome do destinatário",
+    postalCode: "Código postal / CEP",
+    prefecture: "Província / Estado",
+    city: "Cidade",
+    addressLine1: "Endereço",
+    addressLine2: "Complemento (opcional)",
+    shippingTitle: "Envio por correio",
+    shippingCollect: "Frete a cobrar no recebimento",
+    shippingArrange: "Frete a combinar com o seller",
+    shippingCalculated: "Frete calculado",
+    shippingFee: "Frete",
+    totalWeight: "Peso estimado",
+    postalInstructions: "Instruções de envio",
     date: "Data",
     time: "Horário",
     address: "Endereço",
@@ -304,6 +342,26 @@ const TEXT = {
     pickup: "Pickup",
     delivery: "Delivery",
     arrange: "To be arranged",
+    postal: "Postal shipping",
+    postalHelp: "Receive the order at the address provided.",
+    postalUnavailable: "Postal shipping is not available for the current products.",
+    postalProductBlocked: "Cannot be shipped: {products}",
+    postalWeightMissing: "A product has no shipping weight for freight calculation.",
+    postalWeightExceeded: "The order exceeds the configured shipping weight bands.",
+    postalRequired: "Complete the required postal address fields.",
+    recipientName: "Recipient name",
+    postalCode: "Postal code",
+    prefecture: "State / Prefecture",
+    city: "City",
+    addressLine1: "Street address",
+    addressLine2: "Address details (optional)",
+    shippingTitle: "Postal shipping",
+    shippingCollect: "Shipping paid on delivery",
+    shippingArrange: "Shipping arranged with the seller",
+    shippingCalculated: "Calculated shipping",
+    shippingFee: "Shipping",
+    totalWeight: "Estimated weight",
+    postalInstructions: "Shipping instructions",
     date: "Date",
     time: "Time",
     address: "Address",
@@ -411,6 +469,26 @@ const TEXT = {
     pickup: "受取",
     delivery: "配達",
     arrange: "要相談",
+    postal: "郵送",
+    postalHelp: "入力した住所へ商品を発送します。",
+    postalUnavailable: "現在の商品は郵送できません。",
+    postalProductBlocked: "郵送対象外: {products}",
+    postalWeightMissing: "送料計算に必要な商品重量が未登録です。",
+    postalWeightExceeded: "注文重量が設定された送料区分を超えています。",
+    postalRequired: "郵送先の必須項目を入力してください。",
+    recipientName: "受取人名",
+    postalCode: "郵便番号",
+    prefecture: "都道府県 / 州",
+    city: "市区町村",
+    addressLine1: "住所",
+    addressLine2: "建物名・部屋番号（任意）",
+    shippingTitle: "郵送",
+    shippingCollect: "送料は着払い",
+    shippingArrange: "送料は販売者と相談",
+    shippingCalculated: "計算済み送料",
+    shippingFee: "送料",
+    totalWeight: "推定重量",
+    postalInstructions: "発送案内",
     date: "日付",
     time: "時間",
     address: "住所",
@@ -713,6 +791,11 @@ function normalizeProduct(
     availabilityStatus,
     stock,
     stockField,
+    shipping: normalizeProductShipping(
+      raw.shipping,
+      raw.postalEligible,
+      raw.shippingWeightGrams,
+    ),
   };
 }
 
@@ -835,6 +918,9 @@ export default function StoreClient({
       available: false,
     });
 
+  const [shippingSettings, setShippingSettings] =
+    useState<SellerShippingSettings>(DEFAULT_SELLER_SHIPPING_SETTINGS);
+
   const [products, setProducts] =
     useState<Product[]>([]);
 
@@ -891,6 +977,12 @@ export default function StoreClient({
       address: "",
       locationLink: "",
       note: "",
+      recipientName: "",
+      postalCode: "",
+      prefecture: "",
+      city: "",
+      addressLine1: "",
+      addressLine2: "",
     });
 
   const [formError, setFormError] =
@@ -929,12 +1021,14 @@ export default function StoreClient({
     let sellerResolved = false;
     let productsResolved = false;
     let offersResolved = false;
+    let shippingResolved = false;
 
     const finishLoading = () => {
       if (
         sellerResolved &&
         productsResolved &&
-        offersResolved
+        offersResolved &&
+        shippingResolved
       ) {
         setLoading(false);
       }
@@ -962,6 +1056,14 @@ export default function StoreClient({
         sellerId,
         "offers",
       );
+
+    const shippingReference = doc(
+      db,
+      "sellers",
+      sellerId,
+      "settings",
+      "shipping",
+    );
 
     const unsubscribeSeller =
       onSnapshot(
@@ -1105,10 +1207,35 @@ export default function StoreClient({
         },
       );
 
+    const unsubscribeShipping = onSnapshot(
+      shippingReference,
+      (snapshot) => {
+        setShippingSettings(
+          normalizeSellerShippingSettings(
+            snapshot.exists()
+              ? snapshot.data()
+              : DEFAULT_SELLER_SHIPPING_SETTINGS,
+          ),
+        );
+        shippingResolved = true;
+        finishLoading();
+      },
+      (error) => {
+        console.warn(
+          "[StoreClient] Falha ao carregar configuração de correio:",
+          error,
+        );
+        setShippingSettings(DEFAULT_SELLER_SHIPPING_SETTINGS);
+        shippingResolved = true;
+        finishLoading();
+      },
+    );
+
     return () => {
       unsubscribeSeller();
       unsubscribeProducts();
       unsubscribeOffers();
+      unsubscribeShipping();
     };
   }, [
     language,
@@ -1352,10 +1479,66 @@ const showingProducts =
     storeProfile.currency,
   );
 
-  const total = Math.max(
+  const productsTotal = Math.max(
     0,
     subtotal - discount,
   );
+
+  const postalBlockedItems = useMemo(
+    () =>
+      cartItems.filter(
+        (item) => !item.shipping.postalEligible,
+      ),
+    [cartItems],
+  );
+
+  const postalEvaluation = useMemo(
+    () =>
+      evaluatePostalShipping({
+        settings: shippingSettings,
+        products: cartItems.map((item) => ({
+          quantity: item.qty,
+          shipping: item.shipping,
+        })),
+      }),
+    [cartItems, shippingSettings],
+  );
+
+  const shippingFeeMinor =
+    delivery.mode === "postal" && postalEvaluation.available
+      ? postalEvaluation.shippingFeeMinor ?? 0
+      : 0;
+
+  const shippingFee = minorToMajor(
+    shippingFeeMinor,
+    storeProfile.currency,
+  );
+
+  const total = Math.max(
+    0,
+    productsTotal + shippingFee,
+  );
+
+  const postalUnavailableMessage = useMemo(() => {
+    if (postalEvaluation.available) return "";
+
+    if (postalEvaluation.reason === "product_not_eligible") {
+      const names = postalBlockedItems.map((item) => item.name).join(", ");
+      return names
+        ? text.postalProductBlocked.replace("{products}", names)
+        : text.postalUnavailable;
+    }
+
+    if (postalEvaluation.reason === "weight_missing") {
+      return text.postalWeightMissing;
+    }
+
+    if (postalEvaluation.reason === "weight_limit_exceeded") {
+      return text.postalWeightExceeded;
+    }
+
+    return text.postalUnavailable;
+  }, [postalBlockedItems, postalEvaluation, text]);
 
   const setQuantity =
     useCallback(
@@ -1462,6 +1645,26 @@ const showingProducts =
       return;
     }
 
+    if (delivery.mode === "postal") {
+      if (!postalEvaluation.available) {
+        setFormError(postalUnavailableMessage);
+        return;
+      }
+
+      const requiredPostalFields = [
+        delivery.recipientName,
+        delivery.postalCode,
+        delivery.prefecture,
+        delivery.city,
+        delivery.addressLine1,
+      ];
+
+      if (requiredPostalFields.some((value) => !value.trim())) {
+        setFormError(text.postalRequired);
+        return;
+      }
+    }
+
     setSubmitting(true);
     setFormError("");
 
@@ -1499,6 +1702,17 @@ const showingProducts =
             undefined,
           note:
             delivery.note || undefined,
+          shipping:
+            delivery.mode === "postal"
+              ? {
+                  recipientName: delivery.recipientName,
+                  postalCode: delivery.postalCode,
+                  prefecture: delivery.prefecture,
+                  city: delivery.city,
+                  addressLine1: delivery.addressLine1,
+                  addressLine2: delivery.addressLine2 || undefined,
+                }
+              : undefined,
         },
       });
 
@@ -1528,11 +1742,14 @@ const showingProducts =
               "OFFER_UNAVAILABLE"
             ? text.offerUnavailable
             : errorCode ===
-                  "SELLER_UNAVAILABLE" ||
-                errorCode ===
-                  "EVENT_UNAVAILABLE"
-              ? text.permissionError
-              : text.orderError;
+                "SHIPPING_UNAVAILABLE"
+              ? postalUnavailableMessage || text.postalUnavailable
+              : errorCode ===
+                    "SELLER_UNAVAILABLE" ||
+                  errorCode ===
+                    "EVENT_UNAVAILABLE"
+                ? text.permissionError
+                : text.orderError;
 
       setFormError(message);
     } finally {
@@ -1555,6 +1772,12 @@ const showingProducts =
       address: "",
       locationLink: "",
       note: "",
+      recipientName: "",
+      postalCode: "",
+      prefecture: "",
+      city: "",
+      addressLine1: "",
+      addressLine2: "",
     });
 
     setCreatedOrderId("");
@@ -2159,57 +2382,63 @@ const showingProducts =
               message={formError}
             />
 
-            <div className="mt-6 grid gap-3 sm:grid-cols-3">
+            <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               {[
                 {
-                  value:
-                    "pickup" as const,
-                  label:
-                    text.pickup,
+                  value: "pickup" as const,
+                  label: text.pickup,
+                  disabled: false,
                 },
                 {
-                  value:
-                    "delivery" as const,
-                  label:
-                    text.delivery,
+                  value: "delivery" as const,
+                  label: text.delivery,
+                  disabled: false,
                 },
                 {
-                  value:
-                    "none" as const,
-                  label:
-                    text.arrange,
+                  value: "none" as const,
+                  label: text.arrange,
+                  disabled: false,
                 },
-              ].map(
-                (option) => (
-                  <button
-                    key={
-                      option.value
-                    }
-                    type="button"
-                    onClick={() =>
-                      setDelivery(
-                        (current) => ({
-                          ...current,
-                          mode:
-                            option.value,
-                        }),
-                      )
-                    }
-                    className={[
-                      "rounded-2xl border p-4 text-left font-black transition",
-                      delivery.mode ===
-                      option.value
-                        ? "border-orange-400 bg-orange-50 text-orange-900 ring-2 ring-orange-200 dark:border-orange-700 dark:bg-orange-950/40 dark:text-orange-200 dark:ring-orange-900"
-                        : "border-neutral-200 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-950/40 dark:hover:bg-neutral-800",
-                    ].join(" ")}
-                  >
-                    {
-                      option.label
-                    }
-                  </button>
-                ),
-              )}
+                ...(shippingSettings.postalEnabled
+                  ? [
+                      {
+                        value: "postal" as const,
+                        label: text.postal,
+                        disabled: !postalEvaluation.available,
+                      },
+                    ]
+                  : []),
+              ].map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  disabled={option.disabled}
+                  onClick={() =>
+                    setDelivery((current) => ({
+                      ...current,
+                      mode: option.value,
+                    }))
+                  }
+                  className={[
+                    "rounded-2xl border p-4 text-left font-black transition disabled:cursor-not-allowed disabled:opacity-45",
+                    delivery.mode === option.value
+                      ? "border-orange-400 bg-orange-50 text-orange-900 ring-2 ring-orange-200 dark:border-orange-700 dark:bg-orange-950/40 dark:text-orange-200 dark:ring-orange-900"
+                      : "border-neutral-200 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-950/40 dark:hover:bg-neutral-800",
+                  ].join(" ")}
+                >
+                  <span className="flex items-center gap-2">
+                    {option.value === "postal" && <Mail size={17} />}
+                    {option.label}
+                  </span>
+                </button>
+              ))}
             </div>
+
+            {shippingSettings.postalEnabled && !postalEvaluation.available && (
+              <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-bold text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-200">
+                {postalUnavailableMessage}
+              </p>
+            )}
 
             {delivery.mode ===
               "pickup" &&
@@ -2229,43 +2458,33 @@ const showingProducts =
                 </div>
               )}
 
-            <div className="mt-6 grid gap-4 sm:grid-cols-2">
-              <Field
-                label={text.date}
-                value={
-                  delivery.date
-                }
-                type="date"
-                onChange={(
-                  value,
-                ) =>
-                  setDelivery(
-                    (current) => ({
+            {delivery.mode !== "postal" && (
+              <div className="mt-6 grid gap-4 sm:grid-cols-2">
+                <Field
+                  label={text.date}
+                  value={delivery.date}
+                  type="date"
+                  onChange={(value) =>
+                    setDelivery((current) => ({
                       ...current,
                       date: value,
-                    }),
-                  )
-                }
-              />
+                    }))
+                  }
+                />
 
-              <Field
-                label={text.time}
-                value={
-                  delivery.time
-                }
-                type="time"
-                onChange={(
-                  value,
-                ) =>
-                  setDelivery(
-                    (current) => ({
+                <Field
+                  label={text.time}
+                  value={delivery.time}
+                  type="time"
+                  onChange={(value) =>
+                    setDelivery((current) => ({
                       ...current,
                       time: value,
-                    }),
-                  )
-                }
-              />
-            </div>
+                    }))
+                  }
+                />
+              </div>
+            )}
 
             {delivery.mode ===
               "delivery" && (
@@ -2317,6 +2536,125 @@ const showingProducts =
               </div>
             )}
 
+            {delivery.mode === "postal" && (
+              <div className="mt-5 space-y-5">
+                <div className="rounded-2xl border border-sky-200 bg-sky-50 p-5 text-sky-950 dark:border-sky-900/60 dark:bg-sky-950/25 dark:text-sky-100">
+                  <div className="flex items-center gap-2 font-black">
+                    <Mail size={19} />
+                    {text.shippingTitle}
+                  </div>
+
+                  <p className="mt-2 text-sm font-bold">
+                    {postalEvaluation.pricingMode === "collect"
+                      ? text.shippingCollect
+                      : postalEvaluation.pricingMode === "arrange"
+                        ? text.shippingArrange
+                        : text.shippingCalculated}
+                  </p>
+
+                  {postalEvaluation.totalWeightGrams !== null && (
+                    <p className="mt-2 text-xs">
+                      {text.totalWeight}: {formatWeightGrams(postalEvaluation.totalWeightGrams)}
+                    </p>
+                  )}
+
+                  {postalEvaluation.quoteStatus === "calculated" && (
+                    <p className="mt-2 text-sm font-black">
+                      {text.shippingFee}: {formatCurrency(
+                        shippingFee,
+                        storeProfile.regionalLocale,
+                        storeProfile.currency,
+                      )}
+                    </p>
+                  )}
+
+                  {shippingSettings.instructions && (
+                    <div className="mt-3 border-t border-sky-200 pt-3 dark:border-sky-900/60">
+                      <p className="text-[10px] font-black uppercase tracking-wider opacity-70">
+                        {text.postalInstructions}
+                      </p>
+                      <p className="mt-1 whitespace-pre-wrap text-xs">
+                        {shippingSettings.instructions}
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <Field
+                    label={text.recipientName}
+                    value={delivery.recipientName}
+                    required
+                    onChange={(value) =>
+                      setDelivery((current) => ({
+                        ...current,
+                        recipientName: value,
+                      }))
+                    }
+                  />
+
+                  <Field
+                    label={text.postalCode}
+                    value={delivery.postalCode}
+                    required
+                    onChange={(value) =>
+                      setDelivery((current) => ({
+                        ...current,
+                        postalCode: value,
+                      }))
+                    }
+                  />
+
+                  <Field
+                    label={text.prefecture}
+                    value={delivery.prefecture}
+                    required
+                    onChange={(value) =>
+                      setDelivery((current) => ({
+                        ...current,
+                        prefecture: value,
+                      }))
+                    }
+                  />
+
+                  <Field
+                    label={text.city}
+                    value={delivery.city}
+                    required
+                    onChange={(value) =>
+                      setDelivery((current) => ({
+                        ...current,
+                        city: value,
+                      }))
+                    }
+                  />
+                </div>
+
+                <Field
+                  label={text.addressLine1}
+                  value={delivery.addressLine1}
+                  required
+                  onChange={(value) =>
+                    setDelivery((current) => ({
+                      ...current,
+                      addressLine1: value,
+                    }))
+                  }
+                />
+
+                <Field
+                  label={text.addressLine2}
+                  value={delivery.addressLine2}
+                  onChange={(value) =>
+                    setDelivery((current) => ({
+                      ...current,
+                      addressLine2: value,
+                    }))
+                  }
+                />
+              </div>
+            )}
+
             <label className="mt-4 block">
               <span className="text-sm font-bold">
                 {text.note}
@@ -2347,6 +2685,15 @@ const showingProducts =
               items={cartItems}
               subtotal={subtotal}
               discount={discount}
+              shippingFee={shippingFee}
+              showShipping={delivery.mode === "postal"}
+              shippingLabel={
+                postalEvaluation.quoteStatus === "collect"
+                  ? text.shippingCollect
+                  : postalEvaluation.quoteStatus === "pending"
+                    ? text.shippingArrange
+                    : text.shippingFee
+              }
               total={total}
               locale={storeProfile.regionalLocale}
               currency={storeProfile.currency}
@@ -2409,7 +2756,7 @@ const showingProducts =
 
                 <span>
                   {formatCurrency(
-                    total,
+                    productsTotal,
                     storeProfile.regionalLocale,
                     storeProfile.currency,
                   )}
@@ -2433,7 +2780,7 @@ const showingProducts =
                 : text.items}
               <span>
                 {formatCurrency(
-                  total,
+                  productsTotal,
                   storeProfile.regionalLocale,
                   storeProfile.currency,
                 )}
@@ -2448,7 +2795,7 @@ const showingProducts =
           totalItems={totalItems}
           subtotal={subtotal}
           discount={discount}
-          total={total}
+          total={productsTotal}
           locale={storeProfile.regionalLocale}
           currency={storeProfile.currency}
           text={text}
@@ -3003,6 +3350,9 @@ function OrderSummary({
   items,
   subtotal,
   discount,
+  shippingFee,
+  showShipping,
+  shippingLabel,
   total,
   locale,
   currency,
@@ -3015,6 +3365,9 @@ function OrderSummary({
   items: CartItem[];
   subtotal: number;
   discount: number;
+  shippingFee: number;
+  showShipping: boolean;
+  shippingLabel: string;
   total: number;
   locale: string;
   currency: SupportedCurrency;
@@ -3033,16 +3386,11 @@ function OrderSummary({
             className="flex items-center justify-between gap-4 text-sm"
           >
             <span className="min-w-0 break-words">
-              {item.qty}×{" "}
-              {item.name}
+              {item.qty}× {item.name}
             </span>
 
             <span className="shrink-0 font-bold">
-              {formatCurrency(
-                item.subtotal,
-                locale,
-                currency,
-              )}
+              {formatCurrency(item.subtotal, locale, currency)}
             </span>
           </div>
         ))}
@@ -3067,6 +3415,7 @@ function OrderSummary({
                 ).name}
               </p>
             )}
+
             <div className="flex items-center justify-between gap-4 text-green-700 dark:text-green-300">
               <span>{discountLabel}</span>
               <span className="font-black">
@@ -3075,18 +3424,22 @@ function OrderSummary({
             </div>
           </>
         )}
+
+        {showShipping && (
+          <div className="flex items-center justify-between gap-4">
+            <span className="text-neutral-500">{shippingLabel}</span>
+            <span className="font-bold">
+              {shippingFee > 0
+                ? formatCurrency(shippingFee, locale, currency)
+                : "—"}
+            </span>
+          </div>
+        )}
       </div>
 
       <div className="mt-4 flex items-center justify-between border-t border-neutral-300 pt-4 text-xl font-black dark:border-neutral-700">
         <span>{totalLabel}</span>
-
-        <span>
-          {formatCurrency(
-            total,
-            locale,
-            currency,
-          )}
-        </span>
+        <span>{formatCurrency(total, locale, currency)}</span>
       </div>
     </section>
   );

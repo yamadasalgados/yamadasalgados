@@ -4,6 +4,11 @@ import * as admin from "firebase-admin";
 import { NextRequest, NextResponse } from "next/server";
 
 import { getAdminDb } from "@/app/lib/firebaseAdmin";
+import {
+  evaluatePostalShipping,
+  normalizeProductShipping,
+  normalizeSellerShippingSettings,
+} from "@/app/lib/shipping-schema";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -11,7 +16,7 @@ export const dynamic = "force-dynamic";
 type OrderSource = "store" | "event";
 type Language = "pt" | "en" | "ja";
 type Currency = "JPY" | "BRL" | "USD";
-type DeliveryMode = "pickup" | "delivery" | "none";
+type DeliveryMode = "pickup" | "delivery" | "postal" | "none";
 type PricingMode =
   | "fixed_total"
   | "fixed_discount"
@@ -52,6 +57,14 @@ type CleanOrderRequest = {
     address: string;
     locationLink: string;
     note: string;
+    shipping: {
+      recipientName: string;
+      postalCode: string;
+      prefecture: string;
+      city: string;
+      addressLine1: string;
+      addressLine2: string;
+    };
   };
 };
 
@@ -61,6 +74,7 @@ type OrderErrorCode =
   | "EVENT_UNAVAILABLE"
   | "PRODUCT_UNAVAILABLE"
   | "OFFER_UNAVAILABLE"
+  | "SHIPPING_UNAVAILABLE"
   | "IDEMPOTENCY_CONFLICT"
   | "TOO_MANY_REQUESTS";
 
@@ -90,6 +104,10 @@ type ProductLine = {
   stockAvailable: number | null;
   stockShortage: number;
   stockState: "available" | "insufficient" | "not_tracked" | "made_to_order";
+  shipping: {
+    postalEligible: boolean;
+    weightGrams: number | null;
+  };
 };
 
 type EventOffer = {
@@ -128,7 +146,7 @@ function cleanSource(value: unknown): OrderSource {
 }
 
 function cleanDeliveryMode(value: unknown): DeliveryMode {
-  return value === "delivery" || value === "none" ? value : "pickup";
+  return value === "delivery" || value === "postal" || value === "none" ? value : "pickup";
 }
 
 function cleanCurrency(value: unknown): Currency {
@@ -191,6 +209,7 @@ function cleanRequest(value: unknown): CleanOrderRequest {
   const clientRequestId = cleanString(raw.clientRequestId, 160);
   const customer = record(raw.customer);
   const delivery = record(raw.delivery);
+  const shipping = record(delivery.shipping);
   const { quantities, totalItems } = cleanQuantities(raw.quantities);
 
   if (!sellerId || sellerId.includes("/")) {
@@ -222,6 +241,31 @@ function cleanRequest(value: unknown): CleanOrderRequest {
     );
   }
 
+  const deliveryMode = cleanDeliveryMode(delivery.mode);
+  if (source === "event" && deliveryMode === "postal") {
+    throw new OrderError(
+      "SHIPPING_UNAVAILABLE",
+      "Envio por correio não está disponível para eventos.",
+    );
+  }
+
+  if (deliveryMode === "postal") {
+    const requiredPostalFields = [
+      cleanString(shipping.recipientName, 120),
+      cleanString(shipping.postalCode, 30),
+      cleanString(shipping.prefecture, 120),
+      cleanString(shipping.city, 160),
+      cleanString(shipping.addressLine1, 300),
+    ];
+
+    if (requiredPostalFields.some((field) => !field)) {
+      throw new OrderError(
+        "INVALID_REQUEST",
+        "Preencha os dados obrigatórios para envio por correio.",
+      );
+    }
+  }
+
   return {
     source,
     sellerId,
@@ -238,12 +282,20 @@ function cleanRequest(value: unknown): CleanOrderRequest {
       email: cleanString(customer.email, 200),
     },
     delivery: {
-      mode: cleanDeliveryMode(delivery.mode),
+      mode: deliveryMode,
       date: cleanString(delivery.date, 80),
       time: cleanString(delivery.time, 100),
       address: cleanString(delivery.address, 1000),
       locationLink: cleanString(delivery.locationLink, 2000),
       note: cleanString(delivery.note, 1500),
+      shipping: {
+        recipientName: cleanString(shipping.recipientName, 120),
+        postalCode: cleanString(shipping.postalCode, 30),
+        prefecture: cleanString(shipping.prefecture, 120),
+        city: cleanString(shipping.city, 160),
+        addressLine1: cleanString(shipping.addressLine1, 300),
+        addressLine2: cleanString(shipping.addressLine2, 300),
+      },
     },
   };
 }
@@ -433,6 +485,12 @@ function normalizeProductLine(params: {
 
   const fallbackName = source === "event" ? productId : `Produto ${productId}`;
 
+  const shipping = normalizeProductShipping(
+    raw.shipping,
+    raw.postalEligible,
+    raw.shippingWeightGrams,
+  );
+
   return {
     productId,
     quantity,
@@ -447,6 +505,7 @@ function normalizeProductLine(params: {
     stockAvailable: normalizedStock,
     stockShortage,
     stockState,
+    shipping,
   };
 }
 
@@ -634,6 +693,7 @@ function resultResponse(params: {
   currency: Currency;
   subtotalMinor: number;
   discountMinor: number;
+  shippingFeeMinor: number;
   totalAmountMinor: number;
   orderStatus: "pending" | "ready";
   replayed: boolean;
@@ -646,9 +706,11 @@ function resultResponse(params: {
     currency: params.currency,
     subtotalMinor: params.subtotalMinor,
     discountMinor: params.discountMinor,
+    shippingFeeMinor: params.shippingFeeMinor,
     totalAmountMinor: params.totalAmountMinor,
     subtotal: minorToMajor(params.subtotalMinor, params.currency),
     discount: minorToMajor(params.discountMinor, params.currency),
+    shippingFee: minorToMajor(params.shippingFeeMinor, params.currency),
     totalAmount: minorToMajor(params.totalAmountMinor, params.currency),
     orderStatus: params.orderStatus,
     replayed: params.replayed,
@@ -695,6 +757,10 @@ export async function POST(request: NextRequest) {
         ? eventRef!.collection("offers").doc(clean.selectedOfferId)
         : sellerRef.collection("offers").doc(clean.selectedOfferId)
       : null;
+    const shippingSettingsRef =
+      clean.source === "store" && clean.delivery.mode === "postal"
+        ? sellerRef.collection("settings").doc("shipping")
+        : null;
 
     const fingerprintPayload = {
       source: clean.source,
@@ -725,6 +791,7 @@ export async function POST(request: NextRequest) {
       if (eventRef) refs.push(eventRef);
       refs.push(...productRefs);
       if (offerRef) refs.push(offerRef);
+      if (shippingSettingsRef) refs.push(shippingSettingsRef);
 
       const snapshots = await transaction.getAll(...refs);
       let cursor = 0;
@@ -733,6 +800,7 @@ export async function POST(request: NextRequest) {
       const eventSnapshot = eventRef ? snapshots[cursor++] : null;
       const productSnapshots = productRefs.map(() => snapshots[cursor++]);
       const offerSnapshot = offerRef ? snapshots[cursor++] : null;
+      const shippingSettingsSnapshot = shippingSettingsRef ? snapshots[cursor++] : null;
 
       if (markerSnapshot.exists) {
         const markerData = markerSnapshot.data() ?? {};
@@ -763,6 +831,7 @@ export async function POST(request: NextRequest) {
           currency: existingCurrency,
           subtotalMinor: cleanInteger(markerData.subtotalMinor, 0, 2_000_000_000),
           discountMinor: cleanInteger(markerData.discountMinor, 0, 2_000_000_000),
+          shippingFeeMinor: cleanInteger(markerData.shippingFeeMinor, 0, 2_000_000_000),
           totalAmountMinor: cleanInteger(markerData.totalAmountMinor, 0, 2_000_000_000),
           orderStatus: markerData.orderStatus === "ready" ? "ready" : "pending",
           replayed: true,
@@ -907,7 +976,77 @@ export async function POST(request: NextRequest) {
       }
 
       discountMinor = Math.min(subtotalMinor, Math.max(0, discountMinor));
-      const totalAmountMinor = Math.max(0, subtotalMinor - discountMinor);
+
+      let shippingFeeMinor = 0;
+      let shippingSnapshot: Record<string, unknown> | null = null;
+
+      if (clean.delivery.mode === "postal") {
+        if (!shippingSettingsSnapshot?.exists) {
+          throw new OrderError(
+            "SHIPPING_UNAVAILABLE",
+            "O envio por correio não está configurado.",
+            409,
+          );
+        }
+
+        const shippingSettings = normalizeSellerShippingSettings(
+          shippingSettingsSnapshot.data() ?? {},
+        );
+        const shippingEvaluation = evaluatePostalShipping({
+          settings: shippingSettings,
+          products: lines.map((line) => ({
+            quantity: line.quantity,
+            shipping: line.shipping,
+          })),
+        });
+
+        if (!shippingEvaluation.available) {
+          const message =
+            shippingEvaluation.reason === "product_not_eligible"
+              ? "Um dos produtos não pode ser enviado por correio."
+              : shippingEvaluation.reason === "weight_missing"
+                ? "Um dos produtos não possui peso para calcular o frete."
+                : shippingEvaluation.reason === "weight_limit_exceeded"
+                  ? "O peso do pedido excede as faixas de frete configuradas."
+                  : "O envio por correio não está disponível.";
+
+          throw new OrderError("SHIPPING_UNAVAILABLE", message, 409);
+        }
+
+        shippingFeeMinor = shippingEvaluation.shippingFeeMinor ?? 0;
+        shippingSnapshot = {
+          schemaVersion: 2,
+          pricingMode: shippingEvaluation.pricingMode,
+          quoteStatus: shippingEvaluation.quoteStatus,
+          recipientName: clean.delivery.shipping.recipientName,
+          postalCode: clean.delivery.shipping.postalCode,
+          prefecture: clean.delivery.shipping.prefecture,
+          city: clean.delivery.shipping.city,
+          addressLine1: clean.delivery.shipping.addressLine1,
+          addressLine2: clean.delivery.shipping.addressLine2 || null,
+          totalWeightGrams: shippingEvaluation.totalWeightGrams,
+          shippingFeeMinor:
+            shippingEvaluation.shippingFeeMinor === null
+              ? null
+              : shippingEvaluation.shippingFeeMinor,
+          shippingFee:
+            shippingEvaluation.shippingFeeMinor === null
+              ? null
+              : minorToMajor(shippingEvaluation.shippingFeeMinor, currency),
+          appliedBand: shippingEvaluation.appliedBand,
+          pricingSnapshot: {
+            postalEnabled: shippingSettings.postalEnabled,
+            pricingMode: shippingSettings.pricingMode,
+            weightBands: shippingSettings.weightBands,
+            instructions: shippingSettings.instructions,
+          },
+        };
+      }
+
+      const totalAmountMinor = Math.max(
+        0,
+        subtotalMinor - discountMinor + shippingFeeMinor,
+      );
       const hasMadeToOrderItems = lines.some(
         (line) => line.availabilityMode === "made_to_order",
       );
@@ -938,6 +1077,9 @@ export async function POST(request: NextRequest) {
         stockAvailable: line.stockAvailable,
         stockShortage: line.stockShortage,
         stockState: line.stockState,
+        shipping: line.shipping,
+        postalEligible: line.shipping.postalEligible,
+        shippingWeightGrams: line.shipping.weightGrams,
       }));
       const quantities = Object.fromEntries(
         lines.map((line) => [line.productId, line.quantity]),
@@ -961,9 +1103,12 @@ export async function POST(request: NextRequest) {
         totalItems: clean.totalItems,
         subtotalMinor,
         discountMinor,
+        shippingFeeMinor,
         totalAmountMinor,
         subtotal: minorToMajor(subtotalMinor, currency),
         discount: minorToMajor(discountMinor, currency),
+        shippingFee: minorToMajor(shippingFeeMinor, currency),
+        deliveryFee: minorToMajor(shippingFeeMinor, currency),
         totalAmount: minorToMajor(totalAmountMinor, currency),
         offersApplied,
         selectedOfferId: clean.selectedOfferId || null,
@@ -978,7 +1123,17 @@ export async function POST(request: NextRequest) {
         deliveryMode: clean.delivery.mode,
         deliveryDate: clean.delivery.date || null,
         deliveryTimeSlot: clean.delivery.time || null,
-        address: clean.delivery.address || null,
+        address:
+          clean.delivery.mode === "postal"
+            ? [
+                clean.delivery.shipping.postalCode,
+                clean.delivery.shipping.prefecture,
+                clean.delivery.shipping.city,
+                clean.delivery.shipping.addressLine1,
+                clean.delivery.shipping.addressLine2,
+              ].filter(Boolean).join(" ")
+            : clean.delivery.address || null,
+        shipping: shippingSnapshot,
         locationLink:
           clean.delivery.mode === "delivery"
             ? clean.delivery.locationLink || null
@@ -1015,6 +1170,7 @@ export async function POST(request: NextRequest) {
         currency,
         subtotalMinor,
         discountMinor,
+        shippingFeeMinor,
         totalAmountMinor,
         orderStatus: initialOrderStatus,
         status: "completed",
@@ -1031,6 +1187,7 @@ export async function POST(request: NextRequest) {
         currency,
         subtotalMinor,
         discountMinor,
+        shippingFeeMinor,
         totalAmountMinor,
         orderStatus: initialOrderStatus,
         replayed: false,
