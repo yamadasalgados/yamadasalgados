@@ -1,12 +1,9 @@
 "use client";
 
 import {
-  arrayUnion,
   doc,
   onSnapshot,
-  runTransaction,
   serverTimestamp,
-  Timestamp,
   updateDoc,
 } from "firebase/firestore";
 import {
@@ -16,20 +13,14 @@ import {
   useState,
 } from "react";
 
-import {
-  auth,
-  db,
-} from "@/app/lib/firebase";
-import {
-  normalizeStoreOrderStatus,
-  parseStoreOrder,
-} from "@/app/lib/store-order";
+import { db } from "@/app/lib/firebase";
+import { updateSellerOrderStatus } from "@/app/lib/order-status-client";
+import { parseStoreOrder } from "@/app/lib/store-order";
 import useSellerId from "@/app/hooks/useSellerId";
 
 import type {
   StoreOrder,
   StoreOrderErrorCode,
-  StoreOrderHistory,
   StoreOrderStatus,
 } from "@/app/types/store-order";
 
@@ -201,131 +192,34 @@ export default function useStoreOrder(
       status: StoreOrderStatus,
       note?: string,
     ): Promise<void> => {
-      if (savingRef.current) {
-        return;
+      if (savingRef.current) return;
+
+      if (!sellerId || !orderId.trim()) {
+        setActionErrorCode("INVALID_ORDER_ID");
+        throw new Error("Pedido ou vendedor não identificado.");
       }
 
-      if (
-        !sellerId ||
-        !orderId.trim()
-      ) {
-        setActionErrorCode(
-          "INVALID_ORDER_ID",
-        );
-
-        throw new Error(
-          "Pedido ou vendedor não identificado.",
-        );
-      }
-
-      if (
-        order?.status === status
-      ) {
-        return;
-      }
+      if (order?.status === status) return;
 
       savingRef.current = true;
-
       if (mountedRef.current) {
         setSaving(true);
         setActionErrorCode(null);
       }
 
       try {
-        const orderReference = doc(
-          db,
-          "sellers",
+        await updateSellerOrderStatus({
+          source: "store",
           sellerId,
-          "storeOrders",
           orderId,
-        );
-
-        await runTransaction(
-          db,
-          async (transaction) => {
-            const snapshot =
-              await transaction.get(
-                orderReference,
-              );
-
-            if (!snapshot.exists()) {
-              throw new Error(
-                "Pedido não encontrado.",
-              );
-            }
-
-            const currentStatus =
-              normalizeStoreOrderStatus(
-                snapshot.data()
-                  .status,
-              );
-
-            if (
-              currentStatus === status
-            ) {
-              return;
-            }
-
-            /*
-             * IMPORTANTE:
-             * Não regravamos todo o array history.
-             * Isso evita enviar propriedades undefined de entradas antigas.
-             */
-            const historyEntry: StoreOrderHistory =
-              {
-                status,
-                createdAt:
-                  Timestamp.now(),
-                updatedBy:
-                  auth.currentUser
-                    ?.email ??
-                  auth.currentUser
-                    ?.uid ??
-                  "seller",
-              };
-
-            const cleanNote =
-              note?.trim();
-
-            if (cleanNote) {
-              historyEntry.note =
-                cleanNote;
-            }
-
-            const rawHistory =
-              snapshot.data()
-                .history;
-
-            transaction.update(
-              orderReference,
-              {
-                status,
-                fulfillmentStatus: status,
-                deliveredAt:
-                  status === "delivered"
-                    ? serverTimestamp()
-                    : null,
-                history:
-                  Array.isArray(
-                    rawHistory,
-                  )
-                    ? arrayUnion(
-                        historyEntry,
-                      )
-                    : [
-                        historyEntry,
-                      ],
-                sellerUnread: false,
-                sellerReadAt:
-                  serverTimestamp(),
-                updatedAt:
-                  serverTimestamp(),
-                updatedBy:
-                  historyEntry.updatedBy,
-              },
-            );
-          },
-        );
+          status:
+            status === "delivered" ||
+            status === "cancelled" ||
+            status === "ready"
+              ? status
+              : "pending",
+          note,
+        });
       } catch (updateError) {
         console.error(
           "[useStoreOrder] Falha ao alterar o status:",
@@ -333,25 +227,16 @@ export default function useStoreOrder(
         );
 
         if (mountedRef.current) {
-          setActionErrorCode(
-            "STATUS_UPDATE_FAILED",
-          );
+          setActionErrorCode("STATUS_UPDATE_FAILED");
         }
 
         throw updateError;
       } finally {
         savingRef.current = false;
-
-        if (mountedRef.current) {
-          setSaving(false);
-        }
+        if (mountedRef.current) setSaving(false);
       }
     },
-    [
-      order?.status,
-      orderId,
-      sellerId,
-    ],
+    [order?.status, orderId, sellerId],
   );
 
   return {

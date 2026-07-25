@@ -12,6 +12,7 @@ import type {
   StoreOrderDate,
   StoreOrderDeliveryMode,
   StoreOrderHistory,
+  StoreOrderInventoryState,
   StoreOrderItem,
   StoreOrderOption,
   StoreOrderShipping,
@@ -128,6 +129,55 @@ function normalizeOption(
   };
 }
 
+function normalizeInventoryState(
+  value: unknown,
+  fallback: Record<string, unknown> = {},
+): StoreOrderInventoryState | undefined {
+  const raw = isRecord(value) ? value : fallback;
+  if (!isRecord(raw)) return undefined;
+
+  const reservedQuantity = Math.max(
+    0,
+    toSafeNumber(raw.reservedQuantity ?? fallback.stockReserved),
+  );
+  const shortageQuantity = Math.max(
+    0,
+    toSafeNumber(raw.shortageQuantity ?? fallback.stockShortage),
+  );
+  const productionRequired = Math.max(
+    0,
+    toSafeNumber(raw.productionRequired ?? fallback.productionRequired),
+  );
+  const producedQuantity = Math.max(0, toSafeNumber(raw.producedQuantity));
+  const consumedQuantity = Math.max(0, toSafeNumber(raw.consumedQuantity));
+  const releasedQuantity = Math.max(0, toSafeNumber(raw.releasedQuantity));
+  const reservationStatus =
+    raw.reservationStatus === "partial" ||
+    raw.reservationStatus === "reserved" ||
+    raw.reservationStatus === "consumed" ||
+    raw.reservationStatus === "released"
+      ? raw.reservationStatus
+      : "none";
+  const productionStatus =
+    raw.productionStatus === "completed" ||
+    raw.productionStatus === "not_required"
+      ? raw.productionStatus
+      : productionRequired > 0
+        ? "pending"
+        : "not_required";
+
+  return {
+    reservationStatus,
+    reservedQuantity,
+    shortageQuantity,
+    productionRequired,
+    producedQuantity,
+    consumedQuantity,
+    releasedQuantity,
+    productionStatus,
+  };
+}
+
 export function normalizeStoreOrderItems(
   value: unknown,
 ): StoreOrderItem[] {
@@ -220,12 +270,19 @@ export function normalizeStoreOrderItems(
           rawItem.productionMode === "made_to_order"
             ? "made_to_order"
             : "normal",
+        inventoryTracked: rawItem.inventoryTracked !== false,
         stockAvailable:
           rawItem.stockAvailable === null
             ? null
             : toOptionalNumber(rawItem.stockAvailable),
+        stockReserved:
+          Math.max(0, toSafeNumber(rawItem.stockReserved)),
         stockShortage:
           Math.max(0, toSafeNumber(rawItem.stockShortage)),
+        productionRequired:
+          Math.max(0, toSafeNumber(rawItem.productionRequired)),
+        inventoryState:
+          normalizeInventoryState(rawItem.inventoryState, rawItem),
         stockState:
           rawItem.stockState === "insufficient" ||
           rawItem.stockState === "not_tracked" ||
@@ -770,9 +827,11 @@ export function parseStoreOrder(
 
     status:
       normalizeStoreOrderStatus(
-        data.status,
+        data.fulfillmentStatus ?? data.status,
       ),
 
+    inventoryManaged: data.inventoryManaged === true,
+    inventoryState: normalizeInventoryState(data.inventoryState),
     items,
 
     history:

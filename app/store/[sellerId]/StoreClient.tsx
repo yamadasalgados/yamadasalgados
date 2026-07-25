@@ -698,7 +698,7 @@ function normalizeProduct(
    */
   const v2Inventory = normalizeInventory(raw.inventory, raw.stockQty ?? raw.stock, raw.lowStockThreshold);
   if (raw.inventory && typeof raw.inventory === "object") {
-    stock = v2Inventory.tracked ? v2Inventory.quantity : undefined;
+    stock = v2Inventory.tracked ? v2Inventory.available : undefined;
     stockField = "inventory";
   }
 

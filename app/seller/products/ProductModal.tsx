@@ -14,8 +14,8 @@ import {
   doc,
   serverTimestamp,
   setDoc,
+  runTransaction,
   Timestamp,
-  updateDoc,
 } from "firebase/firestore";
 import type { User } from "firebase/auth";
 import {
@@ -27,6 +27,7 @@ import {
 } from "lucide-react";
 
 import { db } from "@/app/lib/firebase";
+import { normalizeProductInventory } from "@/app/lib/inventory-schema";
 import { majorToMinor } from "@/app/lib/money";
 import {
   emptyProductContent,
@@ -130,6 +131,7 @@ export default function ProductModal({
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const productRef = useRef<ProductDoc | null>(product);
   const categoriesRef = useRef<string[]>(categories);
+  const reservedStockRef = useRef(0);
 
 
   useEffect(() => {
@@ -193,6 +195,7 @@ export default function ProductModal({
             invalidSale: "無効な販売価格です。",
             invalidUnits: "販売単位は1以上で入力してください。",
             invalidStock: "在庫数は0以上で入力してください。",
+            invalidStockBelowReserved: "予約済み在庫を下回る数量には変更できません。",
             invalidShippingWeight: "発送重量は1g以上で入力してください。",
             imageRequired: "メイン画像を選択してください。",
             help: "商品情報と画像を入力してください。",
@@ -217,6 +220,7 @@ export default function ProductModal({
               invalidSale: "Invalid sale price.",
               invalidUnits: "Units per sale must be at least 1.",
               invalidStock: "Stock must be zero or greater.",
+              invalidStockBelowReserved: "Physical stock cannot be lower than the reserved quantity.",
               invalidShippingWeight: "Shipping weight must be at least 1 gram.",
               imageRequired: "Select a main image.",
               help: "Fill in the product information and images.",
@@ -240,6 +244,7 @@ export default function ProductModal({
               invalidSale: "Preço de venda inválido.",
               invalidUnits: "As unidades por venda devem ser pelo menos 1.",
               invalidStock: "O estoque deve ser zero ou maior.",
+              invalidStockBelowReserved: "O estoque físico não pode ficar abaixo da quantidade reservada.",
               invalidShippingWeight: "O peso para envio deve ser pelo menos 1 grama.",
               imageRequired: "Selecione uma imagem principal.",
               help: "Preencha as informações e imagens do produto.",
@@ -326,6 +331,12 @@ export default function ProductModal({
 
     const activeProduct = productRef.current;
     const activeCategories = categoriesRef.current;
+    const activeInventory = normalizeProductInventory(
+      activeProduct?.inventory,
+      activeProduct?.stockQty,
+      activeProduct?.lowStockThreshold,
+    );
+    reservedStockRef.current = activeInventory.reserved;
     const nextCategory =
       activeProduct?.category || activeCategories[0] || "";
     const nextState: Snapshot = {
@@ -341,9 +352,9 @@ export default function ProductModal({
           ? String(activeProduct.sellPrice)
           : "",
       quantity: String(activeProduct?.quantity || 1),
-      stockQty: String(activeProduct?.inventory?.quantity ?? activeProduct?.stockQty ?? 0),
-      lowStockThreshold: String(activeProduct?.inventory?.lowStockThreshold ?? activeProduct?.lowStockThreshold ?? 5),
-      inventoryTracked: activeProduct?.inventory?.tracked ?? true,
+      stockQty: String(activeInventory.quantity),
+      lowStockThreshold: String(activeInventory.lowStockThreshold),
+      inventoryTracked: activeInventory.tracked,
       postalEligible: normalizeProductShipping(activeProduct?.shipping, activeProduct?.postalEligible, activeProduct?.shippingWeightGrams).postalEligible,
       shippingWeightGrams: String(normalizeProductShipping(activeProduct?.shipping, activeProduct?.postalEligible, activeProduct?.shippingWeightGrams).weightGrams ?? ""),
       content: normalizeProductContent(activeProduct?.content, activeProduct?.name || "", activeProduct?.description || ""),
@@ -497,6 +508,11 @@ export default function ProductModal({
 
     if (Number.isNaN(parsedStock) || parsedStock < 0) {
       errors.stockQty = copy.invalidStock;
+    } else if (
+      reservedStockRef.current > 0 &&
+      (!inventoryTracked || parsedStock < reservedStockRef.current)
+    ) {
+      errors.stockQty = `${copy.invalidStockBelowReserved} (${reservedStockRef.current})`;
     }
 
     if (Number.isNaN(parsedThreshold) || parsedThreshold < 0) {
@@ -544,6 +560,7 @@ export default function ProductModal({
     copy.invalidCost,
     copy.invalidSale,
     copy.invalidStock,
+    copy.invalidStockBelowReserved,
     copy.invalidUnits,
     copy.invalidShippingWeight,
     costPrice,
@@ -706,7 +723,7 @@ export default function ProductModal({
         normalizedContent.ja.name ||
         name.trim();
 
-      const payload = {
+      let payload = {
         schemaVersion: 2 as const,
         ownerUid: authUser.uid,
         sellerId,
@@ -725,6 +742,7 @@ export default function ProductModal({
         inventory: {
           tracked: inventoryTracked,
           quantity: stock,
+          reserved: inventoryTracked ? reservedStockRef.current : 0,
           lowStockThreshold: threshold,
         },
         shipping: {
@@ -751,11 +769,51 @@ export default function ProductModal({
       let mode: ProductSaveResult["mode"];
 
       if (product) {
-        await updateDoc(
-          doc(db, "sellers", sellerId, "products", product.id),
-          payload,
+        const productReference = doc(
+          db,
+          "sellers",
+          sellerId,
+          "products",
+          product.id,
         );
 
+        await runTransaction(db, async (transaction) => {
+          const currentSnapshot = await transaction.get(productReference);
+          if (!currentSnapshot.exists()) {
+            throw new Error("PRODUCT_NOT_FOUND");
+          }
+
+          const currentData = currentSnapshot.data();
+          const currentInventory = normalizeProductInventory(
+            currentData.inventory,
+            currentData.stockQty ?? currentData.stock,
+            currentData.lowStockThreshold,
+          );
+
+          if (
+            inventoryTracked &&
+            stock < currentInventory.reserved
+          ) {
+            throw new Error(
+              `STOCK_BELOW_RESERVED:${currentInventory.reserved}`,
+            );
+          }
+
+          payload = {
+            ...payload,
+            inventory: {
+              tracked: inventoryTracked,
+              quantity: stock,
+              reserved: inventoryTracked
+                ? currentInventory.reserved
+                : 0,
+              lowStockThreshold: threshold,
+            },
+          };
+          transaction.update(productReference, payload);
+        });
+
+        reservedStockRef.current = payload.inventory.reserved;
         mode = "updated";
         savedProduct = {
           ...product,
@@ -839,7 +897,18 @@ export default function ProductModal({
       }, 650);
     } catch (error) {
       console.error("[ProductModal] save:", error);
-      setGeneralError(copy.unexpected);
+      const message = error instanceof Error ? error.message : "";
+      if (message.startsWith("STOCK_BELOW_RESERVED:")) {
+        const reserved = message.split(":")[1] || String(reservedStockRef.current);
+        reservedStockRef.current = Number(reserved) || reservedStockRef.current;
+        setFieldErrors((current) => ({
+          ...current,
+          stockQty: `${copy.invalidStockBelowReserved} (${reserved})`,
+        }));
+        setGeneralError(`${copy.invalidStockBelowReserved} (${reserved})`);
+      } else {
+        setGeneralError(copy.unexpected);
+      }
     } finally {
       setUploading(false);
       setSaving(false);
@@ -986,6 +1055,7 @@ export default function ProductModal({
                   setQuantity(value);
                   clearFieldError("quantity");
                 }}
+                reservedStock={reservedStockRef.current}
                 stockQty={stockQty}
                 setStockQty={(value) => {
                   setStockQty(value);

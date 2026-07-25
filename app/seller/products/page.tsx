@@ -396,6 +396,11 @@ export default function ProductsCatalogPage() {
       (snap) => {
         const list = snap.docs.map((d) => {
           const data = d.data();
+          const inventory = normalizeInventory(
+            data.inventory,
+            data.stockQty ?? data.stock,
+            data.lowStockThreshold,
+          );
           return {
             id: d.id,
             createdAt: data.createdAt,
@@ -415,9 +420,9 @@ export default function ProductsCatalogPage() {
             sellPrice: normalizeProductPriceMajor(data, currency),
             unitsPerSale: Number(data.unitsPerSale ?? data.quantity ?? 1),
             quantity: Number(data.unitsPerSale ?? data.quantity ?? 1),
-            inventory: normalizeInventory(data.inventory, data.stockQty ?? data.stock, data.lowStockThreshold),
-            stockQty: normalizeInventory(data.inventory, data.stockQty ?? data.stock, data.lowStockThreshold).quantity,
-            lowStockThreshold: normalizeInventory(data.inventory, data.stockQty ?? data.stock, data.lowStockThreshold).lowStockThreshold,
+            inventory,
+            stockQty: inventory.quantity,
+            lowStockThreshold: inventory.lowStockThreshold,
             shipping: normalizeProductShipping(data.shipping, data.postalEligible, data.shippingWeightGrams),
             postalEligible: normalizeProductShipping(data.shipping, data.postalEligible, data.shippingWeightGrams).postalEligible,
             shippingWeightGrams: normalizeProductShipping(data.shipping, data.postalEligible, data.shippingWeightGrams).weightGrams,
@@ -686,7 +691,7 @@ export default function ProductsCatalogPage() {
       outOfStock: ownProducts.filter(
         (product) =>
           product.status !== "made_to_order" &&
-          product.stockQty <= 0
+          (product.inventory.available ?? Math.max(0, product.stockQty - product.inventory.reserved)) <= 0
       ).length,
       categories:
         categoriesForSellerSelect.length,
@@ -736,7 +741,7 @@ export default function ProductsCatalogPage() {
         if (
           stockFilter === "available" &&
           product.status !== "made_to_order" &&
-          product.stockQty <= 0
+          (product.inventory.available ?? Math.max(0, product.stockQty - product.inventory.reserved)) <= 0
         ) {
           return false;
         }
@@ -745,8 +750,8 @@ export default function ProductsCatalogPage() {
           stockFilter === "low" &&
           !(
             product.status !== "made_to_order" &&
-            product.stockQty > 0 &&
-            product.stockQty <=
+            (product.inventory.available ?? Math.max(0, product.stockQty - product.inventory.reserved)) > 0 &&
+            (product.inventory.available ?? Math.max(0, product.stockQty - product.inventory.reserved)) <=
               product.lowStockThreshold
           )
         ) {
@@ -755,7 +760,7 @@ export default function ProductsCatalogPage() {
 
         if (
           stockFilter === "out" &&
-          (product.status === "made_to_order" || product.stockQty > 0)
+          (product.status === "made_to_order" || (product.inventory.available ?? Math.max(0, product.stockQty - product.inventory.reserved)) > 0)
         ) {
           return false;
         }
@@ -1317,17 +1322,19 @@ function ProductCard({
     allImages[currentIndex] || "";
 
   const madeToOrder = product.status === "made_to_order";
+  const reservedStock = Math.max(0, product.inventory.reserved || 0);
+  const availableStock = product.inventory.available ?? Math.max(0, product.stockQty - reservedStock);
 
   const lowStock =
     !madeToOrder &&
-    product.stockQty > 0 &&
-    product.stockQty <=
+    availableStock > 0 &&
+    availableStock <=
       product.lowStockThreshold;
 
   const stockClass =
     madeToOrder
       ? "border-violet-200 bg-violet-50 text-violet-700 dark:border-violet-900/50 dark:bg-violet-950/30 dark:text-violet-300"
-      : product.stockQty <= 0
+      : availableStock <= 0
         ? "border-red-200 bg-red-50 text-red-700 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-300"
       : lowStock
         ? "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-300"
@@ -1423,7 +1430,12 @@ function ProductCard({
                     : lang === "en"
                       ? "Stock: "
                       : "Estoque: "}
-                  {product.stockQty}
+                  {availableStock}
+                  {reservedStock > 0 && (
+                    <span className="ml-2 font-bold opacity-80">
+                      {lang === "ja" ? `(予約 ${reservedStock})` : lang === "en" ? `(reserved ${reservedStock})` : `(reservado ${reservedStock})`}
+                    </span>
+                  )}
                 </>}
           </div>
 

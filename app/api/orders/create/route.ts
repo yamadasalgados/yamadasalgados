@@ -4,6 +4,7 @@ import * as admin from "firebase-admin";
 import { NextRequest, NextResponse } from "next/server";
 
 import { getAdminDb } from "@/app/lib/firebaseAdmin";
+import { normalizeProductInventory } from "@/app/lib/inventory-schema";
 import {
   evaluatePostalShipping,
   normalizeProductShipping,
@@ -101,8 +102,13 @@ type ProductLine = {
   availabilityStatus: "active" | "made_to_order";
   productionMode: "stock" | "made_to_order";
   inventoryTracked: boolean;
+  inventoryQuantity: number;
+  inventoryReservedBefore: number;
+  inventoryLowStockThreshold: number;
   stockAvailable: number | null;
+  stockReserved: number;
   stockShortage: number;
+  productionRequired: number;
   stockState: "available" | "insufficient" | "not_tracked" | "made_to_order";
   shipping: {
     postalEligible: boolean;
@@ -398,6 +404,7 @@ function normalizeProductLine(params: {
   productId: string;
   quantity: number;
   raw: Record<string, unknown>;
+  catalogRaw?: Record<string, unknown>;
   currency: Currency;
   language: Language;
   defaultLanguage: Language;
@@ -407,6 +414,7 @@ function normalizeProductLine(params: {
     productId,
     quantity,
     raw,
+    catalogRaw = raw,
     currency,
     language,
     defaultLanguage,
@@ -429,12 +437,17 @@ function normalizeProductLine(params: {
     );
 
   const status = cleanString(raw.status, 40);
+  const catalogStatus = cleanString(catalogRaw.status, 40);
   const disabled =
     raw.active === false ||
     raw.enabled === false ||
     status === "inactive" ||
     status === "archived" ||
-    status === "cancelled";
+    status === "cancelled" ||
+    catalogRaw.active === false ||
+    catalogStatus === "inactive" ||
+    catalogStatus === "archived" ||
+    catalogStatus === "cancelled";
 
   if (disabled) {
     throw new OrderError(
@@ -455,29 +468,30 @@ function normalizeProductLine(params: {
     );
   }
 
-  const inventory = record(raw.inventory);
-  const inventoryTracked =
-    typeof inventory.tracked === "boolean" ? inventory.tracked : true;
-  const stockCandidate =
-    typeof inventory.quantity === "number"
-      ? inventory.quantity
-      : typeof raw.stockQty === "number"
-        ? raw.stockQty
-        : typeof raw.stock === "number"
-          ? raw.stock
-          : null;
-
-  const normalizedStock =
-    stockCandidate !== null && Number.isFinite(stockCandidate)
-      ? Math.max(0, Math.floor(stockCandidate))
-      : null;
+  const inventory = normalizeProductInventory(
+    catalogRaw.inventory,
+    catalogRaw.stockQty ?? catalogRaw.stock,
+    catalogRaw.lowStockThreshold,
+  );
+  const inventoryTracked = inventory.tracked;
+  const normalizedStock = inventory.quantity;
+  const availableBeforeReservation = inventory.available;
+  const stockReserved =
+    madeToOrder || !inventoryTracked
+      ? 0
+      : Math.min(quantity, availableBeforeReservation);
   const stockShortage =
-    !madeToOrder && inventoryTracked && normalizedStock !== null
-      ? Math.max(0, quantity - normalizedStock)
-      : 0;
+    madeToOrder
+      ? 0
+      : inventoryTracked
+        ? Math.max(0, quantity - stockReserved)
+        : 0;
+  const productionRequired = madeToOrder
+    ? quantity
+    : stockShortage;
   const stockState: ProductLine["stockState"] = madeToOrder
     ? "made_to_order"
-    : !inventoryTracked || normalizedStock === null
+    : !inventoryTracked
       ? "not_tracked"
       : stockShortage > 0
         ? "insufficient"
@@ -486,9 +500,9 @@ function normalizeProductLine(params: {
   const fallbackName = source === "event" ? productId : `Produto ${productId}`;
 
   const shipping = normalizeProductShipping(
-    raw.shipping,
-    raw.postalEligible,
-    raw.shippingWeightGrams,
+    catalogRaw.shipping ?? raw.shipping,
+    catalogRaw.postalEligible ?? raw.postalEligible,
+    catalogRaw.shippingWeightGrams ?? raw.shippingWeightGrams,
   );
 
   return {
@@ -502,8 +516,13 @@ function normalizeProductLine(params: {
     availabilityStatus: madeToOrder ? "made_to_order" : "active",
     productionMode: madeToOrder ? "made_to_order" : "stock",
     inventoryTracked,
-    stockAvailable: normalizedStock,
+    inventoryQuantity: normalizedStock,
+    inventoryReservedBefore: inventory.reserved,
+    inventoryLowStockThreshold: inventory.lowStockThreshold,
+    stockAvailable: inventoryTracked ? availableBeforeReservation : null,
+    stockReserved,
     stockShortage,
+    productionRequired,
     stockState,
     shipping,
   };
@@ -747,10 +766,14 @@ export async function POST(request: NextRequest) {
     const eventRef = clean.eventId
       ? sellerRef.collection("events").doc(clean.eventId)
       : null;
-    const productRefs = Object.keys(clean.quantities).map((productId) =>
+    const productIds = Object.keys(clean.quantities);
+    const orderItemRefs = productIds.map((productId) =>
       clean.source === "event"
         ? eventRef!.collection("items").doc(productId)
         : sellerRef.collection("products").doc(productId),
+    );
+    const catalogProductRefs = productIds.map((productId) =>
+      sellerRef.collection("products").doc(productId),
     );
     const offerRef = clean.selectedOfferId
       ? clean.source === "event"
@@ -789,7 +812,8 @@ export async function POST(request: NextRequest) {
     const transactionResult = await db.runTransaction(async (transaction) => {
       const refs: admin.firestore.DocumentReference[] = [markerRef, sellerRef];
       if (eventRef) refs.push(eventRef);
-      refs.push(...productRefs);
+      refs.push(...orderItemRefs);
+      if (clean.source === "event") refs.push(...catalogProductRefs);
       if (offerRef) refs.push(offerRef);
       if (shippingSettingsRef) refs.push(shippingSettingsRef);
 
@@ -798,7 +822,10 @@ export async function POST(request: NextRequest) {
       const markerSnapshot = snapshots[cursor++];
       const sellerSnapshot = snapshots[cursor++];
       const eventSnapshot = eventRef ? snapshots[cursor++] : null;
-      const productSnapshots = productRefs.map(() => snapshots[cursor++]);
+      const orderItemSnapshots = orderItemRefs.map(() => snapshots[cursor++]);
+      const catalogProductSnapshots = clean.source === "event"
+        ? catalogProductRefs.map(() => snapshots[cursor++])
+        : orderItemSnapshots;
       const offerSnapshot = offerRef ? snapshots[cursor++] : null;
       const shippingSettingsSnapshot = shippingSettingsRef ? snapshots[cursor++] : null;
 
@@ -914,12 +941,13 @@ export async function POST(request: NextRequest) {
         30,
       );
 
-      const productIds = Object.keys(clean.quantities);
       const lines: ProductLine[] = [];
 
-      for (let index = 0; index < productSnapshots.length; index += 1) {
-        const snapshot = productSnapshots[index];
-        if (!snapshot.exists) {
+      for (let index = 0; index < orderItemSnapshots.length; index += 1) {
+        const orderItemSnapshot = orderItemSnapshots[index];
+        const catalogProductSnapshot = catalogProductSnapshots[index];
+
+        if (!orderItemSnapshot.exists || !catalogProductSnapshot.exists) {
           throw new OrderError(
             "PRODUCT_UNAVAILABLE",
             "Um dos produtos não existe mais.",
@@ -932,7 +960,8 @@ export async function POST(request: NextRequest) {
           normalizeProductLine({
             productId,
             quantity: clean.quantities[productId],
-            raw: snapshot.data() ?? {},
+            raw: orderItemSnapshot.data() ?? {},
+            catalogRaw: catalogProductSnapshot.data() ?? {},
             currency,
             language: clean.language,
             defaultLanguage,
@@ -1059,28 +1088,54 @@ export async function POST(request: NextRequest) {
         ...(hasMadeToOrderItems ? ["made_to_order"] : []),
         ...(hasStockShortage ? ["stock_shortage"] : []),
       ];
-      const items = lines.map((line) => ({
-        productId: line.productId,
-        name: line.name,
-        qty: line.quantity,
-        quantity: line.quantity,
-        unitPriceMinor: line.priceMinor,
-        unitPrice: minorToMajor(line.priceMinor, currency),
-        subtotalMinor: line.priceMinor * line.quantity,
-        subtotal: minorToMajor(line.priceMinor * line.quantity, currency),
-        imageUrl: line.imageUrl,
-        category: line.category,
-        availabilityMode: line.availabilityMode,
-        availabilityStatus: line.availabilityStatus,
-        productionMode: line.productionMode,
-        inventoryTracked: line.inventoryTracked,
-        stockAvailable: line.stockAvailable,
-        stockShortage: line.stockShortage,
-        stockState: line.stockState,
-        shipping: line.shipping,
-        postalEligible: line.shipping.postalEligible,
-        shippingWeightGrams: line.shipping.weightGrams,
-      }));
+      const items = lines.map((line) => {
+        const reservationStatus =
+          line.availabilityMode === "made_to_order" || !line.inventoryTracked
+            ? "none"
+            : line.stockReserved >= line.quantity
+              ? "reserved"
+              : line.stockReserved > 0
+                ? "partial"
+                : "none";
+
+        return {
+          productId: line.productId,
+          name: line.name,
+          qty: line.quantity,
+          quantity: line.quantity,
+          unitPriceMinor: line.priceMinor,
+          unitPrice: minorToMajor(line.priceMinor, currency),
+          subtotalMinor: line.priceMinor * line.quantity,
+          subtotal: minorToMajor(line.priceMinor * line.quantity, currency),
+          imageUrl: line.imageUrl,
+          category: line.category,
+          availabilityMode: line.availabilityMode,
+          availabilityStatus: line.availabilityStatus,
+          productionMode: line.productionMode,
+          inventoryTracked: line.inventoryTracked,
+          stockAvailable: line.stockAvailable,
+          stockReserved: line.stockReserved,
+          stockShortage: line.stockShortage,
+          productionRequired: line.productionRequired,
+          stockState: line.stockState,
+          inventoryState: {
+            reservationStatus,
+            reservedQuantity: line.stockReserved,
+            shortageQuantity: line.stockShortage,
+            productionRequired: line.productionRequired,
+            producedQuantity: 0,
+            consumedQuantity: 0,
+            releasedQuantity: 0,
+            productionStatus:
+              line.availabilityMode === "made_to_order"
+                ? "pending"
+                : "not_required",
+          },
+          shipping: line.shipping,
+          postalEligible: line.shipping.postalEligible,
+          shippingWeightGrams: line.shipping.weightGrams,
+        };
+      });
       const quantities = Object.fromEntries(
         lines.map((line) => [line.productId, line.quantity]),
       );
@@ -1118,6 +1173,23 @@ export async function POST(request: NextRequest) {
           hasMadeToOrderItems,
           hasStockShortage,
           reasonCodes: readinessReasonCodes,
+        },
+        inventoryManaged: true,
+        inventoryState: {
+          reservationStatus:
+            hasStockShortage
+              ? lines.some((line) => line.stockReserved > 0)
+                ? "partial"
+                : "none"
+              : lines.some((line) => line.stockReserved > 0)
+                ? "reserved"
+                : "none",
+          reservedQuantity: lines.reduce((sum, line) => sum + line.stockReserved, 0),
+          shortageQuantity: lines.reduce((sum, line) => sum + line.stockShortage, 0),
+          productionRequired: lines.reduce((sum, line) => sum + line.productionRequired, 0),
+          producedQuantity: 0,
+          consumedQuantity: 0,
+          releasedQuantity: 0,
         },
         channel: clean.source === "store" ? "store" : "pwa",
         deliveryMode: clean.delivery.mode,
@@ -1157,6 +1229,93 @@ export async function POST(request: NextRequest) {
         createdBy: "public-order-api",
         updatedBy: "public-order-api",
       };
+
+      for (let index = 0; index < lines.length; index += 1) {
+        const line = lines[index];
+        const catalogProductRef = catalogProductRefs[index];
+
+        if (
+          line.availabilityMode !== "made_to_order" &&
+          line.inventoryTracked &&
+          line.stockReserved > 0
+        ) {
+          const nextReserved = line.inventoryReservedBefore + line.stockReserved;
+          transaction.set(
+            catalogProductRef,
+            {
+              inventory: {
+                tracked: true,
+                quantity: line.inventoryQuantity,
+                reserved: nextReserved,
+                lowStockThreshold: line.inventoryLowStockThreshold,
+              },
+              stockQty: line.inventoryQuantity,
+              updatedAt: now,
+            },
+            { merge: true },
+          );
+
+          const movementRef = sellerRef
+            .collection("inventoryMovements")
+            .doc(`${orderRef.id}_${line.productId}_reserve`);
+          transaction.create(movementRef, {
+            schemaVersion: 2,
+            type: "reserve",
+            sellerId: clean.sellerId,
+            productId: line.productId,
+            orderId: orderRef.id,
+            orderSource: clean.source,
+            eventId: clean.eventId || null,
+            quantity: line.stockReserved,
+            before: {
+              quantity: line.inventoryQuantity,
+              reserved: line.inventoryReservedBefore,
+              available: Math.max(0, line.inventoryQuantity - line.inventoryReservedBefore),
+            },
+            after: {
+              quantity: line.inventoryQuantity,
+              reserved: nextReserved,
+              available: Math.max(0, line.inventoryQuantity - nextReserved),
+            },
+            createdAt: now,
+            createdBy: "public-order-api",
+          });
+        }
+
+        if (line.stockShortage > 0 || line.productionRequired > 0) {
+          const shortageRef = sellerRef
+            .collection("inventoryMovements")
+            .doc(`${orderRef.id}_${line.productId}_requirement`);
+          transaction.create(shortageRef, {
+            schemaVersion: 2,
+            type:
+              line.availabilityMode === "made_to_order"
+                ? "production_required"
+                : "reserve_shortage",
+            sellerId: clean.sellerId,
+            productId: line.productId,
+            orderId: orderRef.id,
+            orderSource: clean.source,
+            eventId: clean.eventId || null,
+            quantity: line.productionRequired || line.stockShortage,
+            before: {
+              quantity: line.inventoryQuantity,
+              reserved: line.inventoryReservedBefore,
+              available: Math.max(0, line.inventoryQuantity - line.inventoryReservedBefore),
+            },
+            after: {
+              quantity: line.inventoryQuantity,
+              reserved: line.inventoryReservedBefore + line.stockReserved,
+              available: Math.max(
+                0,
+                line.inventoryQuantity - line.inventoryReservedBefore - line.stockReserved,
+              ),
+            },
+            createdAt: now,
+            createdBy: "public-order-api",
+          });
+        }
+      }
 
       transaction.create(orderRef, orderPayload);
       transaction.create(markerRef, {

@@ -26,6 +26,7 @@ import {
   formatMoneyMajor,
   formatMoneyMinor,
 } from "@/app/lib/money";
+import { normalizeProductInventory } from "@/app/lib/inventory-schema";
 import { Gift } from "lucide-react";
 import {
   normalizeOffer,
@@ -44,6 +45,7 @@ import {
   normalizeOrderStatus,
   type OrderStatus,
 } from "@/app/lib/order-status";
+import { updateSellerOrderStatus } from "@/app/lib/order-status-client";
 
 // --- 📝 Interfaces de Tipagem Estrita ---
 
@@ -227,6 +229,11 @@ async function loadSellerProductsOnly(sellerUid: string): Promise<ProductDoc[]> 
     .map((d) => {
       const data = d.data() as any;
       if (String(data.status || "active") === "inactive") return null;
+      const inventory = normalizeProductInventory(
+        data.inventory,
+        data.stockQty ?? data.stock,
+        data.lowStockThreshold,
+      );
 
       return {
         id: d.id,
@@ -239,8 +246,8 @@ async function loadSellerProductsOnly(sellerUid: string): Promise<ProductDoc[]> 
           data.status === "made_to_order"
             ? "made_to_order"
             : String(data.status || "active"),
-        stockQty: toNumberOrUndef(data.stockQty),
-        lowStockThreshold: toNumberOrUndef(data.lowStockThreshold),
+        stockQty: inventory.tracked ? inventory.available : undefined,
+        lowStockThreshold: inventory.lowStockThreshold,
       } as ProductDoc;
     })
     .filter(Boolean) as ProductDoc[];
@@ -960,20 +967,28 @@ return validOrders.filter((o) => o.deliveryDate === filterDate);
 }, [orders]);
 
   const handleSetOrderStatus = useCallback(async (orderId: string, nextStatus: OrderStatus) => {
-    if (!eventRef) return;
+    if (!sellerUid || !safeId) return;
     try {
-      await updateDoc(doc(eventRef, "orders", orderId), {
-        status: nextStatus,
-        fulfillmentStatus: nextStatus,
-        deliveredAt: nextStatus === "delivered" ? serverTimestamp() : null,
-        sellerUnread: false,
-        sellerReadAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
+      await updateSellerOrderStatus({
+        source: "event",
+        sellerId: sellerUid,
+        eventId: safeId,
+        orderId,
+        status:
+          nextStatus === "ready" ||
+          nextStatus === "delivered" ||
+          nextStatus === "cancelled"
+            ? nextStatus
+            : "pending",
       });
-    } catch {
-      setError(t("eventPanel.err.updateOrderStatus"));
+    } catch (statusError) {
+      setError(
+        statusError instanceof Error
+          ? statusError.message
+          : t("eventPanel.err.updateOrderStatus"),
+      );
     }
-  }, [eventRef, t]);
+  }, [safeId, sellerUid, t]);
 
   const handleCloseEvent = useCallback(async () => {
     if (!isActive || !eventRef) return;

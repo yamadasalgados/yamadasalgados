@@ -36,6 +36,7 @@ import {
   legacyMajorValueToMinor,
   minorToMajor,
 } from "@/app/lib/money";
+import { normalizeProductInventory } from "@/app/lib/inventory-schema";
 import type {
   RegionalLocale,
   SupportedCurrency,
@@ -155,14 +156,14 @@ function mapProductSnapToData(
       typeof inventory.tracked === "boolean"
         ? inventory.tracked
         : true;
-    const stockQty =
-      typeof inventory.quantity === "number" &&
-      Number.isFinite(inventory.quantity)
-        ? Math.max(0, Math.floor(inventory.quantity))
-        : typeof docData.stockQty === "number" &&
-            Number.isFinite(docData.stockQty)
-          ? Math.max(0, Math.floor(docData.stockQty))
-          : undefined;
+    const normalizedInventory = normalizeProductInventory(
+      inventory,
+      docData.stockQty,
+      docData.lowStockThreshold,
+    );
+    const stockQty = tracked
+      ? normalizedInventory.available
+      : undefined;
     const lowStockThreshold =
       typeof inventory.lowStockThreshold === "number" &&
       Number.isFinite(inventory.lowStockThreshold)
@@ -288,6 +289,24 @@ async function fetchEventPublishedProducts(
       currency,
     ),
   );
+
+  // O evento preserva preço e condição comercial, mas o estoque disponível
+  // vem sempre do catálogo atual do seller para considerar reservas abertas.
+  const catalogSnap = await getDocs(
+    collection(db, "sellers", sellerId, "products"),
+  );
+  catalogSnap.docs.forEach((catalogDoc) => {
+    const published = result[catalogDoc.id];
+    if (!published) return;
+    const data = catalogDoc.data() as Record<string, unknown>;
+    const inventory = normalizeProductInventory(
+      data.inventory,
+      data.stockQty ?? data.stock,
+      data.lowStockThreshold,
+    );
+    published.stockQty = inventory.tracked ? inventory.available : undefined;
+    published.lowStockThreshold = inventory.lowStockThreshold;
+  });
 
   wantedNames.forEach((name) => {
     if (!result[name]) {

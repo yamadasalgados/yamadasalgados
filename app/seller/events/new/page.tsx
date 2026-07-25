@@ -25,6 +25,7 @@ import {
   formatMoneyMinor,
   majorToMinor,
 } from "@/app/lib/money";
+import { normalizeProductInventory } from "@/app/lib/inventory-schema";
 import {
   normalizeOffer,
   offerIsCurrentlyActive,
@@ -273,6 +274,11 @@ export default function CreateNewEventPage() {
         const list = snap.docs
           .map((d) => {
             const data = d.data() as any;
+            const inventory = normalizeProductInventory(
+              data.inventory,
+              data.stockQty ?? data.stock,
+              data.lowStockThreshold,
+            );
 
             return {
               id: d.id,
@@ -289,8 +295,8 @@ export default function CreateNewEventPage() {
                 : data.status === "made_to_order"
                   ? "made_to_order"
                   : "active") as ProductStatus,
-              stockQty: toNumberOrUndef(data.stockQty),
-              lowStockThreshold: toNumberOrUndef(data.lowStockThreshold),
+              stockQty: inventory.tracked ? inventory.available : undefined,
+              lowStockThreshold: inventory.lowStockThreshold,
             };
           })
           .filter((p) => p.name && p.status !== "inactive");

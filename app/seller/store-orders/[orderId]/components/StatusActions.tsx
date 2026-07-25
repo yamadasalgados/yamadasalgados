@@ -61,6 +61,7 @@ export default function StatusActions({
     useState<StoreOrderStatus | null>(
       null,
     );
+  const [actionError, setActionError] = useState("");
 
   async function handleChange(
     status: StoreOrderStatus,
@@ -83,6 +84,7 @@ export default function StatusActions({
     }
 
     setSavingStatus(status);
+    setActionError("");
 
     try {
       await onChange(
@@ -91,6 +93,12 @@ export default function StatusActions({
       );
 
       setNote("");
+    } catch (error) {
+      setActionError(
+        error instanceof Error
+          ? error.message
+          : "Não foi possível alterar o status.",
+      );
     } finally {
       setSavingStatus(null);
     }
@@ -122,6 +130,12 @@ export default function StatusActions({
         disabled={busy}
         className="mt-5 w-full resize-none rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-950 outline-none placeholder:text-neutral-400 focus:border-neutral-500 disabled:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-100 dark:placeholder:text-neutral-500 dark:focus:border-neutral-400 dark:disabled:bg-neutral-800"
       />
+
+      {actionError && (
+        <p role="alert" className="mt-4 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm font-bold text-red-700 dark:border-red-900/50 dark:bg-red-950/20 dark:text-red-300">
+          {actionError}
+        </p>
+      )}
 
       <div className="mt-5 grid gap-3">
         {FULFILLMENT_ORDER_STATUS.map(

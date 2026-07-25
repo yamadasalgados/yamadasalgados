@@ -60,6 +60,24 @@ export interface StoreOrderShipping {
   instructions?: string;
 }
 
+export type StoreOrderReservationStatus =
+  | "none"
+  | "partial"
+  | "reserved"
+  | "consumed"
+  | "released";
+
+export interface StoreOrderInventoryState {
+  reservationStatus: StoreOrderReservationStatus;
+  reservedQuantity: number;
+  shortageQuantity: number;
+  productionRequired: number;
+  producedQuantity?: number;
+  consumedQuantity: number;
+  releasedQuantity: number;
+  productionStatus?: "pending" | "completed" | "not_required";
+}
+
 export interface StoreOrderOption {
   id?: string;
   name: string;
@@ -78,8 +96,12 @@ export interface StoreOrderItem {
   imageUrl?: string;
   note?: string;
   availabilityMode?: "normal" | "made_to_order";
+  inventoryTracked?: boolean;
   stockAvailable?: number | null;
+  stockReserved?: number;
   stockShortage?: number;
+  productionRequired?: number;
+  inventoryState?: StoreOrderInventoryState;
   stockState?: "available" | "insufficient" | "not_tracked" | "made_to_order";
   shipping?: {
     postalEligible: boolean;
@@ -130,6 +152,8 @@ export interface StoreOrder {
   updatedBy?: string;
 
   status: StoreOrderStatus;
+  inventoryManaged?: boolean;
+  inventoryState?: StoreOrderInventoryState;
   items: StoreOrderItem[];
   history: StoreOrderHistory[];
   offersApplied?: AppliedOfferSnapshot[];

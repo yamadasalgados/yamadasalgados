@@ -9,6 +9,8 @@ export type PlanId = "starter" | "pro" | "business";
 export type ProductInventory = {
   tracked: boolean;
   quantity: number;
+  reserved: number;
+  available?: number;
   lowStockThreshold: number;
 };
 

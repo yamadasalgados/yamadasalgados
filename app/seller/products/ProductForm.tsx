@@ -31,6 +31,7 @@ type Props = {
   setSellPrice: (value: string) => void;
   quantity: string;
   setQuantity: (value: string) => void;
+  reservedStock: number;
   stockQty: string;
   setStockQty: (value: string) => void;
   lowStockThreshold: string;
@@ -73,7 +74,7 @@ export default function ProductForm(props: Props) {
     categories, category, setCategory, creatingCategory, setCreatingCategory,
     newCategoryName, setNewCategoryName, onCreateCategory, legacyName,
     setLegacyName, content, setContent, costPrice, setCostPrice, sellPrice,
-    setSellPrice, quantity, setQuantity, stockQty, setStockQty,
+    setSellPrice, quantity, setQuantity, reservedStock, stockQty, setStockQty,
     lowStockThreshold, setLowStockThreshold, inventoryTracked,
     setInventoryTracked, postalEligible, setPostalEligible,
     shippingWeightGrams, setShippingWeightGrams, status, setStatus, existingImageUrl,
@@ -82,10 +83,10 @@ export default function ProductForm(props: Props) {
   } = props;
 
   const copy = lang === "ja"
-    ? { translations: "商品内容（多言語）", defaultName: "標準商品名", short: "短い説明", details: "詳細", ingredients: "原材料", allergens: "アレルゲン", units: "販売単位", stock: "在庫数", threshold: "在庫不足の基準", track: "在庫を管理する", main: "メイン画像", extras: "追加画像", current: "現在の画像（クリックで削除）", queue: "アップロード予定", creating: "作成中...", madeToOrder: "受注生産", madeToOrderHelp: "通常在庫ではなく、事前予約で販売する商品です。", postal: "郵送対象", postalHelp: "この商品を通常ストアから郵送できます。", weight: "発送重量 (g)", weightHelp: "重量別送料を使う場合に必要です。梱包後のおおよその重量を入力してください。" }
+    ? { translations: "商品内容（多言語）", defaultName: "標準商品名", short: "短い説明", details: "詳細", ingredients: "原材料", allergens: "アレルゲン", units: "販売単位", stock: "実在庫数", threshold: "在庫不足の基準", track: "在庫を管理する", main: "メイン画像", extras: "追加画像", current: "現在の画像（クリックで削除）", queue: "アップロード予定", creating: "作成中...", madeToOrder: "受注生産", madeToOrderHelp: "通常在庫ではなく、事前予約で販売する商品です。", postal: "郵送対象", postalHelp: "この商品を通常ストアから郵送できます。", weight: "発送重量 (g)", weightHelp: "重量別送料を使う場合に必要です。梱包後のおおよその重量を入力してください。", reserved: "予約済み", availableAfterReserved: "予約を除く利用可能数" }
     : lang === "en"
-      ? { translations: "Multilingual product content", defaultName: "Default product name", short: "Short description", details: "Details", ingredients: "Ingredients", allergens: "Allergens", units: "Units per sale", stock: "Available stock", threshold: "Low-stock threshold", track: "Track inventory", main: "Main image", extras: "Extra images", current: "Current images (click to remove)", queue: "Upload queue", creating: "Creating...", madeToOrder: "Made to order", madeToOrderHelp: "This item is sold by advance reservation rather than regular stock.", postal: "Postal eligible", postalHelp: "This product may be shipped from the permanent store.", weight: "Shipping weight (g)", weightHelp: "Required for weight-based shipping. Enter the approximate packed weight." }
-      : { translations: "Conteúdo multilíngue do produto", defaultName: "Nome padrão do produto", short: "Descrição curta", details: "Detalhes", ingredients: "Ingredientes", allergens: "Alérgenos", units: "Unidades por venda", stock: "Estoque disponível", threshold: "Limite de estoque baixo", track: "Controlar estoque", main: "Imagem principal", extras: "Imagens extras", current: "Imagens atuais (clique para remover)", queue: "Fila de upload", creating: "Criando...", madeToOrder: "Sob encomenda", madeToOrderHelp: "Este item é vendido mediante reserva antecipada, fora do estoque comum.", postal: "Disponível para envio por correio", postalHelp: "Permite enviar este produto pela Store permanente.", weight: "Peso para envio (g)", weightHelp: "Necessário para frete por peso. Informe o peso aproximado já considerando a embalagem." };
+      ? { translations: "Multilingual product content", defaultName: "Default product name", short: "Short description", details: "Details", ingredients: "Ingredients", allergens: "Allergens", units: "Units per sale", stock: "Physical stock", threshold: "Low-stock threshold", track: "Track inventory", main: "Main image", extras: "Extra images", current: "Current images (click to remove)", queue: "Upload queue", creating: "Creating...", madeToOrder: "Made to order", madeToOrderHelp: "This item is sold by advance reservation rather than regular stock.", postal: "Postal eligible", postalHelp: "This product may be shipped from the permanent store.", weight: "Shipping weight (g)", weightHelp: "Required for weight-based shipping. Enter the approximate packed weight.", reserved: "Reserved", availableAfterReserved: "Available after reservations" }
+      : { translations: "Conteúdo multilíngue do produto", defaultName: "Nome padrão do produto", short: "Descrição curta", details: "Detalhes", ingredients: "Ingredientes", allergens: "Alérgenos", units: "Unidades por venda", stock: "Estoque físico", threshold: "Limite de estoque baixo", track: "Controlar estoque", main: "Imagem principal", extras: "Imagens extras", current: "Imagens atuais (clique para remover)", queue: "Fila de upload", creating: "Criando...", madeToOrder: "Sob encomenda", madeToOrderHelp: "Este item é vendido mediante reserva antecipada, fora do estoque comum.", postal: "Disponível para envio por correio", postalHelp: "Permite enviar este produto pela Store permanente.", weight: "Peso para envio (g)", weightHelp: "Necessário para frete por peso. Informe o peso aproximado já considerando a embalagem.", reserved: "Reservado", availableAfterReserved: "Disponível após reservas" };
 
   const updateContent = (language: ProductLanguage, field: keyof ProductContent[ProductLanguage], value: string) => {
     setContent({ ...content, [language]: { ...content[language], [field]: value } });
@@ -132,9 +133,14 @@ export default function ProductForm(props: Props) {
     <div className="space-y-1"><label className="text-xs font-black uppercase tracking-wider">{costLabel}</label><input value={costPrice} onChange={(e) => setCostPrice(e.target.value)} inputMode="decimal" disabled={disabled} className={fieldClass(Boolean(errors.costPrice))} /><FieldError message={errors.costPrice} /></div>
     <div className="space-y-1"><label className="text-xs font-black uppercase tracking-wider">{saleLabel}</label><input value={sellPrice} onChange={(e) => setSellPrice(e.target.value)} inputMode="decimal" disabled={disabled} className={fieldClass(Boolean(errors.sellPrice))} /><FieldError message={errors.sellPrice} /></div>
     <div className="space-y-1"><label className="text-xs font-black uppercase tracking-wider">{copy.units}</label><input value={quantity} onChange={(e) => setQuantity(e.target.value)} inputMode="numeric" disabled={disabled} className={fieldClass(Boolean(errors.quantity))} /><FieldError message={errors.quantity} /></div>
-    <div className="space-y-1"><label className="text-xs font-black uppercase tracking-wider">{copy.stock}</label><input value={stockQty} onChange={(e) => setStockQty(e.target.value)} inputMode="numeric" disabled={disabled || !inventoryTracked} className={fieldClass(Boolean(errors.stockQty))} /><FieldError message={errors.stockQty} /></div>
+    <div className="space-y-1">
+      <label className="text-xs font-black uppercase tracking-wider">{copy.stock}</label>
+      <input value={stockQty} onChange={(e) => setStockQty(e.target.value)} inputMode="numeric" disabled={disabled || !inventoryTracked} className={fieldClass(Boolean(errors.stockQty))} />
+      {inventoryTracked && reservedStock > 0 && <p className="text-[11px] font-bold text-amber-700 dark:text-amber-300">{copy.reserved}: {reservedStock} · {copy.availableAfterReserved}: {Math.max(0, Number(stockQty || 0) - reservedStock)}</p>}
+      <FieldError message={errors.stockQty} />
+    </div>
     <div className="space-y-1"><label className="text-xs font-black uppercase tracking-wider">{copy.threshold}</label><input value={lowStockThreshold} onChange={(e) => setLowStockThreshold(e.target.value)} inputMode="numeric" disabled={disabled || !inventoryTracked} className={fieldClass(Boolean(errors.lowStockThreshold))} /><FieldError message={errors.lowStockThreshold} /></div>
-    <div className="flex items-center gap-3 rounded-xl border border-neutral-200 px-3 dark:border-neutral-800"><input id="inventory-tracked" type="checkbox" checked={inventoryTracked} onChange={(e) => setInventoryTracked(e.target.checked)} disabled={disabled} /><label htmlFor="inventory-tracked" className="py-3 text-sm font-bold">{copy.track}</label></div>
+    <div className="flex items-center gap-3 rounded-xl border border-neutral-200 px-3 dark:border-neutral-800"><input id="inventory-tracked" type="checkbox" checked={inventoryTracked} onChange={(e) => setInventoryTracked(e.target.checked)} disabled={disabled || reservedStock > 0} /><label htmlFor="inventory-tracked" className="py-3 text-sm font-bold">{copy.track}</label></div>
 
     <section className="space-y-3 rounded-2xl border border-blue-200 bg-blue-50/60 p-4 dark:border-blue-900/50 dark:bg-blue-950/20 sm:col-span-2">
       <label className="flex cursor-pointer items-center justify-between gap-4">

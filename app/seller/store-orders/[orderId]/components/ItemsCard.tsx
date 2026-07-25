@@ -174,13 +174,23 @@ export default function ItemsCard({
                           </span>
                         )}
 
-                        {(item.stockShortage ?? 0) > 0 && (
+                        {(item.stockReserved ?? item.inventoryState?.reservedQuantity ?? 0) > 0 && (
+                          <p className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] font-bold text-emerald-800 dark:border-emerald-900/50 dark:bg-emerald-950/20 dark:text-emerald-300">
+                            {locale.startsWith("ja")
+                              ? `予約済み: ${item.stockReserved ?? item.inventoryState?.reservedQuantity ?? 0}`
+                              : locale.startsWith("en")
+                                ? `Reserved: ${item.stockReserved ?? item.inventoryState?.reservedQuantity ?? 0}`
+                                : `Reservado: ${item.stockReserved ?? item.inventoryState?.reservedQuantity ?? 0}`}
+                          </p>
+                        )}
+
+                        {(item.stockShortage ?? item.inventoryState?.shortageQuantity ?? 0) > 0 && (
                           <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-[10px] font-bold text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-300">
                             {locale.startsWith("ja")
-                              ? `在庫不足: ${item.stockShortage}`
+                              ? `在庫不足: ${item.stockShortage ?? item.inventoryState?.shortageQuantity ?? 0}`
                               : locale.startsWith("en")
-                                ? `Stock shortage: ${item.stockShortage}`
-                                : `Falta no estoque: ${item.stockShortage}`}
+                                ? `Stock shortage: ${item.stockShortage ?? item.inventoryState?.shortageQuantity ?? 0}`
+                                : `Falta no estoque: ${item.stockShortage ?? item.inventoryState?.shortageQuantity ?? 0}`}
                           </p>
                         )}
                       </div>

@@ -23,6 +23,7 @@ import {
 import { useI18n } from "@/app/lib/i18n";
 import { ensureUserProfile } from "@/app/lib/ensureUserProfile";
 import { formatMoneyMajor } from "@/app/lib/money";
+import { updateSellerOrderStatus } from "@/app/lib/order-status-client";
 import type {
   RegionalLocale,
   SupportedCurrency,
@@ -62,11 +63,24 @@ type EventDoc = {
   createdAt?: Timestamp;
 };
 
+type EventOrderItem = {
+  productId: string;
+  name: string;
+  quantity: number;
+  unitPrice: number;
+  subtotal: number;
+  availabilityMode: "normal" | "made_to_order";
+  stockReserved: number;
+  stockShortage: number;
+  productionRequired: number;
+};
+
 type OrderDoc = {
   customerName?: string;
   customerPhone?: string;
   note?: string;
   quantities: Record<string, number>;
+  items?: EventOrderItem[];
   totalItems?: number;
   subtotal?: number;
   discount?: number;
@@ -380,6 +394,30 @@ export default function OrderDetailClient({ eventId, orderId }: { eventId: strin
           customerPhone: data.customerPhone || "",
           note: data.note || "",
           quantities: (data.quantities || {}) as Record<string, number>,
+          items: Array.isArray(data.items)
+            ? data.items.map((item: any) => ({
+                productId: String(item.productId || item.id || ""),
+                name: String(item.name || item.productName || item.productId || ""),
+                quantity: Number(item.quantity ?? item.qty ?? 0),
+                unitPrice: Number(item.unitPrice ?? item.price ?? 0),
+                subtotal: Number(item.subtotal ?? 0),
+                availabilityMode:
+                  item.availabilityMode === "made_to_order" ||
+                  item.availabilityStatus === "made_to_order" ||
+                  item.productionMode === "made_to_order"
+                    ? "made_to_order"
+                    : "normal",
+                stockReserved: Number(
+                  item.stockReserved ?? item.inventoryState?.reservedQuantity ?? 0,
+                ),
+                stockShortage: Number(
+                  item.stockShortage ?? item.inventoryState?.shortageQuantity ?? 0,
+                ),
+                productionRequired: Number(
+                  item.productionRequired ?? item.inventoryState?.productionRequired ?? 0,
+                ),
+              }))
+            : [],
           totalItems: Number(data.totalItems || 0),
           subtotal: Number(data.subtotal || data.totalAmount || 0),
           discount: Number(data.discount || 0),
@@ -430,14 +468,41 @@ export default function OrderDetailClient({ eventId, orderId }: { eventId: strin
 
   const itemsDetailed = useMemo(() => {
     if (!order) return [];
+
+    if (Array.isArray(order.items) && order.items.length > 0) {
+      return order.items
+        .filter((item) => item.productId && item.quantity > 0)
+        .map((item) => ({
+          id: item.productId,
+          name: item.name || item.productId,
+          qty: item.quantity,
+          price: item.unitPrice,
+          subtotal: item.subtotal || item.unitPrice * item.quantity,
+          availabilityMode: item.availabilityMode,
+          stockReserved: Math.max(0, item.stockReserved || 0),
+          stockShortage: Math.max(0, item.stockShortage || 0),
+          productionRequired: Math.max(0, item.productionRequired || 0),
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
+    }
+
     return Object.entries(order.quantities || {})
       .filter(([, qty]) => Number(qty) > 0)
       .map(([id, qty]) => {
-        const p = productById.get(id);
-        const name = p?.name || id;
-        const price = Number(p?.price ?? 0);
-        const qn = Number(qty || 0);
-        return { id, name, qty: qn, price, subtotal: price * qn };
+        const product = productById.get(id);
+        const price = Number(product?.price ?? 0);
+        const quantity = Number(qty || 0);
+        return {
+          id,
+          name: product?.name || id,
+          qty: quantity,
+          price,
+          subtotal: price * quantity,
+          availabilityMode: "normal" as const,
+          stockReserved: 0,
+          stockShortage: 0,
+          productionRequired: 0,
+        };
       })
       .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
   }, [order, productById]);
@@ -446,23 +511,29 @@ export default function OrderDetailClient({ eventId, orderId }: { eventId: strin
 
   const handleSetOrderStatus = useCallback(
     async (next: OrderStatus) => {
-      if (!eventRef || !safeOrderId) return;
+      if (!sellerUid || !safeEventId || !safeOrderId) return;
       setSaving(true);
+      setError(null);
       try {
-        await updateDoc(doc(eventRef, "orders", safeOrderId), {
+        const result = await updateSellerOrderStatus({
+          source: "event",
+          sellerId: sellerUid,
+          eventId: safeEventId,
+          orderId: safeOrderId,
           status: next,
-          fulfillmentStatus: next,
-          deliveredAt: next === "delivered" ? serverTimestamp() : null,
-          updatedAt: serverTimestamp(),
         });
-        setOrderStatus(next);
-      } catch {
-        setError(t("eventPanel.err.updateOrderStatus"));
+        setOrderStatus(result.status);
+      } catch (statusError) {
+        setError(
+          statusError instanceof Error
+            ? statusError.message
+            : t("eventPanel.err.updateOrderStatus"),
+        );
       } finally {
         setSaving(false);
       }
     },
-    [eventRef, safeOrderId, t]
+    [safeEventId, safeOrderId, sellerUid, t]
   );
 
   const handleSendMessage = useCallback(async () => {
@@ -711,6 +782,23 @@ export default function OrderDetailClient({ eventId, orderId }: { eventId: strin
                           <div className="flex flex-col">
                             <span className="text-neutral-900 dark:text-white font-black tracking-tight">{it.name}</span>
                             <span className="text-[10px] font-mono text-neutral-400 block truncate max-w-[160px]">{it.id}</span>
+                            <div className="mt-1 flex flex-wrap gap-1">
+                              {it.availabilityMode === "made_to_order" && (
+                                <span className="rounded-full bg-violet-100 px-2 py-0.5 text-[9px] font-black text-violet-700 dark:bg-violet-950/40 dark:text-violet-300">
+                                  {lang === "ja" ? "受注生産" : lang === "en" ? "Made to order" : "Sob encomenda"}
+                                </span>
+                              )}
+                              {it.stockReserved > 0 && (
+                                <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[9px] font-black text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
+                                  {lang === "ja" ? `予約 ${it.stockReserved}` : lang === "en" ? `Reserved ${it.stockReserved}` : `Reservado ${it.stockReserved}`}
+                                </span>
+                              )}
+                              {it.stockShortage > 0 && (
+                                <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[9px] font-black text-amber-700 dark:bg-amber-950/40 dark:text-amber-300">
+                                  {lang === "ja" ? `不足 ${it.stockShortage}` : lang === "en" ? `Short ${it.stockShortage}` : `Falta ${it.stockShortage}`}
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </td>
                         <td className="px-4 py-3 text-center text-neutral-500 dark:text-neutral-400 font-bold">{it.qty}</td>

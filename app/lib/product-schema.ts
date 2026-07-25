@@ -1,5 +1,6 @@
 import type { SupportedCurrency } from "@/app/types/regional";
 import { legacyMajorValueToMinor, minorToMajor } from "@/app/lib/money";
+import { normalizeProductInventory } from "@/app/lib/inventory-schema";
 
 export type ProductLanguage = "pt" | "en" | "ja";
 export type LocalizedProductText = {
@@ -86,13 +87,5 @@ export function normalizeProductPriceMajor(raw: Record<string, unknown>, currenc
 }
 
 export function normalizeInventory(rawValue: unknown, legacyStock: unknown, legacyThreshold: unknown) {
-  const raw = record(rawValue);
-  const tracked = typeof raw.tracked === "boolean" ? raw.tracked : true;
-  const quantityCandidate = typeof raw.quantity === "number" ? raw.quantity : Number(legacyStock ?? 0);
-  const thresholdCandidate = typeof raw.lowStockThreshold === "number" ? raw.lowStockThreshold : Number(legacyThreshold ?? 5);
-  return {
-    tracked,
-    quantity: Number.isFinite(quantityCandidate) ? Math.max(0, Math.floor(quantityCandidate)) : 0,
-    lowStockThreshold: Number.isFinite(thresholdCandidate) ? Math.max(0, Math.floor(thresholdCandidate)) : 5,
-  };
+  return normalizeProductInventory(rawValue, legacyStock, legacyThreshold);
 }

@@ -544,6 +544,21 @@ service cloud.firestore {
     }
 
     match /sellers/{sellerId} {
+      function validSellerOrderMetadataUpdate() {
+        let changed = request.resource.data
+          .diff(resource.data)
+          .affectedKeys();
+
+        return changed.hasOnly([
+          "sellerUnread",
+          "sellerReadAt",
+          "lastMessageText",
+          "lastMessageAt",
+          "updatedAt",
+          "updatedBy"
+        ]);
+      }
+
       // O documento contém os dados necessários para a loja pública.
       allow read: if true;
 
@@ -713,6 +728,15 @@ service cloud.firestore {
         allow read, write: if false;
       }
 
+      // Histórico imutável criado exclusivamente pelo backend de pedidos.
+      match /inventoryMovements/{movementId} {
+        allow read:
+          if isAdmin()
+          || isSellerOwner(sellerId);
+
+        allow create, update, delete: if false;
+      }
+
       // =======================================================
       // STORE ORDERS
       // =======================================================
@@ -725,9 +749,16 @@ service cloud.firestore {
          */
         allow create: if false;
 
-        allow read, update:
+        allow read:
           if isAdmin()
           || isSellerOwner(sellerId);
+
+        allow update:
+          if isAdmin()
+          || (
+            isSellerOwner(sellerId)
+            && validSellerOrderMetadataUpdate()
+          );
 
         allow delete:
           if isAdmin();
@@ -774,9 +805,16 @@ service cloud.firestore {
            */
           allow create: if false;
 
-          allow read, update:
+          allow read:
             if isAdmin()
             || isSellerOwner(sellerId);
+
+          allow update:
+            if isAdmin()
+            || (
+              isSellerOwner(sellerId)
+              && validSellerOrderMetadataUpdate()
+            );
 
           allow delete:
             if isAdmin();
