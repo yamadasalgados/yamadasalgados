@@ -341,6 +341,20 @@ function movementSnapshot(inventory: { quantity: number; reserved: number }) {
   };
 }
 
+function customerOrderIndexRef(
+  db: admin.firestore.Firestore,
+  orderData: Record<string, unknown>,
+): admin.firestore.DocumentReference | null {
+  const customerUid = cleanString(orderData.customerUid, 160);
+  const referenceId = cleanString(orderData.customerOrderRefId, 160);
+
+  if (!customerUid || !referenceId || customerUid.includes("/") || referenceId.includes("/")) {
+    return null;
+  }
+
+  return db.collection("customers").doc(customerUid).collection("orders").doc(referenceId);
+}
+
 function productSnapshotName(data: Record<string, unknown>): string {
   const legacyName = cleanString(data.name ?? data.title, 240);
   const content = record(data.content);
@@ -549,6 +563,24 @@ export async function POST(request: NextRequest) {
           updatedAt: now,
           updatedBy: actor.actor,
         });
+
+        const customerOrderRef = customerOrderIndexRef(db, targetOrder.data);
+        if (customerOrderRef) {
+          transaction.set(
+            customerOrderRef,
+            {
+              status: nextStatus,
+              fulfillmentStatus: nextStatus,
+              readinessReasonCodes: [
+                ...(hasPendingMadeToOrder ? ["made_to_order"] : []),
+                ...(hasStockShortage ? ["stock_shortage"] : []),
+              ],
+              readyAt: ready ? now : null,
+              updatedAt: now,
+            },
+            { merge: true },
+          );
+        }
 
         const productionMovementRef = sellerRef
           .collection("productionMovements")

@@ -1,166 +1,97 @@
-/* Service Worker: Cache Leve + Notificações Push */
+const STATIC_CACHE = "yamada-static-05c";
+const STATIC_PATH_PREFIXES = ["/_next/static/", "/icons/"];
 
-const CACHE_VERSION = "v1";
-const CACHE_NAME = `yamada-cache-${CACHE_VERSION}`;
+self.addEventListener("install", () => {
+  // Atualizações aguardam o comando explícito da interface.
+});
 
-// Cache mínimo (ajuste os paths para o que existe no seu /public)
-const PRECACHE_URLS = [
-  "/",
-  "/manifest.webmanifest",
-  "/icons/icon-192.png",
-  "/icons/icon-512.png",
-];
-
-// Helper: cache com tolerância (não quebra o SW se algum arquivo faltar)
-async function precacheSafe() {
-  const cache = await caches.open(CACHE_NAME);
-  const results = await Promise.allSettled(PRECACHE_URLS.map((u) => cache.add(u)));
-  // opcional: log somente em dev (não recomendo logar muito em produção)
-  // console.log("[SW] precache results", results);
-  return results;
-}
-
-self.addEventListener("install", (event) => {
-  self.skipWaiting();
-  event.waitUntil(precacheSafe());
+self.addEventListener("message", (event) => {
+  if (event.data?.type === "SKIP_WAITING") {
+    self.skipWaiting();
+  }
 });
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(
-    (async () => {
-      // Limpa caches antigos
-      const keys = await caches.keys();
-      await Promise.all(
-        keys
-          .filter((k) => k.startsWith("yamada-cache-") && k !== CACHE_NAME)
-          .map((k) => caches.delete(k))
-      );
-
-      // Assume controle das abas
-      await self.clients.claim();
-    })()
+    Promise.all([
+      caches
+        .keys()
+        .then((keys) =>
+          Promise.all(
+            keys
+              .filter((key) => key.startsWith("yamada-static-") && key !== STATIC_CACHE)
+              .map((key) => caches.delete(key)),
+          ),
+        ),
+      self.clients.claim(),
+    ]),
   );
 });
 
-/**
- * Cache leve:
- * - Navegação: network-first (pra sempre pegar conteúdo atualizado), fallback cache offline
- * - Assets GET same-origin: stale-while-revalidate (rápido e leve)
- */
 self.addEventListener("fetch", (event) => {
-  const req = event.request;
+  const request = event.request;
+  if (request.method !== "GET") return;
 
-  // Só mexe com GET
-  if (req.method !== "GET") return;
-
-  const url = new URL(req.url);
-
-  // Só cacheia o que é do seu próprio domínio
+  const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
+  if (!STATIC_PATH_PREFIXES.some((prefix) => url.pathname.startsWith(prefix))) return;
 
-  // Navegação (HTML): network-first
-  if (req.mode === "navigate") {
-    event.respondWith(
-      (async () => {
-        try {
-          const fresh = await fetch(req);
-          const cache = await caches.open(CACHE_NAME);
-          cache.put(req, fresh.clone());
-          return fresh;
-        } catch {
-          const cached = await caches.match(req);
-          return cached || caches.match("/") || Response.error();
-        }
-      })()
-    );
-    return;
-  }
-
-  // Assets: stale-while-revalidate (bom e leve)
   event.respondWith(
-    (async () => {
-      const cached = await caches.match(req);
-      const fetchPromise = fetch(req)
-        .then(async (res) => {
-          if (res && res.ok) {
-            const cache = await caches.open(CACHE_NAME);
-            cache.put(req, res.clone());
-          }
-          return res;
+    caches.open(STATIC_CACHE).then(async (cache) => {
+      const cached = await cache.match(request);
+      const network = fetch(request)
+        .then((response) => {
+          if (response.ok) cache.put(request, response.clone());
+          return response;
         })
-        .catch(() => null);
-
-      return cached || (await fetchPromise) || Response.error();
-    })()
+        .catch(() => cached);
+      if (cached) return cached;
+      const response = await network;
+      return response || new Response("Offline", { status: 503, statusText: "Offline" });
+    }),
   );
 });
 
-// Listener de Push
 self.addEventListener("push", (event) => {
   let data = {};
   try {
-    data = event.data ? event.data.json() : {};
+    data = event.data?.json() || {};
   } catch {
-    data = { body: event.data ? event.data.text() : "" };
+    data = { body: event.data?.text() || "" };
   }
 
-  const title = data.title || "Novo evento disponível!";
-  const body = data.body || "Abra para ver os produtos e fazer seu pedido.";
-  const rawUrl = data.url || "/";
-
-  // aceita url relativa ou absoluta
-  const targetUrl = (() => {
-    try {
-      return new URL(rawUrl, self.location.origin).toString();
-    } catch {
-      return self.location.origin + "/";
-    }
-  })();
-
+  const title = data.title || "Yamada";
   const options = {
-    body,
-    // Use os ícones que realmente existem no /public
-    icon: "/icons/icon-192.png",
-    badge: "/icons/icon-192.png",
-    vibrate: [200, 100, 200],
-    data: { url: targetUrl },
-
-    // Agrupa notificações do mesmo tipo
-    tag: data.tag || "new-event-alert",
-    renotify: true,
+    body: data.body || "Há uma nova atualização.",
+    icon: data.icon || "/icons/icon-192.png",
+    badge: data.badge || "/icons/icon-192.png",
+    tag: data.tag || undefined,
+    renotify: Boolean(data.renotify),
+    requireInteraction: Boolean(data.requireInteraction),
+    data: {
+      url: data.url || "/",
+      orderReferenceId: data.orderReferenceId || "",
+      kind: data.kind || "",
+    },
   };
 
   event.waitUntil(self.registration.showNotification(title, options));
 });
 
-// Clique na notificação
 self.addEventListener("notificationclick", (event) => {
-  const targetUrl = event.notification?.data?.url || (self.location.origin + "/");
   event.notification.close();
+  const targetUrl = new URL(event.notification.data?.url || "/", self.location.origin).href;
 
   event.waitUntil(
-    (async () => {
-      const target = new URL(targetUrl, self.location.origin);
-
-      const allClients = await self.clients.matchAll({
-        type: "window",
-        includeUncontrolled: true,
-      });
-
-      // foca uma aba que esteja no mesmo origin e mesma "rota base"
-      for (const client of allClients) {
-        try {
-          const cUrl = new URL(client.url);
-          if (cUrl.origin === target.origin && cUrl.pathname === target.pathname && "focus" in client) {
-            return client.focus();
-          }
-        } catch {}
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then(async (clients) => {
+      for (const client of clients) {
+        if ("focus" in client) {
+          await client.focus();
+          if ("navigate" in client) await client.navigate(targetUrl);
+          return;
+        }
       }
-
-      // se não tiver, abre nova
-      if (self.clients.openWindow) {
-        return self.clients.openWindow(target.toString());
-      }
-    })()
+      if (self.clients.openWindow) await self.clients.openWindow(targetUrl);
+    }),
   );
 });

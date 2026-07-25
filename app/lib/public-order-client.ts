@@ -1,3 +1,5 @@
+import { auth } from "@/app/lib/firebase";
+
 export type PublicOrderSource = "store" | "event";
 export type PublicOrderLanguage = "pt" | "en" | "ja";
 export type PublicOrderDeliveryMode = "pickup" | "delivery" | "postal" | "none";
@@ -12,6 +14,7 @@ export type PublicOrderErrorCode =
   | "IDEMPOTENCY_CONFLICT"
   | "TOO_MANY_REQUESTS"
   | "NETWORK_ERROR"
+  | "AUTH_REQUIRED"
   | "UNKNOWN_ERROR";
 
 export type CreatePublicOrderInput = {
@@ -60,6 +63,8 @@ export type CreatePublicOrderResult = {
   shippingFee: number;
   totalAmount: number;
   orderStatus: "pending" | "ready";
+  customerOrderRefId: string | null;
+  customerRegistered: boolean;
   replayed: boolean;
 };
 
@@ -126,6 +131,7 @@ function requestStorageKey(input: CreatePublicOrderInput): string {
   return [
     "yamada",
     "public-order",
+    auth.currentUser?.uid || "guest",
     input.sellerId.trim(),
     input.source,
     eventPart,
@@ -169,6 +175,7 @@ function isKnownErrorCode(value: unknown): value is PublicOrderErrorCode {
     value === "IDEMPOTENCY_CONFLICT" ||
     value === "TOO_MANY_REQUESTS" ||
     value === "NETWORK_ERROR" ||
+    value === "AUTH_REQUIRED" ||
     value === "UNKNOWN_ERROR"
   );
 }
@@ -194,11 +201,24 @@ export async function createPublicOrder(
   let response: Response;
 
   try {
+    const headers: Record<string, string> = {
+      "content-type": "application/json",
+    };
+
+    if (auth.currentUser) {
+      try {
+        headers.authorization = `Bearer ${await auth.currentUser.getIdToken()}`;
+      } catch (tokenError) {
+        throw new PublicOrderClientError(
+          "AUTH_REQUIRED",
+          "Sua sessão expirou. Entre novamente para manter este pedido na sua conta.",
+        );
+      }
+    }
+
     response = await fetch("/api/orders/create", {
       method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
+      headers,
       cache: "no-store",
       body: JSON.stringify({
         ...input,
@@ -206,6 +226,8 @@ export async function createPublicOrder(
       }),
     });
   } catch (error) {
+    if (error instanceof PublicOrderClientError) throw error;
+
     throw new PublicOrderClientError(
       "NETWORK_ERROR",
       error instanceof Error

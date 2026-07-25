@@ -3,7 +3,8 @@ import { createHash } from "node:crypto";
 import * as admin from "firebase-admin";
 import { NextRequest, NextResponse } from "next/server";
 
-import { getAdminDb } from "@/app/lib/firebaseAdmin";
+import { getAdminAuth, getAdminDb } from "@/app/lib/firebaseAdmin";
+import { normalizeCustomerAddress } from "@/app/lib/customer-profile";
 import { normalizeProductInventory } from "@/app/lib/inventory-schema";
 import {
   evaluatePostalShipping,
@@ -77,7 +78,8 @@ type OrderErrorCode =
   | "OFFER_UNAVAILABLE"
   | "SHIPPING_UNAVAILABLE"
   | "IDEMPOTENCY_CONFLICT"
-  | "TOO_MANY_REQUESTS";
+  | "TOO_MANY_REQUESTS"
+  | "AUTH_REQUIRED";
 
 class OrderError extends Error {
   readonly code: OrderErrorCode;
@@ -157,6 +159,39 @@ function cleanDeliveryMode(value: unknown): DeliveryMode {
 
 function cleanCurrency(value: unknown): Currency {
   return value === "BRL" || value === "USD" ? value : "JPY";
+}
+
+type CustomerIdentity = {
+  uid: string;
+  email: string;
+  displayName: string;
+  provider: string;
+};
+
+function bearerToken(request: NextRequest): string {
+  const authorization = request.headers.get("authorization") ?? "";
+  return authorization.match(/^Bearer\s+(.+)$/i)?.[1]?.trim() ?? "";
+}
+
+async function resolveCustomerIdentity(request: NextRequest): Promise<CustomerIdentity | null> {
+  const token = bearerToken(request);
+  if (!token) return null;
+
+  try {
+    const decoded = await getAdminAuth().verifyIdToken(token, true);
+    return {
+      uid: decoded.uid,
+      email: cleanString(decoded.email, 200).toLowerCase(),
+      displayName: cleanString(decoded.name, 120),
+      provider: cleanString(decoded.firebase?.sign_in_provider, 80) || "firebase",
+    };
+  } catch {
+    throw new OrderError(
+      "AUTH_REQUIRED",
+      "Sua sessão expirou. Entre novamente para manter o pedido na sua conta.",
+      401,
+    );
+  }
 }
 
 function cleanInteger(value: unknown, min: number, max: number): number {
@@ -715,6 +750,8 @@ function resultResponse(params: {
   shippingFeeMinor: number;
   totalAmountMinor: number;
   orderStatus: "pending" | "ready";
+  customerOrderRefId: string;
+  customerRegistered: boolean;
   replayed: boolean;
 }) {
   return {
@@ -732,6 +769,8 @@ function resultResponse(params: {
     shippingFee: minorToMajor(params.shippingFeeMinor, params.currency),
     totalAmount: minorToMajor(params.totalAmountMinor, params.currency),
     orderStatus: params.orderStatus,
+    customerOrderRefId: params.customerOrderRefId || null,
+    customerRegistered: params.customerRegistered,
     replayed: params.replayed,
   };
 }
@@ -759,10 +798,14 @@ export async function POST(request: NextRequest) {
     }
 
     const clean = cleanRequest(requestBody);
+    const customerIdentity = await resolveCustomerIdentity(request);
     const db = getAdminDb();
     const now = admin.firestore.Timestamp.now();
     const nowMillis = now.toMillis();
     const sellerRef = db.collection("sellers").doc(clean.sellerId);
+    const customerRef = customerIdentity
+      ? db.collection("customers").doc(customerIdentity.uid)
+      : null;
     const eventRef = clean.eventId
       ? sellerRef.collection("events").doc(clean.eventId)
       : null;
@@ -792,6 +835,7 @@ export async function POST(request: NextRequest) {
       language: clean.language,
       selectedOfferId: clean.selectedOfferId,
       customerClientId: clean.customerClientId,
+      customerUid: customerIdentity?.uid || "",
       quantities: clean.quantities,
       customer: clean.customer,
       delivery: clean.delivery,
@@ -808,9 +852,13 @@ export async function POST(request: NextRequest) {
       clean.source === "event"
         ? eventRef!.collection("orders").doc()
         : sellerRef.collection("storeOrders").doc();
+    const customerOrderRef = customerRef
+      ? customerRef.collection("orders").doc(sha256(orderRef.path))
+      : null;
 
     const transactionResult = await db.runTransaction(async (transaction) => {
       const refs: admin.firestore.DocumentReference[] = [markerRef, sellerRef];
+      if (customerRef) refs.push(customerRef);
       if (eventRef) refs.push(eventRef);
       refs.push(...orderItemRefs);
       if (clean.source === "event") refs.push(...catalogProductRefs);
@@ -821,6 +869,7 @@ export async function POST(request: NextRequest) {
       let cursor = 0;
       const markerSnapshot = snapshots[cursor++];
       const sellerSnapshot = snapshots[cursor++];
+      const customerSnapshot = customerRef ? snapshots[cursor++] : null;
       const eventSnapshot = eventRef ? snapshots[cursor++] : null;
       const orderItemSnapshots = orderItemRefs.map(() => snapshots[cursor++]);
       const catalogProductSnapshots = clean.source === "event"
@@ -861,6 +910,8 @@ export async function POST(request: NextRequest) {
           shippingFeeMinor: cleanInteger(markerData.shippingFeeMinor, 0, 2_000_000_000),
           totalAmountMinor: cleanInteger(markerData.totalAmountMinor, 0, 2_000_000_000),
           orderStatus: markerData.orderStatus === "ready" ? "ready" : "pending",
+          customerOrderRefId: cleanString(markerData.customerOrderRefId, 160),
+          customerRegistered: Boolean(markerData.customerRegistered),
           replayed: true,
         });
       }
@@ -1170,6 +1221,10 @@ export async function POST(request: NextRequest) {
         customerPhone: clean.customer.phone,
         customerEmail: clean.customer.email || null,
         customerClientId: clean.customerClientId || null,
+        customerUid: customerIdentity?.uid || null,
+        customerRegistered: Boolean(customerIdentity),
+        customerAuthProvider: customerIdentity?.provider || null,
+        customerOrderRefId: customerOrderRef?.id || null,
         quantities,
         items,
         totalItems: clean.totalItems,
@@ -1334,7 +1389,95 @@ export async function POST(request: NextRequest) {
         }
       }
 
+      if (customerRef && customerIdentity) {
+        const customerData = customerSnapshot?.data() ?? {};
+        const customerRewards =
+          customerData.rewards &&
+          typeof customerData.rewards === "object" &&
+          !Array.isArray(customerData.rewards)
+            ? customerData.rewards
+            : {
+                pointsBalance: 0,
+                lifetimeEarned: 0,
+                lifetimeRedeemed: 0,
+                schemaVersion: 1,
+              };
+
+        const currentAddress = normalizeCustomerAddress(customerData.address);
+        const customerAddress = {
+          deliveryAddress: currentAddress.deliveryAddress || clean.delivery.address,
+          locationLink: currentAddress.locationLink || clean.delivery.locationLink,
+          recipientName:
+            currentAddress.recipientName ||
+            clean.delivery.shipping.recipientName ||
+            clean.customer.name,
+          postalCode: currentAddress.postalCode || clean.delivery.shipping.postalCode,
+          prefecture: currentAddress.prefecture || clean.delivery.shipping.prefecture,
+          city: currentAddress.city || clean.delivery.shipping.city,
+          addressLine1: currentAddress.addressLine1 || clean.delivery.shipping.addressLine1,
+          addressLine2: currentAddress.addressLine2 || clean.delivery.shipping.addressLine2,
+        };
+
+        const customerPayload: Record<string, unknown> = {
+          schemaVersion: 2,
+          uid: customerIdentity.uid,
+          name: clean.customer.name || customerIdentity.displayName || null,
+          phone: clean.customer.phone || null,
+          email: clean.customer.email || customerIdentity.email || null,
+          preferredLanguage: clean.language,
+          address: customerAddress,
+          accountStatus: customerData.accountStatus === "disabled" ? "disabled" : "active",
+          rewards: customerRewards,
+          orderCount: admin.firestore.FieldValue.increment(1),
+          lastOrderId: orderRef.id,
+          lastOrderPath: orderRef.path,
+          lastSellerId: clean.sellerId,
+          lastOrderAt: now,
+          updatedAt: now,
+        };
+
+        if (!customerSnapshot?.exists) {
+          customerPayload.createdAt = now;
+        }
+
+        if (clean.customerClientId) {
+          customerPayload.anonymousClientIds =
+            admin.firestore.FieldValue.arrayUnion(clean.customerClientId);
+        }
+
+        transaction.set(customerRef, customerPayload, { merge: true });
+      }
+
       transaction.create(orderRef, orderPayload);
+
+      if (customerOrderRef && customerIdentity) {
+        transaction.create(customerOrderRef, {
+          schemaVersion: 1,
+          customerUid: customerIdentity.uid,
+          sellerId: clean.sellerId,
+          eventId: clean.eventId || null,
+          orderId: orderRef.id,
+          orderPath: orderRef.path,
+          orderSource: clean.source,
+          status: initialOrderStatus,
+          fulfillmentStatus: initialOrderStatus,
+          customerName: clean.customer.name,
+          storeName: cleanString(sellerData.storeName ?? sellerData.displayName, 160) || null,
+          eventTitle: clean.source === "event"
+            ? cleanString(eventData.title ?? eventData.name, 200) || null
+            : null,
+          currency,
+          totalAmountMinor,
+          totalItems: clean.totalItems,
+          deliveryMode: clean.delivery.mode,
+          deliveryDate: clean.delivery.date || null,
+          deliveryTimeSlot: clean.delivery.time || null,
+          readinessReasonCodes,
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
+
       transaction.create(markerRef, {
         schemaVersion: 2,
         source: clean.source,
@@ -1349,6 +1492,8 @@ export async function POST(request: NextRequest) {
         shippingFeeMinor,
         totalAmountMinor,
         orderStatus: initialOrderStatus,
+        customerOrderRefId: customerOrderRef?.id || null,
+        customerRegistered: Boolean(customerIdentity),
         status: "completed",
         createdAt: now,
         expiresAt: admin.firestore.Timestamp.fromMillis(
@@ -1366,6 +1511,8 @@ export async function POST(request: NextRequest) {
         shippingFeeMinor,
         totalAmountMinor,
         orderStatus: initialOrderStatus,
+        customerOrderRefId: customerOrderRef?.id || "",
+        customerRegistered: Boolean(customerIdentity),
         replayed: false,
       });
     });

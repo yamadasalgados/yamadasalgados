@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { db } from "@/app/lib/firebase";
 import { useI18n } from "@/app/lib/i18n";
 import {
@@ -8,6 +9,16 @@ import {
   getPublicOrderErrorCode,
 } from "@/app/lib/public-order-client";
 import OpenInBrowserGate from "@/app/_components/OpenInBrowserGate";
+import CustomerAccountBar from "@/app/_components/CustomerAccountBar";
+import useCustomerSession from "@/app/hooks/useCustomerSession";
+import {
+  eventDraftKey,
+  readLocalDraft,
+  readStoredCustomerProfile,
+  removeLocalDraft,
+  writeLocalDraft,
+  writeStoredCustomerProfile,
+} from "@/app/lib/customer-storage";
 
 import {
   addDoc,
@@ -127,10 +138,6 @@ function pill(active: boolean) {
       ? "bg-black text-white border-black dark:bg-white dark:text-black dark:border-white shadow-sm"
       : "bg-white text-neutral-500 border-neutral-200 hover:bg-neutral-50 dark:bg-neutral-900 dark:text-neutral-400 dark:border-neutral-800 dark:hover:bg-neutral-800"
   );
-}
-
-function makeId() {
-  return `c_${Math.random().toString(16).slice(2)}_${Date.now().toString(16)}`;
 }
 
 function normalizeCategoryDynamic(v: any): CategoryName | undefined {
@@ -355,6 +362,13 @@ const uiLocale =
   const locale = event?.regionalLocale ?? uiLocale;
   const currency = event?.currency ?? "JPY";
   const language = lang === "en" || lang === "ja" ? lang : "pt";
+  const customerSession = useCustomerSession();
+  const customerId = customerSession.clientId;
+  const customerDraftReadyRef = useRef(false);
+  const customerDraftKey = useMemo(
+    () => eventDraftKey(sellerId, id),
+    [id, sellerId],
+  );
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
 
@@ -383,8 +397,8 @@ const uiLocale =
   const [submitting, setSubmitting] = useState(false);
   const [sentToast, setSentToast] = useState(false);
 
-  const [customerId, setCustomerId] = useState("");
   const [lastOrderId, setLastOrderId] = useState("");
+  const [lastCustomerOrderRefId, setLastCustomerOrderRefId] = useState("");
   const [chatOpen, setChatOpen] = useState(false);
   const [chatText, setChatText] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
@@ -497,8 +511,6 @@ const uiLocale =
 }, [locale]);
 
   const resetOrderForm = useCallback(() => {
-    setCustomerName("");
-    setCustomerPhone("");
     setQuantities({});
     setNote("");
     setLocationLink("");
@@ -596,23 +608,145 @@ const uiLocale =
   );
 
   useEffect(() => {
-    if (typeof window === "undefined") return;
+    if (!event) return;
 
-    setCurrentUrl(window.location.href);
+    customerDraftReadyRef.current = false;
+    const storedProfile = readStoredCustomerProfile();
+    const draft = readLocalDraft<{
+      customerName?: string;
+      customerPhone?: string;
+      note?: string;
+      quantities?: Record<string, number>;
+      dateOption?: DateOption;
+      selectedDate?: string;
+      deliveryMode?: DeliveryMode;
+      timeOption?: TimeOption;
+      selectedHour?: number | null;
+      selectedMinute?: number | null;
+      locationLink?: string;
+      selectedOfferId?: string;
+    }>(customerDraftKey);
 
-    try {
-      const saved = window.localStorage.getItem("yamada_customer_id");
-      if (saved && saved.trim()) {
-        setCustomerId(saved.trim());
-        return;
+    setCustomerName(draft?.customerName || storedProfile.name || "");
+    setCustomerPhone(draft?.customerPhone || storedProfile.phone || "");
+    if (typeof draft?.note === "string") setNote(draft.note);
+    if (draft?.quantities && typeof draft.quantities === "object") {
+      setQuantities(draft.quantities);
+    }
+    if (draft?.dateOption === "event-date" || draft?.dateOption === "no-preference") {
+      setDateOption(draft.dateOption);
+    }
+    if (typeof draft?.selectedDate === "string") setSelectedDate(draft.selectedDate);
+    if (draft?.deliveryMode === "pickup" || draft?.deliveryMode === "delivery" || draft?.deliveryMode === "none") {
+      setDeliveryMode(draft.deliveryMode);
+    }
+    if (draft?.timeOption === "custom" || draft?.timeOption === "no-preference") {
+      setTimeOption(draft.timeOption);
+    }
+    if (typeof draft?.selectedHour === "number" || draft?.selectedHour === null) {
+      setSelectedHour(draft.selectedHour ?? null);
+    }
+    if (typeof draft?.selectedMinute === "number" || draft?.selectedMinute === null) {
+      setSelectedMinute(draft.selectedMinute ?? null);
+    }
+    if (typeof draft?.locationLink === "string" && draft.locationLink) {
+      setLocationLink(draft.locationLink);
+    } else if (storedProfile.address.locationLink) {
+      setLocationLink(storedProfile.address.locationLink);
+    }
+    if (typeof draft?.selectedOfferId === "string") setSelectedOfferId(draft.selectedOfferId);
+
+    customerDraftReadyRef.current = true;
+  }, [customerDraftKey, event]);
+
+  useEffect(() => {
+    const profile = customerSession.profile;
+    if (!profile) return;
+    setCustomerName((current) => current || profile.name);
+    setCustomerPhone((current) => current || profile.phone);
+    setLocationLink((current) => current || profile.address.locationLink);
+  }, [customerSession.profile]);
+
+  useEffect(() => {
+    if (!customerDraftReadyRef.current) return;
+
+    const timer = window.setTimeout(() => {
+      writeStoredCustomerProfile({
+        name: customerName,
+        phone: customerPhone,
+        email: customerSession.profile?.email || "",
+        address: {
+          ...(customerSession.profile?.address || readStoredCustomerProfile().address),
+          locationLink,
+        },
+      });
+      writeLocalDraft(customerDraftKey, {
+        customerName,
+        customerPhone,
+        note,
+        quantities,
+        dateOption,
+        selectedDate,
+        deliveryMode,
+        timeOption,
+        selectedHour,
+        selectedMinute,
+        locationLink,
+        selectedOfferId,
+        updatedAt: Date.now(),
+      });
+    }, 250);
+
+    return () => window.clearTimeout(timer);
+  }, [
+    customerDraftKey,
+    customerName,
+    customerPhone,
+    customerSession.profile?.email,
+    dateOption,
+    deliveryMode,
+    locationLink,
+    note,
+    quantities,
+    selectedDate,
+    selectedHour,
+    selectedMinute,
+    selectedOfferId,
+    timeOption,
+  ]);
+
+  useEffect(() => {
+    if (!event || Object.keys(productsData).length === 0) return;
+
+    setQuantities((current) => {
+      let changed = false;
+      const next: Record<string, number> = {};
+
+      for (const [productId, rawQuantity] of Object.entries(current)) {
+        const product = productsData[productId];
+        if (!product || product.status === "inactive" || !orderableIds.includes(productId)) {
+          changed = true;
+          continue;
+        }
+
+        const quantity = Math.max(0, Math.floor(Number(rawQuantity) || 0));
+        const safeQuantity =
+          product.availabilityMode === "made_to_order" ||
+          typeof product.stockQty !== "number"
+            ? quantity
+            : Math.min(quantity, Math.max(0, Math.floor(product.stockQty)));
+
+        if (safeQuantity > 0) next[productId] = safeQuantity;
+        if (safeQuantity !== rawQuantity) changed = true;
       }
 
-      const nid = makeId();
-      window.localStorage.setItem("yamada_customer_id", nid);
-      setCustomerId(nid);
-    } catch {
-      setCustomerId(makeId());
-    }
+      return changed ? next : current;
+    });
+  }, [event, orderableIds, productsData]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    setCurrentUrl(window.location.href);
   }, []);
 
   useEffect(() => {
@@ -873,6 +1007,7 @@ const uiLocale =
     });
 
     setLastOrderId(result.orderId);
+    setLastCustomerOrderRefId(result.customerOrderRefId || "");
     setChatOpen(true);
 
     return result.orderId;
@@ -903,6 +1038,16 @@ const uiLocale =
     try {
       setSubmitting(true);
       await registerOrderInFirestore();
+      writeStoredCustomerProfile({
+        name: customerName,
+        phone: customerPhone,
+        email: customerSession.profile?.email || "",
+        address: {
+          ...(customerSession.profile?.address || readStoredCustomerProfile().address),
+          locationLink,
+        },
+      });
+      removeLocalDraft(customerDraftKey);
       resetOrderForm();
       showSentToast();
     } catch (err: unknown) {
@@ -910,7 +1055,16 @@ const uiLocale =
         getPublicOrderErrorCode(err);
 
       const message =
-        errorCode === "PRODUCT_UNAVAILABLE"
+        errorCode === "AUTH_REQUIRED"
+          ? tr(
+              "event.error.session_expired",
+              language === "ja"
+                ? "セッションの有効期限が切れました。再度ログインしてください。"
+                : language === "en"
+                  ? "Your session expired. Sign in again before placing the order."
+                  : "Sua sessão expirou. Entre novamente antes de finalizar o pedido.",
+            )
+          : errorCode === "PRODUCT_UNAVAILABLE"
           ? tr(
               "event.error.product_unavailable",
               "Um dos produtos selecionados não está mais disponível.",
@@ -935,7 +1089,18 @@ const uiLocale =
     } finally {
       setSubmitting(false);
     }
-  }, [canSubmit, registerOrderInFirestore, resetOrderForm, showSentToast, tr]);
+  }, [
+    canSubmit,
+    customerDraftKey,
+    customerName,
+    customerPhone,
+    customerSession.profile?.email,
+    language,
+    registerOrderInFirestore,
+    resetOrderForm,
+    showSentToast,
+    tr,
+  ]);
 
   const handleSendChat = useCallback(async () => {
     if (!event) return;
@@ -984,6 +1149,13 @@ const uiLocale =
   return (
     <main className={MAIN_CLASS}>
       <OpenInBrowserGate url={currentUrl} />
+
+      <CustomerAccountBar
+        session={customerSession}
+        returnTo={`/event/${sellerId}/${id}`}
+        language={language}
+        storeHref={`/store/${sellerId}`}
+      />
 
       {sentToast && (
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 w-[calc(100%-2rem)] max-w-md">
@@ -1339,6 +1511,51 @@ const uiLocale =
             </p>
           )}
         </div>
+
+        {lastOrderId && (
+          <div className="rounded-3xl border border-emerald-200 bg-emerald-50 p-5 shadow-sm animate-fade-in dark:border-emerald-900/60 dark:bg-emerald-950/30">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-xs font-black uppercase tracking-widest text-emerald-600 dark:text-emerald-300">
+                  {tr("event.order.confirmation_title", "Pedido recebido")}
+                </p>
+                <p className="mt-1 text-sm font-black text-emerald-950 dark:text-emerald-100">
+                  {tr("event.order.number", "Pedido")} #{lastOrderId}
+                </p>
+                <p className="mt-1 text-xs font-medium text-emerald-800/80 dark:text-emerald-200/70">
+                  {lastCustomerOrderRefId
+                    ? tr("event.order.saved_account", "O pedido foi salvo na sua conta e poderá ser acompanhado em Meus pedidos.")
+                    : tr("event.order.guest_saved", "Guarde o número do pedido para falar com o vendedor.")}
+                </p>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                {lastCustomerOrderRefId && (
+                  <Link
+                    href={`/customer/orders/${encodeURIComponent(lastCustomerOrderRefId)}`}
+                    className="inline-flex min-h-10 items-center justify-center rounded-xl bg-emerald-600 px-4 py-2 text-xs font-black text-white transition hover:bg-emerald-700"
+                  >
+                    {tr("event.order.track", "Acompanhar pedido")}
+                  </Link>
+                )}
+                {customerSession.registered && (
+                  <Link
+                    href="/customer/orders"
+                    className="inline-flex min-h-10 items-center justify-center rounded-xl border border-emerald-300 px-4 py-2 text-xs font-black text-emerald-800 dark:border-emerald-800 dark:text-emerald-200"
+                  >
+                    {tr("event.order.my_orders", "Meus pedidos")}
+                  </Link>
+                )}
+                <Link
+                  href={`/store/${encodeURIComponent(sellerId)}`}
+                  className="inline-flex min-h-10 items-center justify-center rounded-xl border border-emerald-300 px-4 py-2 text-xs font-black text-emerald-800 dark:border-emerald-800 dark:text-emerald-200"
+                >
+                  {tr("event.order.visit_store", "Visitar loja")}
+                </Link>
+              </div>
+            </div>
+          </div>
+        )}
 
         {lastOrderId && (
           <div className="border border-neutral-200 dark:border-neutral-800 rounded-3xl bg-neutral-50 dark:bg-neutral-900/30 p-5 space-y-4 shadow-sm animate-fade-in">

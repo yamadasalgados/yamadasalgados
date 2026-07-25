@@ -304,6 +304,36 @@ function movementSnapshot(inventory: {
   };
 }
 
+function customerOrderIndexRef(
+  db: admin.firestore.Firestore,
+  orderData: Record<string, unknown>,
+): admin.firestore.DocumentReference | null {
+  const customerUid = cleanString(orderData.customerUid, 160);
+  const referenceId = cleanString(orderData.customerOrderRefId, 160);
+
+  if (!customerUid || !referenceId || customerUid.includes("/") || referenceId.includes("/")) {
+    return null;
+  }
+
+  return db.collection("customers").doc(customerUid).collection("orders").doc(referenceId);
+}
+
+function customerOrderIndexPayload(params: {
+  status: FulfillmentStatus;
+  readinessReasonCodes?: string[];
+  now: admin.firestore.Timestamp;
+}) {
+  return {
+    status: params.status,
+    fulfillmentStatus: params.status,
+    readinessReasonCodes: params.readinessReasonCodes ?? [],
+    readyAt: params.status === "ready" ? params.now : null,
+    deliveredAt: params.status === "delivered" ? params.now : null,
+    cancelledAt: params.status === "cancelled" ? params.now : null,
+    updatedAt: params.now,
+  };
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json().catch(() => null);
@@ -329,11 +359,28 @@ export async function POST(request: NextRequest) {
       }
 
       const orderData = orderSnapshot.data() ?? {};
+      const customerOrderRef = customerOrderIndexRef(db, orderData);
       const currentStatus = normalizeCurrentStatus(
         orderData.fulfillmentStatus ?? orderData.status,
       );
 
       if (currentStatus === clean.status) {
+        if (customerOrderRef) {
+          transaction.set(
+            customerOrderRef,
+            customerOrderIndexPayload({
+              status: currentStatus,
+              readinessReasonCodes: Array.isArray(record(orderData.readiness).reasonCodes)
+                ? (record(orderData.readiness).reasonCodes as unknown[])
+                    .map((value) => cleanString(value, 80))
+                    .filter(Boolean)
+                : [],
+              now,
+            }),
+            { merge: true },
+          );
+        }
+
         return {
           ok: true as const,
           status: currentStatus,
@@ -382,6 +429,14 @@ export async function POST(request: NextRequest) {
           updatedAt: now,
           updatedBy: actor.actor,
         });
+
+        if (customerOrderRef) {
+          transaction.set(
+            customerOrderRef,
+            customerOrderIndexPayload({ status: clean.status, now }),
+            { merge: true },
+          );
+        }
 
         return {
           ok: true as const,
@@ -689,6 +744,25 @@ export async function POST(request: NextRequest) {
         updatedAt: now,
         updatedBy: actor.actor,
       });
+
+      if (customerOrderRef) {
+        transaction.set(
+          customerOrderRef,
+          customerOrderIndexPayload({
+            status: nextStatus,
+            readinessReasonCodes: [
+              ...(hasMadeToOrderItems && hasPendingProduction && nextStatus === "pending"
+                ? ["made_to_order"]
+                : []),
+              ...(hasStockShortage && nextStatus === "pending"
+                ? ["stock_shortage"]
+                : []),
+            ],
+            now,
+          }),
+          { merge: true },
+        );
+      }
 
       return {
         ok: shortages.length === 0,

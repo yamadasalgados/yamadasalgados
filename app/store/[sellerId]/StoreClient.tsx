@@ -4,10 +4,13 @@ import type {
   ReactNode,
 } from "react";
 
+import Link from "next/link";
+
 import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 
@@ -39,6 +42,17 @@ import {
 import {
   db,
 } from "@/app/lib/firebase";
+
+import CustomerAccountBar from "@/app/_components/CustomerAccountBar";
+import useCustomerSession from "@/app/hooks/useCustomerSession";
+import {
+  readLocalDraft,
+  readStoredCustomerProfile,
+  removeLocalDraft,
+  storeDraftKey,
+  writeLocalDraft,
+  writeStoredCustomerProfile,
+} from "@/app/lib/customer-storage";
 
 import {
   createPublicOrder,
@@ -164,6 +178,24 @@ type DeliveryForm = {
   addressLine2: string;
 };
 
+function storedProfileFromCheckout(customer: CustomerForm, delivery: DeliveryForm) {
+  return {
+    name: customer.name,
+    phone: customer.phone,
+    email: customer.email,
+    address: {
+      deliveryAddress: delivery.address,
+      locationLink: delivery.locationLink,
+      recipientName: delivery.recipientName || customer.name,
+      postalCode: delivery.postalCode,
+      prefecture: delivery.prefecture,
+      city: delivery.city,
+      addressLine1: delivery.addressLine1,
+      addressLine2: delivery.addressLine2,
+    },
+  };
+}
+
 const TEXT = {
   pt: {
     loading: "Carregando loja...",
@@ -255,6 +287,11 @@ const TEXT = {
       "Número do pedido",
     newOrder:
       "Fazer novo pedido",
+    trackOrder: "Acompanhar pedido",
+    myOrders: "Meus pedidos",
+    visitStore: "Voltar à loja",
+    registeredOrderHelp: "Este pedido foi salvo na sua conta e continuará disponível em Meus pedidos.",
+    guestOrderHelp: "Cadastre-se nas próximas compras para acompanhar seus pedidos pelo aplicativo.",
     closeCart:
       "Fechar carrinho",
     remove: "Remover",
@@ -384,6 +421,11 @@ const TEXT = {
     orderNumber: "Order number",
     newOrder:
       "Create another order",
+    trackOrder: "Track order",
+    myOrders: "My orders",
+    visitStore: "Back to store",
+    registeredOrderHelp: "This order was saved to your account and will remain available under My orders.",
+    guestOrderHelp: "Register on future purchases to track orders in the app.",
     closeCart: "Close cart",
     remove: "Remove",
     quantity: "Quantity",
@@ -514,6 +556,11 @@ const TEXT = {
     orderNumber: "注文番号",
     newOrder:
       "新しい注文を作成",
+    trackOrder: "注文を確認",
+    myOrders: "注文履歴",
+    visitStore: "ショップに戻る",
+    registeredOrderHelp: "この注文はアカウントに保存され、注文履歴からいつでも確認できます。",
+    guestOrderHelp: "次回はアカウント登録すると、アプリで注文状況を確認できます。",
     closeCart:
       "カートを閉じる",
     remove: "削除",
@@ -909,6 +956,16 @@ export default function StoreClient({
   const text =
     TEXT[language];
 
+  const customerSession =
+    useCustomerSession();
+  const customerDraftReadyRef =
+    useRef(false);
+  const customerDraftKey =
+    useMemo(
+      () => storeDraftKey(sellerId),
+      [sellerId],
+    );
+
   const [storeProfile, setStoreProfile] =
     useState<StoreProfile>({
       name: "Yamada",
@@ -997,6 +1054,9 @@ export default function StoreClient({
   const [createdOrderId, setCreatedOrderId] =
     useState("");
 
+  const [createdCustomerOrderRefId, setCreatedCustomerOrderRefId] =
+    useState("");
+
   const [
     selectedProduct,
     setSelectedProduct,
@@ -1008,6 +1068,138 @@ export default function StoreClient({
     selectedImageIndex,
     setSelectedImageIndex,
   ] = useState(0);
+
+  useEffect(() => {
+    customerDraftReadyRef.current = false;
+    if (!sellerId.trim()) return;
+
+    const storedProfile =
+      readStoredCustomerProfile();
+    const draft =
+      readLocalDraft<{
+        cart?: Record<string, number>;
+        customer?: Partial<CustomerForm>;
+        delivery?: Partial<DeliveryForm>;
+        selectedOfferId?: string;
+        step?: CheckoutStep;
+      }>(customerDraftKey);
+
+    setCustomer((current) => ({
+      ...current,
+      name: draft?.customer?.name || storedProfile.name || current.name,
+      phone: draft?.customer?.phone || storedProfile.phone || current.phone,
+      email: draft?.customer?.email || storedProfile.email || current.email,
+    }));
+
+    setDelivery((current) => ({
+      ...current,
+      ...(draft?.delivery && typeof draft.delivery === "object" ? draft.delivery : {}),
+      address: draft?.delivery?.address || storedProfile.address.deliveryAddress || current.address,
+      locationLink: draft?.delivery?.locationLink || storedProfile.address.locationLink || current.locationLink,
+      recipientName:
+        draft?.delivery?.recipientName ||
+        storedProfile.address.recipientName ||
+        storedProfile.name ||
+        current.recipientName,
+      postalCode: draft?.delivery?.postalCode || storedProfile.address.postalCode || current.postalCode,
+      prefecture: draft?.delivery?.prefecture || storedProfile.address.prefecture || current.prefecture,
+      city: draft?.delivery?.city || storedProfile.address.city || current.city,
+      addressLine1: draft?.delivery?.addressLine1 || storedProfile.address.addressLine1 || current.addressLine1,
+      addressLine2: draft?.delivery?.addressLine2 || storedProfile.address.addressLine2 || current.addressLine2,
+    }));
+
+    if (draft?.cart && typeof draft.cart === "object") {
+      setCart(draft.cart);
+    }
+    if (typeof draft?.selectedOfferId === "string") {
+      setSelectedOfferId(draft.selectedOfferId);
+    }
+    if (
+      draft?.step === "customer" ||
+      draft?.step === "delivery"
+    ) {
+      setStep(draft.step);
+    }
+
+    customerDraftReadyRef.current = true;
+  }, [customerDraftKey, sellerId]);
+
+  useEffect(() => {
+    const profile = customerSession.profile;
+    if (!profile) return;
+
+    setCustomer((current) => ({
+      name: current.name || profile.name,
+      phone: current.phone || profile.phone,
+      email: current.email || profile.email,
+    }));
+    setDelivery((current) => ({
+      ...current,
+      address: current.address || profile.address.deliveryAddress,
+      locationLink: current.locationLink || profile.address.locationLink,
+      recipientName: current.recipientName || profile.address.recipientName || profile.name,
+      postalCode: current.postalCode || profile.address.postalCode,
+      prefecture: current.prefecture || profile.address.prefecture,
+      city: current.city || profile.address.city,
+      addressLine1: current.addressLine1 || profile.address.addressLine1,
+      addressLine2: current.addressLine2 || profile.address.addressLine2,
+    }));
+  }, [customerSession.profile]);
+
+  useEffect(() => {
+    if (!customerDraftReadyRef.current || step === "success") return;
+
+    const timer = window.setTimeout(() => {
+      writeStoredCustomerProfile(storedProfileFromCheckout(customer, delivery));
+      writeLocalDraft(customerDraftKey, {
+        cart,
+        customer,
+        delivery,
+        selectedOfferId,
+        step,
+        updatedAt: Date.now(),
+      });
+    }, 250);
+
+    return () => window.clearTimeout(timer);
+  }, [
+    cart,
+    customer,
+    customerDraftKey,
+    delivery,
+    selectedOfferId,
+    step,
+  ]);
+
+  useEffect(() => {
+    if (loading) return;
+
+    const productMap = new Map(products.map((product) => [product.id, product]));
+    setCart((current) => {
+      let changed = false;
+      const next: Record<string, number> = {};
+
+      for (const [productId, rawQuantity] of Object.entries(current)) {
+        const product = productMap.get(productId);
+        if (!product) {
+          changed = true;
+          continue;
+        }
+
+        const quantity = Math.max(0, Math.floor(Number(rawQuantity) || 0));
+        const safeQuantity =
+          product.availabilityStatus === "made_to_order" ||
+          typeof product.stock !== "number"
+            ? quantity
+            : Math.min(quantity, Math.max(0, Math.floor(product.stock)));
+
+        if (safeQuantity > 0) next[productId] = safeQuantity;
+        if (safeQuantity !== rawQuantity) changed = true;
+      }
+
+      return changed ? next : current;
+    });
+  }, [loading, products]);
 
   useEffect(() => {
     if (!sellerId.trim()) {
@@ -1690,6 +1882,8 @@ const showingProducts =
         language,
         selectedOfferId:
           selectedOfferId || undefined,
+        customerClientId:
+          customerSession.clientId || undefined,
         quantities,
         customer: {
           name: customer.name,
@@ -1727,6 +1921,10 @@ const showingProducts =
       setCreatedOrderId(
         result.orderId,
       );
+      setCreatedCustomerOrderRefId(result.customerOrderRefId || "");
+
+      writeStoredCustomerProfile(storedProfileFromCheckout(customer, delivery));
+      removeLocalDraft(customerDraftKey);
 
       setStep("success");
       setCartOpen(false);
@@ -1743,7 +1941,13 @@ const showingProducts =
         );
 
       const message =
-        errorCode ===
+        errorCode === "AUTH_REQUIRED"
+          ? language === "ja"
+            ? "セッションの有効期限が切れました。再度ログインしてください。"
+            : language === "en"
+              ? "Your session expired. Sign in again before placing the order."
+              : "Sua sessão expirou. Entre novamente antes de finalizar o pedido."
+          : errorCode ===
           "PRODUCT_UNAVAILABLE"
           ? text.stockError
           : errorCode ===
@@ -1767,11 +1971,8 @@ const showingProducts =
 
   function resetOrder() {
     setCart({});
-    setCustomer({
-      name: "",
-      phone: "",
-      email: "",
-    });
+    writeStoredCustomerProfile(storedProfileFromCheckout(customer, delivery));
+    removeLocalDraft(customerDraftKey);
 
     setDelivery({
       mode: "pickup",
@@ -1789,6 +1990,7 @@ const showingProducts =
     });
 
     setCreatedOrderId("");
+    setCreatedCustomerOrderRefId("");
     setFormError("");
     setSearch("");
     setSelectedCategory(null);
@@ -1894,13 +2096,41 @@ const showingProducts =
             </p>
           </div>
 
-          <button
-            type="button"
-            onClick={resetOrder}
-            className="mt-7 w-full rounded-xl bg-neutral-950 px-5 py-3 font-bold text-white transition hover:bg-neutral-800 dark:bg-white dark:text-neutral-950 dark:hover:bg-neutral-200"
-          >
-            {text.newOrder}
-          </button>
+          <p className="mt-4 text-sm font-medium text-neutral-500 dark:text-neutral-400">
+            {createdCustomerOrderRefId ? text.registeredOrderHelp : text.guestOrderHelp}
+          </p>
+
+          <div className="mt-7 grid gap-3 sm:grid-cols-2">
+            {createdCustomerOrderRefId && (
+              <Link
+                href={`/customer/orders/${encodeURIComponent(createdCustomerOrderRefId)}`}
+                className="inline-flex min-h-12 items-center justify-center rounded-xl bg-emerald-600 px-5 py-3 font-black text-white transition hover:bg-emerald-700"
+              >
+                {text.trackOrder}
+              </Link>
+            )}
+            {customerSession.registered && (
+              <Link
+                href="/customer/orders"
+                className="inline-flex min-h-12 items-center justify-center rounded-xl border border-neutral-300 px-5 py-3 font-black dark:border-neutral-700"
+              >
+                {text.myOrders}
+              </Link>
+            )}
+            <button
+              type="button"
+              onClick={resetOrder}
+              className="inline-flex min-h-12 items-center justify-center rounded-xl bg-neutral-950 px-5 py-3 font-black text-white transition hover:bg-neutral-800 dark:bg-white dark:text-neutral-950 dark:hover:bg-neutral-200"
+            >
+              {text.newOrder}
+            </button>
+            <Link
+              href={`/store/${encodeURIComponent(sellerId)}`}
+              className="inline-flex min-h-12 items-center justify-center rounded-xl border border-neutral-300 px-5 py-3 font-black dark:border-neutral-700"
+            >
+              {text.visitStore}
+            </Link>
+          </div>
         </section>
       </main>
     );
@@ -1999,6 +2229,13 @@ const showingProducts =
           </div>
         </header>
 
+        <div className="mt-4">
+          <CustomerAccountBar
+            session={customerSession}
+            returnTo={`/store/${sellerId}`}
+            language={language}
+          />
+        </div>
 
 {step === "products" && (
   <>
