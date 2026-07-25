@@ -3,6 +3,8 @@
 import Link from "next/link";
 import {
   collection,
+  doc,
+  getDoc,
   limit,
   onSnapshot,
   query,
@@ -19,6 +21,8 @@ import {
   Loader2,
   PackageCheck,
   PackageOpen,
+  Plus,
+  Printer,
   RefreshCw,
   Search,
   XCircle,
@@ -42,6 +46,10 @@ import {
   type SellerOrderStatus,
 } from "@/app/lib/order-status-client";
 import {
+  recordSellerProduction,
+  SellerProductionError,
+} from "@/app/lib/production-client";
+import {
   parseStoreOrder,
   storeOrderDateToMillis,
 } from "@/app/lib/store-order";
@@ -52,6 +60,8 @@ import {
 import {
   useI18n,
 } from "@/app/lib/i18n";
+
+import OrderPrintDialog from "./OrderPrintDialog";
 
 import type {
   StoreOrder,
@@ -100,6 +110,8 @@ type WorkOrderLine = {
   deliveryDate: string;
   status: StoreOrderStatus;
   quantity: number;
+  producedQuantity: number;
+  totalProductionQuantity: number;
   detailHref: string;
 };
 
@@ -107,6 +119,8 @@ type WorkGroup = {
   productId: string;
   productName: string;
   totalQuantity: number;
+  producedQuantity: number;
+  requiredQuantity: number;
   orderCount: number;
   lines: WorkOrderLine[];
 };
@@ -156,6 +170,7 @@ const COPY = {
     delivery: "Entrega",
     date: "Data",
     openOrder: "Abrir pedido",
+    printOrder: "Imprimir duas vias",
     markReady: "Marcar pronto",
     markDelivered: "Marcar entregue",
     cancel: "Cancelar",
@@ -163,11 +178,11 @@ const COPY = {
     saving: "Atualizando...",
     actionError: "Não foi possível alterar o pedido.",
     shortage:
-      "Ainda falta estoque. O pedido permaneceu pendente.",
+      "Ainda há produção ou estoque pendente. O pedido permaneceu pendente.",
     storeLabel: "Loja permanente",
     eventLabel: "Evento",
     noDate: "Sem data",
-    productionCompleted: "Produção confirmada e pedido atualizado.",
+    productionCompleted: "Pedido marcado como pronto.",
     deliveredCompleted: "Pedido finalizado.",
     cancelledCompleted: "Pedido cancelado.",
     reserved: "reservadas",
@@ -177,6 +192,18 @@ const COPY = {
     showOrders: "Mostrar pedidos",
     hideOrders: "Ocultar pedidos",
     eventSelect: "Todos os eventos",
+    produced: "Produzido",
+    remaining: "Falta produzir",
+    progress: "Progresso",
+    registerProduction: "Registrar produção",
+    completeProduction: "Concluir restante",
+    customQuantity: "Outra quantidade",
+    quantityPrompt: "Quantas unidades foram produzidas?",
+    invalidQuantity: "Informe uma quantidade inteira maior que zero.",
+    productionRecorded: "Produção registrada com sucesso.",
+    productionAutoReady: "Produção registrada e pedido(s) movido(s) para Prontos.",
+    productionActionError: "Não foi possível registrar a produção.",
+    productionPending: "Registre toda a produção antes de marcar o pedido como pronto.",
   },
   en: {
     title: "Production and picking",
@@ -214,17 +241,18 @@ const COPY = {
     delivery: "Delivery",
     date: "Date",
     openOrder: "Open order",
+    printOrder: "Print two copies",
     markReady: "Mark ready",
     markDelivered: "Mark delivered",
     cancel: "Cancel",
     confirmCancel: "Cancel this order and release its reservations?",
     saving: "Updating...",
     actionError: "The order could not be updated.",
-    shortage: "Stock is still missing. The order remained pending.",
+    shortage: "Production or stock is still pending. The order remained pending.",
     storeLabel: "Permanent store",
     eventLabel: "Event",
     noDate: "No date",
-    productionCompleted: "Production confirmed and order updated.",
+    productionCompleted: "Order marked as ready.",
     deliveredCompleted: "Order completed.",
     cancelledCompleted: "Order cancelled.",
     reserved: "reserved",
@@ -234,6 +262,18 @@ const COPY = {
     showOrders: "Show orders",
     hideOrders: "Hide orders",
     eventSelect: "All events",
+    produced: "Produced",
+    remaining: "Remaining",
+    progress: "Progress",
+    registerProduction: "Record production",
+    completeProduction: "Complete remaining",
+    customQuantity: "Other quantity",
+    quantityPrompt: "How many units were produced?",
+    invalidQuantity: "Enter a whole number greater than zero.",
+    productionRecorded: "Production recorded successfully.",
+    productionAutoReady: "Production recorded and order(s) moved to Ready.",
+    productionActionError: "Production could not be recorded.",
+    productionPending: "Record all production before marking the order ready.",
   },
   ja: {
     title: "製造・取り分け",
@@ -271,17 +311,18 @@ const COPY = {
     delivery: "受取方法",
     date: "日付",
     openOrder: "注文を開く",
+    printOrder: "2枚印刷",
     markReady: "準備完了にする",
     markDelivered: "配達済みにする",
     cancel: "キャンセル",
     confirmCancel: "注文をキャンセルして予約在庫を解放しますか？",
     saving: "更新中...",
     actionError: "注文を更新できませんでした。",
-    shortage: "在庫が不足しています。注文は保留のままです。",
+    shortage: "製造または在庫が未完了です。注文は保留のままです。",
     storeLabel: "常設店舗",
     eventLabel: "イベント",
     noDate: "日付なし",
-    productionCompleted: "製造完了を確認し、注文を更新しました。",
+    productionCompleted: "注文を準備完了にしました。",
     deliveredCompleted: "注文を完了しました。",
     cancelledCompleted: "注文をキャンセルしました。",
     reserved: "予約済み",
@@ -291,6 +332,18 @@ const COPY = {
     showOrders: "注文を表示",
     hideOrders: "注文を隠す",
     eventSelect: "すべてのイベント",
+    produced: "製造済み",
+    remaining: "残り",
+    progress: "進捗",
+    registerProduction: "製造を記録",
+    completeProduction: "残りを完了",
+    customQuantity: "数量を入力",
+    quantityPrompt: "製造した数量を入力してください。",
+    invalidQuantity: "1以上の整数を入力してください。",
+    productionRecorded: "製造数を記録しました。",
+    productionAutoReady: "製造数を記録し、注文を準備完了へ移動しました。",
+    productionActionError: "製造数を記録できませんでした。",
+    productionPending: "すべての製造を記録してから準備完了にしてください。",
   },
 } as const;
 
@@ -322,6 +375,19 @@ function productionQuantity(item: StoreOrderItem): number {
     0,
     Math.floor(required > 0 ? required : item.qty),
   );
+}
+
+function itemProducedQuantity(item: StoreOrderItem): number {
+  return Math.max(
+    0,
+    Math.floor(
+      item.inventoryState?.producedQuantity ?? 0,
+    ),
+  );
+}
+
+function totalProductionQuantity(item: StoreOrderItem): number {
+  return productionQuantity(item) + itemProducedQuantity(item);
 }
 
 function reservedQuantity(item: StoreOrderItem): number {
@@ -383,11 +449,24 @@ function groupWork(
           productId,
           productName: item.name,
           totalQuantity: 0,
+          producedQuantity: 0,
+          requiredQuantity: 0,
           orderCount: 0,
           lines: [],
         };
 
+      const produced =
+        mode === "production"
+          ? itemProducedQuantity(item)
+          : 0;
+      const totalProduction =
+        mode === "production"
+          ? totalProductionQuantity(item)
+          : quantity;
+
       current.totalQuantity += quantity;
+      current.producedQuantity += produced;
+      current.requiredQuantity += totalProduction;
       current.orderCount += 1;
       current.lines.push({
         orderKey: unified.key,
@@ -400,6 +479,8 @@ function groupWork(
         deliveryDate: order.deliveryDate || "",
         status: order.status,
         quantity,
+        producedQuantity: produced,
+        totalProductionQuantity: totalProduction,
         detailHref: orderDetailHref(unified),
       });
 
@@ -412,6 +493,14 @@ function groupWork(
       b.totalQuantity - a.totalQuantity ||
       a.productName.localeCompare(b.productName),
   );
+}
+
+function createProductionRequestId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+
+  return `production_${Date.now()}_${Math.random().toString(36).slice(2)}`;
 }
 
 function SummaryCard({
@@ -542,10 +631,61 @@ export default function ProductionDashboardClient() {
     useState<Record<string, boolean>>({});
   const [savingOrderKey, setSavingOrderKey] =
     useState("");
+  const [savingProductionKey, setSavingProductionKey] =
+    useState("");
   const [actionMessage, setActionMessage] =
     useState("");
   const [actionError, setActionError] =
     useState("");
+  const [storeName, setStoreName] =
+    useState("");
+  const [printOrder, setPrintOrder] =
+    useState<UnifiedOrder | null>(null);
+
+  useEffect(() => {
+    if (!sellerId) {
+      setStoreName("");
+      return;
+    }
+
+    let alive = true;
+
+    void getDoc(
+      doc(db, "sellers", sellerId),
+    )
+      .then((snapshot) => {
+        if (!alive || !snapshot.exists()) return;
+
+        const data = snapshot.data();
+        const resolvedName = [
+          data.storeName,
+          data.businessName,
+          data.publicName,
+          data.displayName,
+        ]
+          .find(
+            (value) =>
+              typeof value === "string" &&
+              value.trim(),
+          );
+
+        setStoreName(
+          typeof resolvedName === "string"
+            ? resolvedName.trim()
+            : "",
+        );
+      })
+      .catch((error) => {
+        console.warn(
+          "[ProductionDashboard] Não foi possível carregar o nome da loja:",
+          error,
+        );
+      });
+
+    return () => {
+      alive = false;
+    };
+  }, [sellerId]);
 
   const eventOrderUnsubscribesRef =
     useRef(new Map<string, () => void>());
@@ -766,6 +906,17 @@ export default function ProductionDashboardClient() {
   const allOrders = useMemo(
     () => [...storeOrders, ...eventOrders],
     [eventOrders, storeOrders],
+  );
+
+  const ordersByKey = useMemo(
+    () =>
+      new Map(
+        allOrders.map((order) => [
+          order.key,
+          order,
+        ]),
+      ),
+    [allOrders],
   );
 
   const today = localDateKey();
@@ -1003,6 +1154,90 @@ export default function ProductionDashboardClient() {
     ],
   );
 
+  const runProductionAction = useCallback(
+    async (group: WorkGroup, requestedQuantity: number) => {
+      if (!sellerId || savingProductionKey) return;
+
+      const quantity = Math.min(
+        group.totalQuantity,
+        Math.max(0, Math.floor(requestedQuantity)),
+      );
+      if (quantity <= 0) {
+        setActionError(text.invalidQuantity);
+        return;
+      }
+
+      const groupKey = `${group.productId}:${group.productName}`;
+      setSavingProductionKey(groupKey);
+      setActionMessage("");
+      setActionError("");
+
+      try {
+        const sortedLines = [...group.lines].sort(
+          (a, b) =>
+            (a.deliveryDate || "9999-12-31").localeCompare(
+              b.deliveryDate || "9999-12-31",
+            ) || a.orderId.localeCompare(b.orderId),
+        );
+        let quantityToRecord = quantity;
+        let autoReadyCount = 0;
+
+        for (let index = 0; index < sortedLines.length && quantityToRecord > 0; index += 150) {
+          const chunk = sortedLines.slice(index, index + 150);
+          const chunkNeed = chunk.reduce(
+            (sum, line) => sum + line.quantity,
+            0,
+          );
+          const result = await recordSellerProduction({
+            sellerId,
+            productId: group.productId,
+            quantity: Math.min(quantityToRecord, chunkNeed),
+            requestId: createProductionRequestId(),
+            targets: chunk.map((line) => ({
+              source: line.source,
+              eventId: line.source === "event" ? line.eventId : undefined,
+              orderId: line.orderId,
+            })),
+          });
+
+          quantityToRecord = Math.max(
+            0,
+            quantityToRecord - result.recordedQuantity,
+          );
+          autoReadyCount += result.autoReadyOrderIds.length;
+
+          if (result.recordedQuantity <= 0) break;
+        }
+
+        setActionMessage(
+          autoReadyCount > 0
+            ? text.productionAutoReady
+            : text.productionRecorded,
+        );
+      } catch (error) {
+        console.error(
+          "[ProductionDashboard] Falha ao registrar produção:",
+          error,
+        );
+        setActionError(
+          error instanceof SellerProductionError
+            ? error.message
+            : text.productionActionError,
+        );
+      } finally {
+        setSavingProductionKey("");
+      }
+    },
+    [
+      savingProductionKey,
+      sellerId,
+      text.invalidQuantity,
+      text.productionActionError,
+      text.productionAutoReady,
+      text.productionRecorded,
+    ],
+  );
+
   const toggleGroup = (key: string) => {
     setExpandedGroups((current) => ({
       ...current,
@@ -1018,6 +1253,14 @@ export default function ProductionDashboardClient() {
       orderDetailHref(unified);
     const saving =
       savingOrderKey === unified.key;
+    const productionPending =
+      (order.inventoryState?.productionRequired ?? 0) > 0 ||
+      order.items.some(
+        (item) =>
+          (item.inventoryState?.productionRequired ??
+            item.productionRequired ??
+            0) > 0,
+      );
 
     return (
       <article
@@ -1071,21 +1314,37 @@ export default function ProductionDashboardClient() {
             </p>
           </div>
 
-          <Link
-            href={detailHref}
-            className="inline-flex min-h-11 shrink-0 items-center justify-center rounded-xl border border-neutral-300 px-4 text-xs font-black transition hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
-          >
-            {text.openOrder}
-          </Link>
+          <div className="flex shrink-0 flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => setPrintOrder(unified)}
+              className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-violet-300 px-4 text-xs font-black text-violet-800 transition hover:bg-violet-50 dark:border-violet-800 dark:text-violet-200 dark:hover:bg-violet-950/30"
+            >
+              <Printer className="h-4 w-4" />
+              {text.printOrder}
+            </button>
+            <Link
+              href={detailHref}
+              className="inline-flex min-h-11 items-center justify-center rounded-xl border border-neutral-300 px-4 text-xs font-black transition hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
+            >
+              {text.openOrder}
+            </Link>
+          </div>
         </div>
 
         {order.status !== "delivered" &&
           order.status !== "cancelled" && (
             <div className="mt-5 flex flex-wrap gap-2 border-t border-neutral-200 pt-4 dark:border-neutral-800">
+              {order.status !== "ready" && productionPending && (
+                <p className="w-full rounded-xl bg-violet-50 px-3 py-2 text-[11px] font-bold text-violet-800 dark:bg-violet-950/30 dark:text-violet-200">
+                  {text.productionPending}
+                </p>
+              )}
               {order.status !== "ready" && (
                 <button
                   type="button"
-                  disabled={saving}
+                  disabled={saving || productionPending}
+                  title={productionPending ? text.productionPending : undefined}
                   onClick={() =>
                     void runStatusAction(
                       unified,
@@ -1165,6 +1424,19 @@ export default function ProductionDashboardClient() {
           const key = `${mode}:${group.productId}:${group.productName}`;
           const expanded =
             expandedGroups[key] === true;
+          const productionKey = `${group.productId}:${group.productName}`;
+          const savingProduction =
+            mode === "production" &&
+            savingProductionKey === productionKey;
+          const progress =
+            group.requiredQuantity > 0
+              ? Math.min(
+                  100,
+                  Math.round(
+                    (group.producedQuantity / group.requiredQuantity) * 100,
+                  ),
+                )
+              : 0;
 
           return (
             <article
@@ -1209,6 +1481,91 @@ export default function ProductionDashboardClient() {
                   </div>
                 </div>
 
+                {mode === "production" && (
+                  <div className="mt-5 rounded-2xl border border-violet-100 bg-violet-50/60 p-4 dark:border-violet-900/50 dark:bg-violet-950/20">
+                    <div className="flex items-center justify-between gap-3 text-xs font-black">
+                      <span className="text-violet-900 dark:text-violet-100">
+                        {text.progress}: {progress}%
+                      </span>
+                      <span className="text-neutral-500 dark:text-neutral-400">
+                        {text.produced}: {group.producedQuantity} / {group.requiredQuantity}
+                      </span>
+                    </div>
+                    <div className="mt-3 h-2 overflow-hidden rounded-full bg-violet-100 dark:bg-violet-950/60">
+                      <div
+                        className="h-full rounded-full bg-violet-600 transition-all dark:bg-violet-400"
+                        style={{ width: `${progress}%` }}
+                      />
+                    </div>
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      {[1, 5, 10].map((quantity) => (
+                        <button
+                          key={quantity}
+                          type="button"
+                          disabled={savingProduction}
+                          onClick={() =>
+                            void runProductionAction(
+                              group,
+                              Math.min(quantity, group.totalQuantity),
+                            )
+                          }
+                          className="inline-flex min-h-10 items-center justify-center gap-1 rounded-xl border border-violet-200 bg-white px-3 text-xs font-black text-violet-800 transition hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-violet-900 dark:bg-neutral-900 dark:text-violet-200 dark:hover:bg-violet-950/40"
+                        >
+                          {savingProduction ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <Plus className="h-3.5 w-3.5" />
+                          )}
+                          {quantity}
+                        </button>
+                      ))}
+                      <button
+                        type="button"
+                        disabled={savingProduction}
+                        onClick={() => {
+                          const rawQuantity = window.prompt(
+                            text.quantityPrompt,
+                            "1",
+                          );
+                          if (rawQuantity === null) return;
+                          const normalized = rawQuantity.trim();
+                          if (!/^\d+$/.test(normalized)) {
+                            setActionMessage("");
+                            setActionError(text.invalidQuantity);
+                            return;
+                          }
+                          const quantity = Number(normalized);
+                          if (!Number.isSafeInteger(quantity) || quantity <= 0) {
+                            setActionMessage("");
+                            setActionError(text.invalidQuantity);
+                            return;
+                          }
+                          void runProductionAction(group, quantity);
+                        }}
+                        className="inline-flex min-h-10 items-center justify-center rounded-xl border border-neutral-300 bg-white px-3 text-xs font-black text-neutral-700 transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200 dark:hover:bg-neutral-800"
+                      >
+                        {text.customQuantity}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={savingProduction}
+                        onClick={() =>
+                          void runProductionAction(group, group.totalQuantity)
+                        }
+                        className="inline-flex min-h-10 flex-1 items-center justify-center gap-2 rounded-xl bg-violet-700 px-4 text-xs font-black text-white transition hover:bg-violet-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-violet-500 dark:text-violet-950 dark:hover:bg-violet-400"
+                      >
+                        {savingProduction && (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        )}
+                        {text.completeProduction}
+                      </button>
+                    </div>
+                    <p className="mt-3 text-[10px] font-bold uppercase tracking-wider text-violet-700/70 dark:text-violet-300/70">
+                      {text.remaining}: {group.totalQuantity} {text.units}
+                    </p>
+                  </div>
+                )}
+
                 <button
                   type="button"
                   onClick={() => toggleGroup(key)}
@@ -1228,40 +1585,66 @@ export default function ProductionDashboardClient() {
               {expanded && (
                 <div className="border-t border-neutral-200 bg-neutral-50/80 p-3 dark:border-neutral-800 dark:bg-neutral-950/30">
                   <div className="space-y-2">
-                    {group.lines.map((line) => (
-                      <Link
-                        key={`${key}:${line.orderKey}`}
-                        href={line.detailHref}
-                        className="flex items-center justify-between gap-3 rounded-2xl border border-neutral-200 bg-white p-3 transition hover:border-neutral-400 dark:border-neutral-800 dark:bg-neutral-900 dark:hover:border-neutral-600"
-                      >
-                        <div className="min-w-0">
-                          <p className="truncate text-xs font-black text-neutral-900 dark:text-white">
-                            {line.customerName}
-                          </p>
-                          <p className="mt-1 truncate text-[10px] font-semibold text-neutral-500 dark:text-neutral-400">
-                            {line.source === "store"
-                              ? text.storeLabel
-                              : line.eventTitle}
-                            {" · "}
-                            {getDeliveryModeLabel(
-                              line.deliveryMode,
-                              lang,
-                            )}
-                            {" · "}
-                            {line.deliveryDate || text.noDate}
-                          </p>
+                    {group.lines.map((line) => {
+                      const unified =
+                        ordersByKey.get(line.orderKey);
+
+                      return (
+                        <div
+                          key={`${key}:${line.orderKey}`}
+                          className="flex items-stretch gap-2 rounded-2xl border border-neutral-200 bg-white p-2 transition hover:border-neutral-400 dark:border-neutral-800 dark:bg-neutral-900 dark:hover:border-neutral-600"
+                        >
+                          <Link
+                            href={line.detailHref}
+                            className="flex min-w-0 flex-1 items-center justify-between gap-3 rounded-xl p-1"
+                          >
+                            <div className="min-w-0">
+                              <p className="truncate text-xs font-black text-neutral-900 dark:text-white">
+                                {line.customerName}
+                              </p>
+                              <p className="mt-1 truncate text-[10px] font-semibold text-neutral-500 dark:text-neutral-400">
+                                {line.source === "store"
+                                  ? text.storeLabel
+                                  : line.eventTitle}
+                                {" · "}
+                                {getDeliveryModeLabel(
+                                  line.deliveryMode,
+                                  lang,
+                                )}
+                                {" · "}
+                                {line.deliveryDate || text.noDate}
+                              </p>
+                            </div>
+                            <div className="shrink-0 text-right">
+                              <p className="text-lg font-black text-neutral-950 dark:text-white">
+                                {line.quantity}
+                              </p>
+                              {mode === "production" && (
+                                <p className="mb-1 text-[9px] font-bold text-violet-600 dark:text-violet-300">
+                                  {text.produced}: {line.producedQuantity} / {line.totalProductionQuantity}
+                                </p>
+                              )}
+                              <StatusBadge
+                                status={line.status}
+                                lang={lang}
+                              />
+                            </div>
+                          </Link>
+
+                          {unified && (
+                            <button
+                              type="button"
+                              onClick={() => setPrintOrder(unified)}
+                              title={text.printOrder}
+                              aria-label={text.printOrder}
+                              className="inline-flex w-11 shrink-0 items-center justify-center rounded-xl border border-violet-200 text-violet-700 transition hover:bg-violet-50 dark:border-violet-900 dark:text-violet-200 dark:hover:bg-violet-950/30"
+                            >
+                              <Printer className="h-4 w-4" />
+                            </button>
+                          )}
                         </div>
-                        <div className="shrink-0 text-right">
-                          <p className="text-lg font-black text-neutral-950 dark:text-white">
-                            {line.quantity}
-                          </p>
-                          <StatusBadge
-                            status={line.status}
-                            lang={lang}
-                          />
-                        </div>
-                      </Link>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -1573,6 +1956,21 @@ export default function ProductionDashboardClient() {
             ))}
         </section>
       </div>
+
+      <OrderPrintDialog
+        open={printOrder !== null}
+        order={printOrder?.order ?? null}
+        lang={lang}
+        storeName={storeName}
+        sourceLabel={
+          printOrder
+            ? printOrder.source === "store"
+              ? text.storeLabel
+              : `${text.eventLabel}: ${printOrder.eventTitle}`
+            : ""
+        }
+        onClose={() => setPrintOrder(null)}
+      />
     </main>
   );
 }

@@ -194,10 +194,11 @@ function parseManagedItem(rawValue: unknown): ManagedItem | null {
     consumedQuantity: nonNegativeInteger(state.consumedQuantity),
     releasedQuantity: nonNegativeInteger(state.releasedQuantity),
     productionStatus:
-      state.productionStatus === "completed"
-        ? "completed"
-        : madeToOrder
-          ? "pending"
+      nonNegativeInteger(state.productionRequired ?? raw.productionRequired) > 0
+        ? "pending"
+        : state.productionStatus === "completed" ||
+            nonNegativeInteger(state.producedQuantity ?? raw.producedQuantity) > 0
+          ? "completed"
           : "not_required",
   };
 }
@@ -402,32 +403,19 @@ export async function POST(request: NextRequest) {
           const item = items[index];
 
           if (item.madeToOrder) {
-            const completedQuantity = item.productionRequired || item.quantity;
-            item.productionStatus = "completed";
-            item.producedQuantity = Math.max(
-              item.producedQuantity,
-              completedQuantity,
-            );
-            item.productionRequired = 0;
-            const movementRef = sellerRef
-              .collection("inventoryMovements")
-              .doc(`${clean.orderId}_${item.productId}_production_completed`);
-            transaction.set(
-              movementRef,
-              {
-                schemaVersion: 2,
-                type: "production_completed",
-                sellerId: clean.sellerId,
+            if (
+              item.productionRequired > 0 ||
+              item.productionStatus !== "completed"
+            ) {
+              shortages.push({
                 productId: item.productId,
-                orderId: clean.orderId,
-                orderSource: clean.source,
-                eventId: clean.eventId || null,
-                quantity: completedQuantity,
-                createdAt: now,
-                createdBy: actor.actor,
-              },
-              { merge: true },
-            );
+                quantity: Math.max(
+                  1,
+                  item.productionRequired ||
+                    Math.max(0, item.quantity - item.producedQuantity),
+                ),
+              });
+            }
             continue;
           }
 
@@ -659,6 +647,9 @@ export async function POST(request: NextRequest) {
       const serializedItems = items.map(serializeItem);
       const inventoryState = aggregateInventory(items);
       const hasMadeToOrderItems = items.some((item) => item.madeToOrder);
+      const hasPendingProduction = items.some(
+        (item) => item.productionRequired > 0,
+      );
       const hasStockShortage = items.some((item) => item.shortageQuantity > 0);
 
       transaction.update(orderRef, {
@@ -668,12 +659,15 @@ export async function POST(request: NextRequest) {
         inventoryState,
         readiness: {
           hasMadeToOrderItems,
+          hasPendingProduction,
           hasStockShortage,
           reasonCodes: [
-            ...(hasMadeToOrderItems && nextStatus === "pending"
+            ...(hasMadeToOrderItems && hasPendingProduction && nextStatus === "pending"
               ? ["made_to_order"]
               : []),
-            ...(hasStockShortage ? ["stock_shortage"] : []),
+            ...(hasStockShortage && nextStatus === "pending"
+              ? ["stock_shortage"]
+              : []),
           ],
         },
         deliveredAt: nextStatus === "delivered" ? now : null,
@@ -711,7 +705,7 @@ export async function POST(request: NextRequest) {
           ...result,
           ok: false,
           code: "STOCK_SHORTAGE",
-          error: "Ainda falta estoque para deixar o pedido pronto.",
+          error: "Ainda há produção ou estoque pendente para deixar o pedido pronto.",
         },
         { status: 409, headers: { "Cache-Control": "no-store" } },
       );
