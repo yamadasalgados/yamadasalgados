@@ -277,7 +277,7 @@ function TicketItems({
                 {item.options && item.options.length > 0 && (
                   <p className="mt-0.5 pl-6 text-[10px] leading-3">
                     {item.options
-                      .map((option) => `+ ${option.name}`)
+                      .map((option) => `+ ${option.quantity && option.quantity > 0 ? `${option.quantity}x ` : ""}${option.name}`)
                       .join(" · ")}
                   </p>
                 )}

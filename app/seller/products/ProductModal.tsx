@@ -31,6 +31,7 @@ import { normalizeProductInventory } from "@/app/lib/inventory-schema";
 import { majorToMinor } from "@/app/lib/money";
 import {
   emptyProductContent,
+  normalizeProductBundleConfig,
   normalizeProductContent,
   type ProductContent,
   type ProductLanguage,
@@ -62,6 +63,7 @@ type ProductModalProps = {
   authUser: User;
   sellerId: string;
   categories: string[];
+  availableProducts: ProductDoc[];
   ownCount: number;
   maxProducts: number;
   plan: PlanId;
@@ -88,6 +90,9 @@ type Snapshot = {
   existingImageUrl: string;
   existingExtraUrls: string[];
   newCategoryName: string;
+  bundleEnabled: boolean;
+  bundleTotalUnits: string;
+  bundleOptionProductIds: string[];
 };
 
 function buildSnapshot(values: Snapshot): string {
@@ -114,6 +119,7 @@ export default function ProductModal({
   authUser,
   sellerId,
   categories,
+  availableProducts,
   ownCount,
   maxProducts,
   plan,
@@ -152,6 +158,9 @@ export default function ProductModal({
   const [postalEligible, setPostalEligible] = useState(false);
   const [shippingWeightGrams, setShippingWeightGrams] = useState("");
   const [content, setContent] = useState<ProductContent>(() => emptyProductContent());
+  const [bundleEnabled, setBundleEnabled] = useState(false);
+  const [bundleTotalUnits, setBundleTotalUnits] = useState("100");
+  const [bundleOptionProductIds, setBundleOptionProductIds] = useState<string[]>([]);
 
   const [creatingCategory, setCreatingCategory] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState("");
@@ -198,6 +207,8 @@ export default function ProductModal({
             invalidStockBelowReserved: "予約済み在庫を下回る数量には変更できません。",
             invalidShippingWeight: "発送重量は1g以上で入力してください。",
             imageRequired: "メイン画像を選択してください。",
+            invalidBundleUnits: "セット数は1以上で入力してください。",
+            invalidBundleOptions: "セットに含める商品を2つ以上選択してください。",
             help: "商品情報と画像を入力してください。",
           }
         : lang === "en"
@@ -223,6 +234,8 @@ export default function ProductModal({
               invalidStockBelowReserved: "Physical stock cannot be lower than the reserved quantity.",
               invalidShippingWeight: "Shipping weight must be at least 1 gram.",
               imageRequired: "Select a main image.",
+              invalidBundleUnits: "Bundle units must be at least 1.",
+              invalidBundleOptions: "Select at least two products for this bundle.",
               help: "Fill in the product information and images.",
             }
           : {
@@ -247,6 +260,8 @@ export default function ProductModal({
               invalidStockBelowReserved: "O estoque físico não pode ficar abaixo da quantidade reservada.",
               invalidShippingWeight: "O peso para envio deve ser pelo menos 1 grama.",
               imageRequired: "Selecione uma imagem principal.",
+              invalidBundleUnits: "O total do kit deve ser pelo menos 1.",
+              invalidBundleOptions: "Selecione pelo menos dois produtos para compor o kit.",
               help: "Preencha as informações e imagens do produto.",
             },
     [lang, maxProducts],
@@ -291,6 +306,9 @@ export default function ProductModal({
         existingImageUrl,
         existingExtraUrls,
         newCategoryName,
+        bundleEnabled,
+        bundleTotalUnits,
+        bundleOptionProductIds,
       }),
     [
       category,
@@ -308,6 +326,9 @@ export default function ProductModal({
       postalEligible,
       shippingWeightGrams,
       content,
+      bundleEnabled,
+      bundleTotalUnits,
+      bundleOptionProductIds,
     ],
   );
 
@@ -339,6 +360,7 @@ export default function ProductModal({
     reservedStockRef.current = activeInventory.reserved;
     const nextCategory =
       activeProduct?.category || activeCategories[0] || "";
+    const activeBundle = normalizeProductBundleConfig(activeProduct?.bundleConfig);
     const nextState: Snapshot = {
       name: activeProduct?.name || "",
       category: nextCategory,
@@ -361,6 +383,9 @@ export default function ProductModal({
       existingImageUrl: activeProduct?.imageUrl || "",
       existingExtraUrls: activeProduct?.extraImageUrls || [],
       newCategoryName: "",
+      bundleEnabled: activeBundle.enabled,
+      bundleTotalUnits: String(activeBundle.totalUnits || 100),
+      bundleOptionProductIds: activeBundle.optionProductIds,
     };
 
     setName(nextState.name);
@@ -377,6 +402,9 @@ export default function ProductModal({
     setContent(nextState.content);
     setExistingImageUrl(nextState.existingImageUrl);
     setExistingExtraUrls(nextState.existingExtraUrls);
+    setBundleEnabled(nextState.bundleEnabled);
+    setBundleTotalUnits(nextState.bundleTotalUnits);
+    setBundleOptionProductIds(nextState.bundleOptionProductIds);
     setCreatingCategory(activeCategories.length === 0);
     setNewCategoryName("");
     setMainFile(null);
@@ -480,8 +508,9 @@ export default function ProductModal({
     const parsedStock = toNum(stockQty);
     const parsedThreshold = toNum(lowStockThreshold);
     const parsedShippingWeight = shippingWeightGrams.trim() === "" ? null : toNum(shippingWeightGrams);
+    const parsedBundleTotalUnits = toNum(bundleTotalUnits);
 
-    const translatedNameExists = Object.values(content).some((entry) => entry.name.trim());
+    const translatedNameExists = Object.values(content).some((entry: ProductContent[ProductLanguage]) => entry.name.trim());
     if (!name.trim() && !translatedNameExists) {
       errors.name = t("products.err.invalidName");
     }
@@ -527,6 +556,24 @@ export default function ProductModal({
       errors.shippingWeightGrams = copy.invalidShippingWeight;
     }
 
+    if (bundleEnabled) {
+      if (Number.isNaN(parsedBundleTotalUnits) || parsedBundleTotalUnits < 1) {
+        errors.bundleTotalUnits = copy.invalidBundleUnits;
+      }
+      const validOptions = bundleOptionProductIds.filter((id) =>
+        availableProducts.some(
+          (item) =>
+            item.id === id &&
+            item.id !== product?.id &&
+            item.status !== "inactive" &&
+            !item.bundleConfig?.enabled,
+        ),
+      );
+      if (validOptions.length < 2) {
+        errors.bundleOptions = copy.invalidBundleOptions;
+      }
+    }
+
     if (!existingImageUrl && !mainFile) {
       errors.image = copy.imageRequired;
     }
@@ -553,6 +600,7 @@ export default function ProductModal({
       parsedStock,
       parsedThreshold,
       parsedShippingWeight,
+      parsedBundleTotalUnits,
     };
   }, [
     category,
@@ -563,6 +611,8 @@ export default function ProductModal({
     copy.invalidStockBelowReserved,
     copy.invalidUnits,
     copy.invalidShippingWeight,
+    copy.invalidBundleUnits,
+    copy.invalidBundleOptions,
     costPrice,
     creatingCategory,
     editing,
@@ -579,6 +629,11 @@ export default function ProductModal({
     postalEligible,
     shippingWeightGrams,
     content,
+    bundleEnabled,
+    bundleTotalUnits,
+    bundleOptionProductIds,
+    availableProducts,
+    product?.id,
     t,
   ]);
 
@@ -645,6 +700,16 @@ export default function ProductModal({
     const weightGrams = validation.parsedShippingWeight === null
       ? null
       : Math.max(1, Math.round(validation.parsedShippingWeight));
+    const normalizedBundleTotalUnits = Math.max(1, Math.floor(validation.parsedBundleTotalUnits));
+    const normalizedBundleOptionIds = Array.from(new Set(bundleOptionProductIds.filter((id) =>
+      availableProducts.some(
+          (item) =>
+            item.id === id &&
+            item.id !== product?.id &&
+            item.status !== "inactive" &&
+            !item.bundleConfig?.enabled,
+        ),
+    )));
     const normalizedCategory = normalizeCategoryLabel(category);
 
     setSaving(true);
@@ -758,7 +823,12 @@ export default function ProductModal({
         quantity: units,
         stockQty: stock,
         lowStockThreshold: threshold,
-        status,
+        bundleConfig: {
+          enabled: bundleEnabled,
+          totalUnits: normalizedBundleTotalUnits,
+          optionProductIds: bundleEnabled ? normalizedBundleOptionIds : [],
+        },
+        status: bundleEnabled ? "made_to_order" as const : status,
         imageUrl: nextMainUrl,
         extraImageUrls: nextExtraUrls,
         updatedAt: serverTimestamp(),
@@ -855,7 +925,8 @@ export default function ProductModal({
           shipping: payload.shipping,
           postalEligible,
           shippingWeightGrams: weightGrams,
-          status,
+          bundleConfig: payload.bundleConfig,
+          status: payload.status,
           imageUrl: nextMainUrl,
           extraImageUrls: nextExtraUrls,
         };
@@ -877,11 +948,17 @@ export default function ProductModal({
         existingImageUrl: savedProduct.imageUrl,
         existingExtraUrls: savedProduct.extraImageUrls || [],
         newCategoryName: "",
+        bundleEnabled: savedProduct.bundleConfig.enabled,
+        bundleTotalUnits: String(savedProduct.bundleConfig.totalUnits),
+        bundleOptionProductIds: savedProduct.bundleConfig.optionProductIds,
       });
 
       initialSnapshotRef.current = finalSnapshot;
       setExistingImageUrl(savedProduct.imageUrl);
       setExistingExtraUrls(savedProduct.extraImageUrls || []);
+      setBundleEnabled(savedProduct.bundleConfig.enabled);
+      setBundleTotalUnits(String(savedProduct.bundleConfig.totalUnits));
+      setBundleOptionProductIds(savedProduct.bundleConfig.optionProductIds);
       setMainFile(null);
       setExtraFiles([]);
       revokePreviews();
@@ -927,6 +1004,9 @@ export default function ProductModal({
     existingImageUrl,
     extraFiles,
     inventoryTracked,
+    bundleEnabled,
+    bundleOptionProductIds,
+    availableProducts,
     lang,
     mainFile,
     name,
@@ -1084,6 +1164,28 @@ export default function ProductModal({
                 }}
                 status={status}
                 setStatus={setStatus}
+                availableProducts={availableProducts}
+                currentProductId={product?.id}
+                bundleEnabled={bundleEnabled}
+                setBundleEnabled={(value) => {
+                  setBundleEnabled(value);
+                  if (value) {
+                    setStatus("made_to_order");
+                    setInventoryTracked(false);
+                  }
+                  clearFieldError("bundleTotalUnits");
+                  clearFieldError("bundleOptions");
+                }}
+                bundleTotalUnits={bundleTotalUnits}
+                setBundleTotalUnits={(value) => {
+                  setBundleTotalUnits(value);
+                  clearFieldError("bundleTotalUnits");
+                }}
+                bundleOptionProductIds={bundleOptionProductIds}
+                setBundleOptionProductIds={(value) => {
+                  setBundleOptionProductIds(value);
+                  clearFieldError("bundleOptions");
+                }}
                 existingImageUrl={existingImageUrl}
                 existingExtraUrls={existingExtraUrls}
                 mainPreview={mainPreview}

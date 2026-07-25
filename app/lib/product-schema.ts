@@ -12,6 +12,35 @@ export type LocalizedProductText = {
 };
 export type ProductContent = Record<ProductLanguage, LocalizedProductText>;
 
+export type ProductBundleConfig = {
+  enabled: boolean;
+  totalUnits: number;
+  optionProductIds: string[];
+};
+
+export const EMPTY_PRODUCT_BUNDLE_CONFIG: ProductBundleConfig = {
+  enabled: false,
+  totalUnits: 100,
+  optionProductIds: [],
+};
+
+export function normalizeProductBundleConfig(value: unknown): ProductBundleConfig {
+  const raw = record(value);
+  const enabled = raw.enabled === true;
+  const parsedTotal = Number(raw.totalUnits);
+  const totalUnits = Number.isFinite(parsedTotal)
+    ? Math.min(10_000, Math.max(1, Math.floor(parsedTotal)))
+    : 100;
+  const optionProductIds = Array.isArray(raw.optionProductIds)
+    ? Array.from(new Set(raw.optionProductIds
+        .filter((item): item is string => typeof item === "string")
+        .map((item) => item.trim())
+        .filter((item) => item && !item.includes("/"))))
+    : [];
+
+  return { enabled, totalUnits, optionProductIds };
+}
+
 export const EMPTY_LOCALIZED_PRODUCT_TEXT: LocalizedProductText = {
   name: "",
   shortDescription: "",

@@ -80,9 +80,11 @@ import {
 } from "@/app/lib/money";
 import {
   normalizeInventory,
+  normalizeProductBundleConfig,
   normalizeProductPriceMajor,
   normalizeProductPriceMinor,
   resolveLocalizedProductText,
+  type ProductBundleConfig,
 } from "@/app/lib/product-schema";
 import {
   evaluateOfferForCart,
@@ -156,11 +158,29 @@ type Product = {
     | "inventory"
     | "quantity";
   shipping: ProductShipping;
+  bundleConfig: ProductBundleConfig;
+};
+
+type BundleSelection = {
+  kitQuantity: number;
+  selections: Record<string, number>;
+};
+
+type BundleSelectionItem = {
+  productId: string;
+  name: string;
+  imageUrl: string;
+  quantity: number;
 };
 
 type CartItem = Product & {
   qty: number;
   subtotal: number;
+  bundleSelection?: {
+    totalUnitsPerKit: number;
+    totalUnits: number;
+    items: BundleSelectionItem[];
+  };
 };
 
 type CustomerForm = {
@@ -341,6 +361,21 @@ const TEXT = {
     madeToOrderHelp: "Reserve com antecedência para garantir a produção e a entrega.",
     madeToOrderBadge: "Sob encomenda",
     madeToOrderNotice: "Produzido mediante reserva antecipada",
+    configureKit: "Montar kit",
+    editKit: "Editar composição",
+    kitBadge: "Kit configurável",
+    kitTitle: "Monte seu kit",
+    kitHelp: "Distribua as unidades entre os sabores disponíveis.",
+    kitQuantity: "Quantidade de kits",
+    kitTarget: "Total necessário",
+    kitSelected: "Selecionado",
+    kitRemaining: "Faltam",
+    kitReady: "Composição completa",
+    kitConfirm: "Adicionar kit ao carrinho",
+    kitUpdate: "Atualizar kit",
+    kitInvalid: "Distribua exatamente {count} unidades antes de continuar.",
+    kitComposition: "Composição do kit",
+    removeKit: "Remover kit",
   },
 
   en: {
@@ -476,6 +511,21 @@ const TEXT = {
     madeToOrderHelp: "Order in advance to secure production and delivery.",
     madeToOrderBadge: "Made to order",
     madeToOrderNotice: "Prepared by advance reservation",
+    configureKit: "Build bundle",
+    editKit: "Edit composition",
+    kitBadge: "Configurable bundle",
+    kitTitle: "Build your bundle",
+    kitHelp: "Distribute the units among the available flavors.",
+    kitQuantity: "Number of bundles",
+    kitTarget: "Required total",
+    kitSelected: "Selected",
+    kitRemaining: "Remaining",
+    kitReady: "Composition complete",
+    kitConfirm: "Add bundle to cart",
+    kitUpdate: "Update bundle",
+    kitInvalid: "Select exactly {count} units before continuing.",
+    kitComposition: "Bundle composition",
+    removeKit: "Remove bundle",
   },
 
   ja: {
@@ -614,6 +664,21 @@ const TEXT = {
     madeToOrderHelp: "製造と受け取りを確実にするため、事前にご予約ください。",
     madeToOrderBadge: "受注生産",
     madeToOrderNotice: "事前予約後に製造します",
+    configureKit: "セットを選ぶ",
+    editKit: "内容を変更",
+    kitBadge: "選択式セット",
+    kitTitle: "セット内容を選択",
+    kitHelp: "合計数になるように商品ごとの数量を選んでください。",
+    kitQuantity: "セット数",
+    kitTarget: "必要合計",
+    kitSelected: "選択済み",
+    kitRemaining: "残り",
+    kitReady: "内容が完成しました",
+    kitConfirm: "カートに追加",
+    kitUpdate: "セットを更新",
+    kitInvalid: "合計{count}個になるように選択してください。",
+    kitComposition: "セット内容",
+    removeKit: "セットを削除",
   },
 } as const;
 
@@ -858,6 +923,7 @@ function normalizeProduct(
       raw.postalEligible,
       raw.shippingWeightGrams,
     ),
+    bundleConfig: normalizeProductBundleConfig(raw.bundleConfig),
   };
 }
 
@@ -1029,6 +1095,10 @@ export default function StoreClient({
     useState<Record<string, number>>(
       {},
     );
+  const [bundleSelections, setBundleSelections] =
+    useState<Record<string, BundleSelection>>({});
+  const [configuringBundle, setConfiguringBundle] =
+    useState<Product | null>(null);
 
   const [cartOpen, setCartOpen] =
     useState(false);
@@ -1110,6 +1180,7 @@ export default function StoreClient({
         customer?: Partial<CustomerForm>;
         delivery?: Partial<DeliveryForm>;
         selectedOfferId?: string;
+        bundleSelections?: Record<string, BundleSelection>;
         step?: CheckoutStep;
       }>(customerDraftKey);
 
@@ -1142,6 +1213,9 @@ export default function StoreClient({
     }
     if (typeof draft?.selectedOfferId === "string") {
       setSelectedOfferId(draft.selectedOfferId);
+    }
+    if (draft?.bundleSelections && typeof draft.bundleSelections === "object") {
+      setBundleSelections(draft.bundleSelections);
     }
     if (
       draft?.step === "customer" ||
@@ -1185,6 +1259,7 @@ export default function StoreClient({
         customer,
         delivery,
         selectedOfferId,
+        bundleSelections,
         step,
         updatedAt: Date.now(),
       });
@@ -1197,13 +1272,14 @@ export default function StoreClient({
     customerDraftKey,
     delivery,
     selectedOfferId,
+    bundleSelections,
     step,
   ]);
 
   useEffect(() => {
     if (loading) return;
 
-    const productMap = new Map(products.map((product) => [product.id, product]));
+    const productMap = new Map<string, Product>(products.map((product) => [product.id, product]));
     setCart((current) => {
       let changed = false;
       const next: Record<string, number> = {};
@@ -1216,11 +1292,31 @@ export default function StoreClient({
         }
 
         const quantity = Math.max(0, Math.floor(Number(rawQuantity) || 0));
-        const safeQuantity =
-          product.availabilityStatus === "made_to_order" ||
-          typeof product.stock !== "number"
-            ? quantity
-            : Math.min(quantity, Math.max(0, Math.floor(product.stock)));
+        let safeQuantity: number;
+        if (product.bundleConfig.enabled) {
+          const selection = bundleSelections[productId];
+          const kitQuantity = Math.max(1, Math.floor(selection?.kitQuantity ?? 0));
+          const allowed = new Set(product.bundleConfig.optionProductIds);
+          const selectedTotal = Object.entries(selection?.selections ?? {}).reduce(
+            (sum, [optionId, optionQuantity]) =>
+              allowed.has(optionId)
+                ? sum + Math.max(0, Math.floor(Number(optionQuantity) || 0))
+                : sum,
+            0,
+          );
+          safeQuantity =
+            selection &&
+            quantity === kitQuantity &&
+            selectedTotal === product.bundleConfig.totalUnits * kitQuantity
+              ? kitQuantity
+              : 0;
+        } else {
+          safeQuantity =
+            product.availabilityStatus === "made_to_order" ||
+            typeof product.stock !== "number"
+              ? quantity
+              : Math.min(quantity, Math.max(0, Math.floor(product.stock)));
+        }
 
         if (safeQuantity > 0) next[productId] = safeQuantity;
         if (safeQuantity !== rawQuantity) changed = true;
@@ -1228,7 +1324,7 @@ export default function StoreClient({
 
       return changed ? next : current;
     });
-  }, [loading, products]);
+  }, [loading, products, bundleSelections]);
 
   useEffect(() => {
     if (!sellerId.trim()) {
@@ -1626,33 +1722,76 @@ const showingProducts =
 
   const cartItems =
     useMemo<CartItem[]>(() => {
-      return products
-        .map((product) => {
-          const qty =
-            cart[product.id] ??
-            0;
+      const productMap = new Map<string, Product>(
+        products.map((product) => [product.id, product]),
+      );
 
-          if (qty <= 0) {
-            return null;
+      return products.reduce<CartItem[]>((items, product) => {
+        const qty = cart[product.id] ?? 0;
+
+        if (qty <= 0) {
+          return items;
+        }
+
+        let bundleSelection: NonNullable<CartItem["bundleSelection"]> | null = null;
+
+        if (product.bundleConfig.enabled) {
+          const saved = bundleSelections[product.id];
+          const kitQuantity = Math.max(
+            1,
+            Math.floor(saved?.kitQuantity ?? qty),
+          );
+          const allowedIds = new Set(product.bundleConfig.optionProductIds);
+          const bundleItems = Object.entries(saved?.selections ?? {}).reduce<
+            BundleSelectionItem[]
+          >((selectedItems, [productId, rawQuantity]) => {
+            const option = productMap.get(productId);
+            const quantity = Math.max(
+              0,
+              Math.floor(Number(rawQuantity) || 0),
+            );
+
+            if (!option || !allowedIds.has(productId) || quantity <= 0) {
+              return selectedItems;
+            }
+
+            selectedItems.push({
+              productId,
+              name: option.name,
+              imageUrl: option.imageUrl,
+              quantity,
+            });
+
+            return selectedItems;
+          }, []);
+          const totalUnits = bundleItems.reduce(
+            (sum, item) => sum + item.quantity,
+            0,
+          );
+          const expected = product.bundleConfig.totalUnits * kitQuantity;
+
+          if (!saved || totalUnits !== expected || kitQuantity !== qty) {
+            return items;
           }
 
-          return {
-            ...product,
-            qty,
-            subtotal:
-              qty * product.price,
+          bundleSelection = {
+            totalUnitsPerKit: product.bundleConfig.totalUnits,
+            totalUnits,
+            items: bundleItems,
           };
-        })
-        .filter(
-          (
-            item,
-          ): item is CartItem =>
-            item !== null,
-        );
-    }, [
-      cart,
-      products,
-    ]);
+        }
+
+        const cartItem: CartItem = {
+          ...product,
+          qty,
+          subtotal: qty * product.price,
+          ...(bundleSelection ? { bundleSelection } : {}),
+        };
+
+        items.push(cartItem);
+        return items;
+      }, []);
+    }, [cart, products, bundleSelections]);
 
   const totalItems =
     useMemo(
@@ -1840,6 +1979,39 @@ const showingProducts =
       [],
     );
 
+  const saveBundleSelection = useCallback((product: Product, selection: BundleSelection) => {
+    const kitQuantity = Math.max(1, Math.floor(selection.kitQuantity));
+    const allowedIds = new Set(product.bundleConfig.optionProductIds);
+    const cleanedSelections = Object.fromEntries(
+      Object.entries(selection.selections)
+        .map(([productId, rawQuantity]) => [productId, Math.max(0, Math.floor(Number(rawQuantity) || 0))] as const)
+        .filter(([productId, quantity]) => allowedIds.has(productId) && quantity > 0),
+    );
+    const expected = product.bundleConfig.totalUnits * kitQuantity;
+    const selected = Object.values(cleanedSelections).reduce((sum, quantity) => sum + quantity, 0);
+    if (selected !== expected) return;
+
+    setBundleSelections((current) => ({
+      ...current,
+      [product.id]: { kitQuantity, selections: cleanedSelections },
+    }));
+    setCart((current) => ({ ...current, [product.id]: kitQuantity }));
+    setConfiguringBundle(null);
+  }, []);
+
+  const removeBundleFromCart = useCallback((productId: string) => {
+    setBundleSelections((current) => {
+      const next = { ...current };
+      delete next[productId];
+      return next;
+    });
+    setCart((current) => {
+      const next = { ...current };
+      delete next[productId];
+      return next;
+    });
+  }, []);
+
   function goToTop() {
     window.scrollTo({
       top: 0,
@@ -1952,6 +2124,21 @@ const showingProducts =
         ]),
       );
 
+      const orderBundleSelections = Object.fromEntries(
+        cartItems
+          .filter((item) => item.bundleSelection)
+          .map((item) => [
+            item.id,
+            {
+              kitQuantity: item.qty,
+              selections: item.bundleSelection!.items.map((selection) => ({
+                productId: selection.productId,
+                quantity: selection.quantity,
+              })),
+            },
+          ]),
+      );
+
       const result = await createPublicOrder({
         source: "store",
         sellerId,
@@ -1961,6 +2148,7 @@ const showingProducts =
         customerClientId:
           customerSession.clientId || undefined,
         quantities,
+        bundleSelections: orderBundleSelections,
         rewards: {
           mode: rewardEvaluation.mode,
           points: rewardEvaluation.pointsRedeemed,
@@ -2066,6 +2254,7 @@ const showingProducts =
 
   function resetOrder() {
     setCart({});
+    setBundleSelections({});
     writeStoredCustomerProfile(storedProfileFromCheckout(customer, delivery));
     removeLocalDraft(customerDraftKey);
 
@@ -2423,6 +2612,7 @@ const showingProducts =
           help={text.madeToOrderHelp}
           products={madeToOrderProducts}
           cart={cart}
+          bundleSelections={bundleSelections}
           text={text}
           locale={storeProfile.regionalLocale}
           currency={storeProfile.currency}
@@ -2432,6 +2622,7 @@ const showingProducts =
             setSelectedImageIndex(0);
           }}
           onSetQuantity={setQuantity}
+          onConfigureBundle={setConfiguringBundle}
         />
       </>
     ) : (
@@ -2492,6 +2683,7 @@ const showingProducts =
               help={text.availableProductsHelp}
               products={visibleNormalProducts}
               cart={cart}
+              bundleSelections={bundleSelections}
               text={text}
               locale={storeProfile.regionalLocale}
               currency={storeProfile.currency}
@@ -2500,12 +2692,14 @@ const showingProducts =
                 setSelectedImageIndex(0);
               }}
               onSetQuantity={setQuantity}
+              onConfigureBundle={setConfiguringBundle}
             />
             <StoreProductGrid
               title={text.madeToOrderTitle}
               help={text.madeToOrderHelp}
               products={visibleMadeToOrderProducts}
               cart={cart}
+              bundleSelections={bundleSelections}
               text={text}
               locale={storeProfile.regionalLocale}
               currency={storeProfile.currency}
@@ -2515,6 +2709,7 @@ const showingProducts =
                 setSelectedImageIndex(0);
               }}
               onSetQuantity={setQuantity}
+              onConfigureBundle={setConfiguringBundle}
             />
           </>
         )}
@@ -3103,6 +3298,27 @@ const showingProducts =
           onChangeQuantity={
             setQuantity
           }
+          onConfigureBundle={setConfiguringBundle}
+          onRemoveBundle={removeBundleFromCart}
+        />
+      )}
+
+      {configuringBundle && (
+        <BundleConfiguratorDialog
+          product={configuringBundle}
+          options={products.filter((product) =>
+            configuringBundle.bundleConfig.optionProductIds.includes(product.id),
+          )}
+          initialSelection={bundleSelections[configuringBundle.id]}
+          text={text}
+          onClose={() => setConfiguringBundle(null)}
+          onConfirm={(selection) => saveBundleSelection(configuringBundle, selection)}
+          onRemove={cart[configuringBundle.id] > 0
+            ? () => {
+                removeBundleFromCart(configuringBundle.id);
+                setConfiguringBundle(null);
+              }
+            : undefined}
         />
       )}
 
@@ -3292,23 +3508,27 @@ function StoreProductGrid({
   help,
   products,
   cart,
+  bundleSelections,
   text,
   locale,
   currency,
   madeToOrder = false,
   onOpen,
   onSetQuantity,
+  onConfigureBundle,
 }: {
   title: string;
   help: string;
   products: Product[];
   cart: Record<string, number>;
+  bundleSelections: Record<string, BundleSelection>;
   text: (typeof TEXT)[Language];
   locale: RegionalLocale;
   currency: SupportedCurrency;
   madeToOrder?: boolean;
   onOpen: (product: Product) => void;
   onSetQuantity: (product: Product, quantity: number) => void;
+  onConfigureBundle: (product: Product) => void;
 }) {
   if (products.length === 0) return null;
 
@@ -3322,6 +3542,11 @@ function StoreProductGrid({
       <div className="grid grid-cols-2 gap-3 sm:gap-5 lg:grid-cols-3">
         {products.map((product) => {
           const qty = cart[product.id] ?? 0;
+          const configurableBundle =
+            product.bundleConfig.enabled && product.bundleConfig.optionProductIds.length >= 2;
+          const savedBundle = bundleSelections[product.id];
+          const selectedBundleUnits = Object.values(savedBundle?.selections ?? {})
+            .reduce((sum, quantity) => sum + Math.max(0, Math.floor(Number(quantity) || 0)), 0);
           const soldOut =
             !madeToOrder &&
             typeof product.stock === "number" &&
@@ -3370,7 +3595,7 @@ function StoreProductGrid({
 
                 {madeToOrder && (
                   <span className="absolute left-3 top-3 rounded-full bg-violet-600 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-white shadow-lg">
-                    {text.madeToOrderBadge}
+                    {configurableBundle ? text.kitBadge : text.madeToOrderBadge}
                   </span>
                 )}
 
@@ -3417,7 +3642,9 @@ function StoreProductGrid({
 
                 {madeToOrder ? (
                   <p className="mt-3 rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-xs font-bold text-violet-700 dark:border-violet-900/50 dark:bg-violet-950/20 dark:text-violet-300">
-                    {text.madeToOrderNotice}
+                    {configurableBundle
+                      ? `${text.kitTarget}: ${product.bundleConfig.totalUnits}`
+                      : text.madeToOrderNotice}
                   </p>
                 ) : lastUnits ? (
                   <p className="mt-3 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-black text-amber-900 dark:border-amber-800 dark:bg-amber-950/20 dark:text-amber-200">
@@ -3429,7 +3656,21 @@ function StoreProductGrid({
                   </p>
                 ) : null}
 
-                {qty > 0 ? (
+                {configurableBundle && qty > 0 ? (
+                  <div className="mt-3 space-y-2">
+                    <div className="rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-xs font-bold text-violet-800 dark:border-violet-900/50 dark:bg-violet-950/20 dark:text-violet-200">
+                      {qty}× {text.kitBadge} · {selectedBundleUnits} {text.items}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => onConfigureBundle(product)}
+                      className="inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-xl bg-violet-600 px-3 py-2 text-xs font-black text-white transition hover:bg-violet-700 sm:min-h-12 sm:text-sm"
+                    >
+                      <Gift size={17} />
+                      {text.editKit}
+                    </button>
+                  </div>
+                ) : qty > 0 ? (
                   <QuantitySelector
                     qty={qty}
                     onDecrease={() => onSetQuantity(product, qty - 1)}
@@ -3439,7 +3680,7 @@ function StoreProductGrid({
                 ) : (
                   <button
                     type="button"
-                    onClick={() => onSetQuantity(product, 1)}
+                    onClick={() => configurableBundle ? onConfigureBundle(product) : onSetQuantity(product, 1)}
                     disabled={soldOut}
                     className={[
                       "mt-3 inline-flex min-h-10 w-full items-center justify-center gap-1.5 rounded-xl px-3 py-2 text-xs font-bold text-white transition disabled:cursor-not-allowed disabled:opacity-40 sm:mt-5 sm:min-h-12 sm:gap-2 sm:px-4 sm:py-3 sm:text-base",
@@ -3448,8 +3689,8 @@ function StoreProductGrid({
                         : "bg-neutral-950 hover:bg-neutral-800 dark:bg-white dark:text-neutral-950 dark:hover:bg-neutral-200",
                     ].join(" ")}
                   >
-                    <Plus size={18} />
-                    {text.add}
+                    {configurableBundle ? <Gift size={18} /> : <Plus size={18} />}
+                    {configurableBundle ? text.configureKit : text.add}
                   </button>
                 )}
               </div>
@@ -3458,6 +3699,187 @@ function StoreProductGrid({
         })}
       </div>
     </section>
+  );
+}
+
+function BundleConfiguratorDialog({
+  product,
+  options,
+  initialSelection,
+  text,
+  onClose,
+  onConfirm,
+  onRemove,
+}: {
+  product: Product;
+  options: Product[];
+  initialSelection?: BundleSelection;
+  text: (typeof TEXT)[Language];
+  onClose: () => void;
+  onConfirm: (selection: BundleSelection) => void;
+  onRemove?: () => void;
+}) {
+  const [kitQuantity, setKitQuantity] = useState(
+    Math.max(1, Math.floor(initialSelection?.kitQuantity ?? 1)),
+  );
+  const [selections, setSelections] = useState<Record<string, number>>(
+    initialSelection?.selections ?? {},
+  );
+
+  useEffect(() => {
+    setKitQuantity(Math.max(1, Math.floor(initialSelection?.kitQuantity ?? 1)));
+    setSelections(initialSelection?.selections ?? {});
+  }, [initialSelection, product.id]);
+
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [onClose]);
+
+  const target = product.bundleConfig.totalUnits * kitQuantity;
+  const selected = Object.values(selections).reduce<number>(
+    (sum, quantity) => sum + Math.max(0, Math.floor(Number(quantity) || 0)),
+    0,
+  );
+  const remaining = Math.max(0, target - selected);
+  const ready = selected === target;
+
+  const setOptionQuantity = (productId: string, requested: number) => {
+    const current = Math.max(0, Math.floor(Number(selections[productId]) || 0));
+    const safeRequested = Math.max(0, Math.floor(Number(requested) || 0));
+    const nextQuantity = safeRequested > current
+      ? Math.min(safeRequested, current + remaining)
+      : safeRequested;
+
+    setSelections((currentSelections) => {
+      const next = { ...currentSelections };
+      if (nextQuantity <= 0) delete next[productId];
+      else next[productId] = nextQuantity;
+      return next;
+    });
+  };
+
+  const changeKitQuantity = (nextQuantity: number) => {
+    const safe = Math.min(10, Math.max(1, Math.floor(nextQuantity)));
+    setKitQuantity(safe);
+    const nextTarget = product.bundleConfig.totalUnits * safe;
+    setSelections((current) => {
+      let running = 0;
+      const next: Record<string, number> = {};
+      for (const option of options) {
+        const quantity = Math.max(0, Math.floor(Number(current[option.id]) || 0));
+        const allowed = Math.min(quantity, Math.max(0, nextTarget - running));
+        if (allowed > 0) {
+          next[option.id] = allowed;
+          running += allowed;
+        }
+      }
+      return next;
+    });
+  };
+
+  return (
+    <div className="fixed inset-0 z-[90] flex items-end justify-center bg-black/65 backdrop-blur-sm sm:items-center sm:p-6">
+      <button type="button" onClick={onClose} className="absolute inset-0" aria-label={text.close} />
+      <section role="dialog" aria-modal="true" aria-labelledby="bundle-configurator-title" className="relative flex max-h-[100dvh] w-full max-w-3xl flex-col overflow-hidden bg-white text-neutral-950 shadow-2xl dark:bg-neutral-950 dark:text-neutral-100 sm:max-h-[calc(100dvh-3rem)] sm:rounded-3xl sm:border sm:border-neutral-200 sm:dark:border-neutral-800">
+        <header className="flex shrink-0 items-start justify-between gap-4 border-b border-neutral-200 bg-white p-4 dark:border-neutral-800 dark:bg-neutral-900 sm:p-6">
+          <div className="flex min-w-0 items-center gap-3">
+            {product.imageUrl ? (
+              <img src={product.imageUrl} alt="" className="h-14 w-14 shrink-0 rounded-xl object-cover" />
+            ) : null}
+            <div className="min-w-0">
+              <p className="text-xs font-black uppercase tracking-wider text-violet-600 dark:text-violet-300">{text.kitBadge}</p>
+              <h2 id="bundle-configurator-title" className="truncate text-xl font-black sm:text-2xl">{text.kitTitle}: {product.name}</h2>
+              <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">{text.kitHelp}</p>
+            </div>
+          </div>
+          <button type="button" onClick={onClose} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-neutral-200 dark:border-neutral-700" aria-label={text.close}>
+            <X size={20} />
+          </button>
+        </header>
+
+        <div className="min-h-0 flex-1 overflow-y-auto p-4 pb-32 sm:p-6 sm:pb-6">
+          <div className="grid gap-3 rounded-2xl border border-violet-200 bg-violet-50 p-4 dark:border-violet-900/50 dark:bg-violet-950/20 sm:grid-cols-2">
+            <div>
+              <p className="text-xs font-black uppercase tracking-wider text-violet-700 dark:text-violet-300">{text.kitQuantity}</p>
+              <div className="mt-2 flex w-fit items-center gap-3 rounded-xl border border-violet-200 bg-white p-1 dark:border-violet-800 dark:bg-neutral-900">
+                <button type="button" onClick={() => changeKitQuantity(kitQuantity - 1)} disabled={kitQuantity <= 1} className="flex h-9 w-9 items-center justify-center rounded-lg bg-neutral-100 disabled:opacity-30 dark:bg-neutral-800"><Minus size={16} /></button>
+                <span className="min-w-8 text-center text-lg font-black">{kitQuantity}</span>
+                <button type="button" onClick={() => changeKitQuantity(kitQuantity + 1)} disabled={kitQuantity >= 10} className="flex h-9 w-9 items-center justify-center rounded-lg bg-violet-600 text-white disabled:opacity-30"><Plus size={16} /></button>
+              </div>
+            </div>
+            <div className="grid grid-cols-3 gap-2 text-center">
+              <div className="rounded-xl bg-white p-3 dark:bg-neutral-900"><p className="text-[10px] font-black uppercase text-neutral-400">{text.kitTarget}</p><p className="mt-1 text-lg font-black">{target}</p></div>
+              <div className="rounded-xl bg-white p-3 dark:bg-neutral-900"><p className="text-[10px] font-black uppercase text-neutral-400">{text.kitSelected}</p><p className="mt-1 text-lg font-black">{selected}</p></div>
+              <div className="rounded-xl bg-white p-3 dark:bg-neutral-900"><p className="text-[10px] font-black uppercase text-neutral-400">{text.kitRemaining}</p><p className={`mt-1 text-lg font-black ${remaining > 0 ? "text-amber-600" : "text-emerald-600"}`}>{remaining}</p></div>
+            </div>
+          </div>
+
+          <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-3">
+            {options.map((option) => {
+              const quantity = selections[option.id] ?? 0;
+              return (
+                <article key={option.id} className={`overflow-hidden rounded-2xl border bg-white dark:bg-neutral-900 ${quantity > 0 ? "border-violet-500 ring-2 ring-violet-200 dark:ring-violet-900" : "border-neutral-200 dark:border-neutral-800"}`}>
+                  <div className="aspect-[4/3] bg-neutral-100 dark:bg-neutral-800">
+                    {option.imageUrl ? <img src={option.imageUrl} alt={option.name} className="h-full w-full object-cover" /> : <div className="flex h-full items-center justify-center"><ImageIcon size={32} className="text-neutral-400" /></div>}
+                  </div>
+                  <div className="p-3">
+                    <h3 className="line-clamp-2 min-h-10 text-sm font-black">{option.name}</h3>
+                    <div className="mt-3 flex items-center justify-between gap-2 rounded-xl border border-neutral-200 p-1 dark:border-neutral-700">
+                      <button type="button" onClick={() => setOptionQuantity(option.id, quantity - 1)} disabled={quantity <= 0} className="flex h-9 w-9 items-center justify-center rounded-lg bg-neutral-100 disabled:opacity-30 dark:bg-neutral-800"><Minus size={16} /></button>
+                      <input
+                        value={quantity}
+                        onChange={(event) => setOptionQuantity(option.id, Number(event.target.value))}
+                        inputMode="numeric"
+                        aria-label={`${option.name} ${text.quantity}`}
+                        className="w-12 bg-transparent text-center text-lg font-black outline-none"
+                      />
+                      <button type="button" onClick={() => setOptionQuantity(option.id, quantity + 1)} disabled={remaining <= 0} className="flex h-9 w-9 items-center justify-center rounded-lg bg-violet-600 text-white disabled:opacity-30"><Plus size={16} /></button>
+                    </div>
+                    <div className="mt-2 grid grid-cols-3 gap-1">
+                      {[5, 10, 25].map((amount) => (
+                        <button key={amount} type="button" onClick={() => setOptionQuantity(option.id, quantity + amount)} disabled={remaining <= 0} className="rounded-lg bg-neutral-100 py-1 text-[10px] font-black disabled:opacity-30 dark:bg-neutral-800">+{amount}</button>
+                      ))}
+                    </div>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+
+          {!ready && (
+            <p role="alert" className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm font-bold text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/20 dark:text-amber-200">
+              {text.kitInvalid.replace("{count}", String(target))}
+            </p>
+          )}
+        </div>
+
+        <footer className="absolute inset-x-0 bottom-0 z-10 grid gap-2 border-t border-neutral-200 bg-white/95 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] backdrop-blur dark:border-neutral-800 dark:bg-neutral-900/95 sm:static sm:flex sm:items-center sm:justify-between sm:gap-3">
+          {onRemove ? (
+            <button type="button" onClick={onRemove} className="inline-flex min-h-11 w-full items-center justify-center rounded-xl border border-red-300 px-4 text-sm font-black text-red-700 dark:border-red-900 dark:text-red-300 sm:w-auto">
+              {text.removeKit}
+            </button>
+          ) : <span className="hidden sm:block" />}
+          <button
+            type="button"
+            disabled={!ready || options.length < 2}
+            onClick={() => onConfirm({ kitQuantity, selections })}
+            className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-violet-600 px-5 font-black text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-40 sm:w-auto"
+          >
+            <Check size={18} />
+            {initialSelection ? text.kitUpdate : text.kitConfirm}
+          </button>
+        </footer>
+      </section>
+    </div>
   );
 }
 
@@ -3702,17 +4124,22 @@ function OrderSummary({
     <section className="mt-6 rounded-2xl bg-neutral-100 p-5 dark:bg-neutral-800">
       <div className="space-y-3">
         {items.map((item) => (
-          <div
-            key={item.id}
-            className="flex items-center justify-between gap-4 text-sm"
-          >
-            <span className="min-w-0 break-words">
-              {item.qty}× {item.name}
-            </span>
-
-            <span className="shrink-0 font-bold">
-              {formatCurrency(item.subtotal, locale, currency)}
-            </span>
+          <div key={item.id} className="text-sm">
+            <div className="flex items-center justify-between gap-4">
+              <span className="min-w-0 break-words">
+                {item.qty}× {item.name}
+              </span>
+              <span className="shrink-0 font-bold">
+                {formatCurrency(item.subtotal, locale, currency)}
+              </span>
+            </div>
+            {item.bundleSelection && (
+              <ul className="mt-1 space-y-0.5 pl-3 text-xs text-neutral-500 dark:text-neutral-400">
+                {item.bundleSelection.items.map((selection) => (
+                  <li key={selection.productId}>+ {selection.quantity}× {selection.name}</li>
+                ))}
+              </ul>
+            )}
           </div>
         ))}
       </div>
@@ -3780,6 +4207,8 @@ function CartDrawer({
   onClose,
   onContinue,
   onChangeQuantity,
+  onConfigureBundle,
+  onRemoveBundle,
 }: {
   items: CartItem[];
   totalItems: number;
@@ -3797,6 +4226,8 @@ function CartDrawer({
     product: Product,
     qty: number,
   ) => void;
+  onConfigureBundle: (product: Product) => void;
+  onRemoveBundle: (productId: string) => void;
 }) {
   return (
     <div className="fixed inset-0 z-[70] flex justify-end bg-black/50">
@@ -3873,21 +4304,53 @@ function CartDrawer({
                       </p>
                     </div>
 
-                    <QuantitySelector
-                      qty={item.qty}
-                      onDecrease={() =>
-                        onChangeQuantity(
-                          item,
-                          item.qty - 1,
-                        )
-                      }
-                      onIncrease={() =>
-                        onChangeQuantity(
-                          item,
-                          item.qty + 1,
-                        )
-                      }
-                    />
+                    {item.bundleSelection ? (
+                      <div className="mt-4 space-y-3">
+                        <div className="rounded-xl bg-violet-50 p-3 text-xs text-violet-900 dark:bg-violet-950/30 dark:text-violet-100">
+                          <p className="font-black">{text.kitComposition}</p>
+                          <ul className="mt-2 space-y-1">
+                            {item.bundleSelection.items.map((selection) => (
+                              <li key={selection.productId} className="flex justify-between gap-3">
+                                <span>{selection.name}</span>
+                                <span className="font-black">{selection.quantity}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <button
+                            type="button"
+                            onClick={() => onConfigureBundle(item)}
+                            className="min-h-10 rounded-xl border border-violet-300 px-3 text-xs font-black text-violet-700 dark:border-violet-800 dark:text-violet-200"
+                          >
+                            {text.editKit}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onRemoveBundle(item.id)}
+                            className="min-h-10 rounded-xl border border-red-300 px-3 text-xs font-black text-red-700 dark:border-red-900 dark:text-red-300"
+                          >
+                            {text.removeKit}
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <QuantitySelector
+                        qty={item.qty}
+                        onDecrease={() =>
+                          onChangeQuantity(
+                            item,
+                            item.qty - 1,
+                          )
+                        }
+                        onIncrease={() =>
+                          onChangeQuantity(
+                            item,
+                            item.qty + 1,
+                          )
+                        }
+                      />
+                    )}
                   </article>
                 ),
               )}

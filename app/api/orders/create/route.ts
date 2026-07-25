@@ -6,6 +6,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAdminAuth, getAdminDb } from "@/app/lib/firebaseAdmin";
 import { normalizeCustomerAddress } from "@/app/lib/customer-profile";
 import { normalizeProductInventory } from "@/app/lib/inventory-schema";
+import { normalizeProductBundleConfig } from "@/app/lib/product-schema";
 import {
   evaluateRewardSelection,
   rewardProductPointCost,
@@ -38,6 +39,7 @@ type PublicOrderRequest = {
   selectedOfferId?: unknown;
   customerClientId?: unknown;
   quantities?: unknown;
+  bundleSelections?: unknown;
   rewards?: unknown;
   customer?: unknown;
   delivery?: unknown;
@@ -52,6 +54,10 @@ type CleanOrderRequest = {
   selectedOfferId: string;
   customerClientId: string;
   quantities: Record<string, number>;
+  bundleSelections: Record<string, {
+    kitQuantity: number;
+    selections: Record<string, number>;
+  }>;
   totalItems: number;
   rewards: {
     mode: RewardRedemptionMode;
@@ -259,6 +265,35 @@ function cleanQuantities(value: unknown): {
   return { quantities, totalItems };
 }
 
+function cleanBundleSelections(value: unknown): CleanOrderRequest["bundleSelections"] {
+  const raw = record(value);
+  const result: CleanOrderRequest["bundleSelections"] = {};
+
+  for (const [rawKitId, rawSelection] of Object.entries(raw)) {
+    const kitProductId = cleanString(rawKitId, 160);
+    if (!kitProductId || kitProductId.includes("/")) continue;
+
+    const selectionRecord = record(rawSelection);
+    const kitQuantity = cleanInteger(selectionRecord.kitQuantity, 1, 10);
+    const rawLines = Array.isArray(selectionRecord.selections)
+      ? selectionRecord.selections
+      : Object.entries(record(selectionRecord.selections)).map(([productId, quantity]) => ({ productId, quantity }));
+    const selections: Record<string, number> = {};
+
+    for (const rawLine of rawLines.slice(0, 100)) {
+      const line = record(rawLine);
+      const productId = cleanString(line.productId, 160);
+      const quantity = cleanInteger(line.quantity, 0, 100_000);
+      if (!productId || productId.includes("/") || quantity <= 0) continue;
+      selections[productId] = (selections[productId] ?? 0) + quantity;
+    }
+
+    result[kitProductId] = { kitQuantity, selections };
+  }
+
+  return result;
+}
+
 function cleanRequest(value: unknown): CleanOrderRequest {
   const raw = record(value) as PublicOrderRequest;
   const source = cleanSource(raw.source);
@@ -270,6 +305,7 @@ function cleanRequest(value: unknown): CleanOrderRequest {
   const shipping = record(delivery.shipping);
   const rewards = record(raw.rewards);
   const { quantities, totalItems } = cleanQuantities(raw.quantities);
+  const bundleSelections = cleanBundleSelections(raw.bundleSelections);
 
   if (!sellerId || sellerId.includes("/")) {
     throw new OrderError("INVALID_REQUEST", "Vendedor inválido.");
@@ -334,6 +370,7 @@ function cleanRequest(value: unknown): CleanOrderRequest {
     selectedOfferId: cleanString(raw.selectedOfferId, 160),
     customerClientId: cleanString(raw.customerClientId, 200),
     quantities,
+    bundleSelections,
     totalItems,
     rewards: {
       mode: cleanRewardMode(rewards.mode),
@@ -859,6 +896,12 @@ export async function POST(request: NextRequest) {
     const catalogProductRefs = productIds.map((productId) =>
       sellerRef.collection("products").doc(productId),
     );
+    const bundleOptionProductIds = Array.from(new Set(
+      Object.values(clean.bundleSelections).flatMap((selection) => Object.keys(selection.selections)),
+    ));
+    const bundleOptionRefs = bundleOptionProductIds.map((productId) =>
+      sellerRef.collection("products").doc(productId),
+    );
     const offerRef = clean.selectedOfferId
       ? clean.source === "event"
         ? eventRef!.collection("offers").doc(clean.selectedOfferId)
@@ -878,6 +921,7 @@ export async function POST(request: NextRequest) {
       customerClientId: clean.customerClientId,
       customerUid: customerIdentity?.uid || "",
       quantities: clean.quantities,
+      bundleSelections: clean.bundleSelections,
       rewards: clean.rewards,
       customer: clean.customer,
       delivery: clean.delivery,
@@ -905,6 +949,7 @@ export async function POST(request: NextRequest) {
       if (eventRef) refs.push(eventRef);
       refs.push(...orderItemRefs);
       if (clean.source === "event") refs.push(...catalogProductRefs);
+      refs.push(...bundleOptionRefs);
       if (offerRef) refs.push(offerRef);
       if (shippingSettingsRef) refs.push(shippingSettingsRef);
 
@@ -919,6 +964,7 @@ export async function POST(request: NextRequest) {
       const catalogProductSnapshots = clean.source === "event"
         ? catalogProductRefs.map(() => snapshots[cursor++])
         : orderItemSnapshots;
+      const bundleOptionSnapshots = bundleOptionRefs.map(() => snapshots[cursor++]);
       const offerSnapshot = offerRef ? snapshots[cursor++] : null;
       const shippingSettingsSnapshot = shippingSettingsRef ? snapshots[cursor++] : null;
 
@@ -1067,6 +1113,90 @@ export async function POST(request: NextRequest) {
             source: clean.source,
           }),
         );
+      }
+
+      const bundleOptionMap = new Map(
+        bundleOptionProductIds.map((productId, index) => [productId, bundleOptionSnapshots[index]] as const),
+      );
+      const bundleSnapshots = new Map<string, {
+        kitQuantity: number;
+        totalUnitsPerKit: number;
+        totalUnits: number;
+        selections: Array<{ productId: string; name: string; imageUrl: string; quantity: number }>;
+      }>();
+
+      for (let index = 0; index < lines.length; index += 1) {
+        const line = lines[index];
+        const catalogRaw = catalogProductSnapshots[index].data() ?? {};
+        const config = normalizeProductBundleConfig(catalogRaw.bundleConfig);
+        const submitted = clean.bundleSelections[line.productId];
+
+        if (!config.enabled) {
+          if (submitted) {
+            throw new OrderError("INVALID_REQUEST", "A composição enviada não pertence a um kit configurável.");
+          }
+          continue;
+        }
+
+        if (!submitted) {
+          if (clean.source === "event") {
+            continue;
+          }
+          throw new OrderError("INVALID_REQUEST", "Monte a composição completa do kit antes de finalizar.");
+        }
+        if (submitted.kitQuantity !== line.quantity) {
+          throw new OrderError("INVALID_REQUEST", "A quantidade de kits não corresponde à composição selecionada.");
+        }
+
+        const allowed = new Set(config.optionProductIds);
+        const selectedEntries = Object.entries(submitted.selections);
+        const selectedTotal = selectedEntries.reduce((sum, [, quantity]) => sum + quantity, 0);
+        const expectedTotal = config.totalUnits * line.quantity;
+
+        if (selectedTotal !== expectedTotal || selectedEntries.length === 0) {
+          throw new OrderError(
+            "INVALID_REQUEST",
+            `A composição de ${line.name} deve totalizar exatamente ${expectedTotal} unidades.`,
+          );
+        }
+
+        const selections = selectedEntries.map(([productId, quantity]) => {
+          if (!allowed.has(productId)) {
+            throw new OrderError("PRODUCT_UNAVAILABLE", "Uma opção selecionada não pertence mais a este kit.", 409);
+          }
+          const optionSnapshot = bundleOptionMap.get(productId);
+          if (!optionSnapshot?.exists) {
+            throw new OrderError("PRODUCT_UNAVAILABLE", "Uma opção do kit não existe mais.", 409);
+          }
+          const optionRaw = optionSnapshot.data() ?? {};
+          const optionStatus = cleanString(optionRaw.status, 40);
+          if (optionStatus === "inactive" || optionRaw.active === false) {
+            throw new OrderError("PRODUCT_UNAVAILABLE", "Uma opção do kit não está mais disponível.", 409);
+          }
+          return {
+            productId,
+            name: resolveLocalizedName(optionRaw, clean.language, defaultLanguage, `Produto ${productId}`),
+            imageUrl: cleanString(optionRaw.imageUrl ?? optionRaw.image, 2000),
+            quantity,
+          };
+        });
+
+        line.availabilityMode = "made_to_order";
+        line.availabilityStatus = "made_to_order";
+        line.productionMode = "made_to_order";
+        line.inventoryTracked = false;
+        line.stockAvailable = null;
+        line.stockReserved = 0;
+        line.stockShortage = 0;
+        line.productionRequired = expectedTotal;
+        line.stockState = "made_to_order";
+
+        bundleSnapshots.set(line.productId, {
+          kitQuantity: line.quantity,
+          totalUnitsPerKit: config.totalUnits,
+          totalUnits: expectedTotal,
+          selections,
+        });
       }
 
       const unavailableStockLines = lines.filter(
@@ -1351,6 +1481,14 @@ export async function POST(request: NextRequest) {
           shipping: line.shipping,
           postalEligible: line.shipping.postalEligible,
           shippingWeightGrams: line.shipping.weightGrams,
+          options: bundleSnapshots.get(line.productId)?.selections.map((selection) => ({
+            id: selection.productId,
+            productId: selection.productId,
+            name: selection.name,
+            imageUrl: selection.imageUrl,
+            quantity: selection.quantity,
+          })) ?? [],
+          bundle: bundleSnapshots.get(line.productId) ?? null,
         };
       });
       const quantities = Object.fromEntries(
@@ -1377,6 +1515,7 @@ export async function POST(request: NextRequest) {
         quantities,
         items,
         totalItems: clean.totalItems,
+        totalSelectedUnits: Array.from(bundleSnapshots.values()).reduce((sum, bundle) => sum + bundle.totalUnits, 0),
         subtotalMinor,
         discountMinor,
         offerDiscountMinor,

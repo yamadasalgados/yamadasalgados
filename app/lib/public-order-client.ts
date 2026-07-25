@@ -28,6 +28,10 @@ export type CreatePublicOrderInput = {
   selectedOfferId?: string;
   customerClientId?: string;
   quantities: Record<string, number>;
+  bundleSelections?: Record<string, {
+    kitQuantity: number;
+    selections: Array<{ productId: string; quantity: number }>;
+  }>;
   rewards?: {
     mode: PublicOrderRewardMode;
     points?: number;

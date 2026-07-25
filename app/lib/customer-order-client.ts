@@ -40,6 +40,12 @@ export type CustomerOrderItem = {
   category: string;
   productionRequired: number;
   producedQuantity: number;
+  options: Array<{
+    productId: string;
+    name: string;
+    imageUrl: string;
+    quantity: number;
+  }>;
 };
 
 export type CustomerOrderHistoryEntry = {

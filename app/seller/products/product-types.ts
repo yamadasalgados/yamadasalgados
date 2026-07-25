@@ -1,5 +1,5 @@
 import type { Timestamp } from "firebase/firestore";
-import type { ProductContent } from "@/app/lib/product-schema";
+import type { ProductBundleConfig, ProductContent } from "@/app/lib/product-schema";
 import type { ProductShipping } from "@/app/lib/shipping-schema";
 
 export type CategoryId = string;
@@ -42,6 +42,7 @@ export type ProductDoc = {
   status: ProductStatus;
   imageUrl: string;
   extraImageUrls?: string[];
+  bundleConfig: ProductBundleConfig;
 };
 
 export type ProductFormField =
@@ -53,6 +54,8 @@ export type ProductFormField =
   | "stockQty"
   | "lowStockThreshold"
   | "shippingWeightGrams"
+  | "bundleTotalUnits"
+  | "bundleOptions"
   | "image";
 
 export type ProductFormErrors = Partial<Record<ProductFormField, string>>;

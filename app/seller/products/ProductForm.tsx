@@ -3,7 +3,7 @@
 import type { RefObject } from "react";
 import type { ProductContent, ProductLanguage } from "@/app/lib/product-schema";
 import type { SupportedCurrency } from "@/app/types/regional";
-import type { ProductFormErrors, ProductStatus } from "./product-types";
+import type { ProductDoc, ProductFormErrors, ProductStatus } from "./product-types";
 
 type Props = {
   t: (key: string) => string;
@@ -44,6 +44,14 @@ type Props = {
   setShippingWeightGrams: (value: string) => void;
   status: ProductStatus;
   setStatus: (value: ProductStatus) => void;
+  availableProducts: ProductDoc[];
+  currentProductId?: string;
+  bundleEnabled: boolean;
+  setBundleEnabled: (value: boolean) => void;
+  bundleTotalUnits: string;
+  setBundleTotalUnits: (value: string) => void;
+  bundleOptionProductIds: string[];
+  setBundleOptionProductIds: (value: string[]) => void;
   existingImageUrl: string;
   existingExtraUrls: string[];
   mainPreview: string;
@@ -77,16 +85,18 @@ export default function ProductForm(props: Props) {
     setSellPrice, quantity, setQuantity, reservedStock, stockQty, setStockQty,
     lowStockThreshold, setLowStockThreshold, inventoryTracked,
     setInventoryTracked, postalEligible, setPostalEligible,
-    shippingWeightGrams, setShippingWeightGrams, status, setStatus, existingImageUrl,
+    shippingWeightGrams, setShippingWeightGrams, status, setStatus, availableProducts,
+    currentProductId, bundleEnabled, setBundleEnabled, bundleTotalUnits,
+    setBundleTotalUnits, bundleOptionProductIds, setBundleOptionProductIds, existingImageUrl,
     existingExtraUrls, mainPreview, extraPreviews, onPickMain, onPickExtras,
     removeExistingExtra, clearSelectedExtras,
   } = props;
 
   const copy = lang === "ja"
-    ? { translations: "商品内容（多言語）", defaultName: "標準商品名", short: "短い説明", details: "詳細", ingredients: "原材料", allergens: "アレルゲン", units: "販売単位", stock: "実在庫数", threshold: "在庫不足の基準", track: "在庫を管理する", main: "メイン画像", extras: "追加画像", current: "現在の画像（クリックで削除）", queue: "アップロード予定", creating: "作成中...", madeToOrder: "受注生産", madeToOrderHelp: "通常在庫ではなく、事前予約で販売する商品です。", postal: "郵送対象", postalHelp: "この商品を通常ストアから郵送できます。", weight: "発送重量 (g)", weightHelp: "重量別送料を使う場合に必要です。梱包後のおおよその重量を入力してください。", reserved: "予約済み", availableAfterReserved: "予約を除く利用可能数" }
+    ? { translations: "商品内容（多言語）", defaultName: "標準商品名", short: "短い説明", details: "詳細", ingredients: "原材料", allergens: "アレルゲン", units: "販売単位", stock: "実在庫数", threshold: "在庫不足の基準", track: "在庫を管理する", main: "メイン画像", extras: "追加画像", current: "現在の画像（クリックで削除）", queue: "アップロード予定", creating: "作成中...", madeToOrder: "受注生産", madeToOrderHelp: "通常在庫ではなく、事前予約で販売する商品です。", postal: "郵送対象", postalHelp: "この商品を通常ストアから郵送できます。", weight: "発送重量 (g)", weightHelp: "重量別送料を使う場合に必要です。梱包後のおおよその重量を入力してください。", reserved: "予約済み", availableAfterReserved: "予約を除く利用可能数", bundleTitle: "選択式セット", bundleHelp: "お客様がセット内の商品と数量を選び、合計数を満たしてからカートへ追加します。", bundleToggle: "選択式セットとして販売", bundleUnits: "セット1個あたりの合計数", bundleOptions: "選択できる商品", bundleOptionsHelp: "セットに含められる商品を2つ以上選択してください。", bundleSelected: "選択中", bundleNoProducts: "先にセットへ追加できる通常商品を登録してください。" }
     : lang === "en"
-      ? { translations: "Multilingual product content", defaultName: "Default product name", short: "Short description", details: "Details", ingredients: "Ingredients", allergens: "Allergens", units: "Units per sale", stock: "Physical stock", threshold: "Low-stock threshold", track: "Track inventory", main: "Main image", extras: "Extra images", current: "Current images (click to remove)", queue: "Upload queue", creating: "Creating...", madeToOrder: "Made to order", madeToOrderHelp: "This item is sold by advance reservation rather than regular stock.", postal: "Postal eligible", postalHelp: "This product may be shipped from the permanent store.", weight: "Shipping weight (g)", weightHelp: "Required for weight-based shipping. Enter the approximate packed weight.", reserved: "Reserved", availableAfterReserved: "Available after reservations" }
-      : { translations: "Conteúdo multilíngue do produto", defaultName: "Nome padrão do produto", short: "Descrição curta", details: "Detalhes", ingredients: "Ingredientes", allergens: "Alérgenos", units: "Unidades por venda", stock: "Estoque físico", threshold: "Limite de estoque baixo", track: "Controlar estoque", main: "Imagem principal", extras: "Imagens extras", current: "Imagens atuais (clique para remover)", queue: "Fila de upload", creating: "Criando...", madeToOrder: "Sob encomenda", madeToOrderHelp: "Este item é vendido mediante reserva antecipada, fora do estoque comum.", postal: "Disponível para envio por correio", postalHelp: "Permite enviar este produto pela Store permanente.", weight: "Peso para envio (g)", weightHelp: "Necessário para frete por peso. Informe o peso aproximado já considerando a embalagem.", reserved: "Reservado", availableAfterReserved: "Disponível após reservas" };
+      ? { translations: "Multilingual product content", defaultName: "Default product name", short: "Short description", details: "Details", ingredients: "Ingredients", allergens: "Allergens", units: "Units per sale", stock: "Physical stock", threshold: "Low-stock threshold", track: "Track inventory", main: "Main image", extras: "Extra images", current: "Current images (click to remove)", queue: "Upload queue", creating: "Creating...", madeToOrder: "Made to order", madeToOrderHelp: "This item is sold by advance reservation rather than regular stock.", postal: "Postal eligible", postalHelp: "This product may be shipped from the permanent store.", weight: "Shipping weight (g)", weightHelp: "Required for weight-based shipping. Enter the approximate packed weight.", reserved: "Reserved", availableAfterReserved: "Available after reservations", bundleTitle: "Configurable bundle", bundleHelp: "Customers choose the products and quantities inside the bundle before adding it to the cart.", bundleToggle: "Sell as a configurable bundle", bundleUnits: "Total units per bundle", bundleOptions: "Selectable products", bundleOptionsHelp: "Choose at least two products that may be included in this bundle.", bundleSelected: "selected", bundleNoProducts: "Create regular products first so they can be used as bundle options." }
+      : { translations: "Conteúdo multilíngue do produto", defaultName: "Nome padrão do produto", short: "Descrição curta", details: "Detalhes", ingredients: "Ingredientes", allergens: "Alérgenos", units: "Unidades por venda", stock: "Estoque físico", threshold: "Limite de estoque baixo", track: "Controlar estoque", main: "Imagem principal", extras: "Imagens extras", current: "Imagens atuais (clique para remover)", queue: "Fila de upload", creating: "Criando...", madeToOrder: "Sob encomenda", madeToOrderHelp: "Este item é vendido mediante reserva antecipada, fora do estoque comum.", postal: "Disponível para envio por correio", postalHelp: "Permite enviar este produto pela Store permanente.", weight: "Peso para envio (g)", weightHelp: "Necessário para frete por peso. Informe o peso aproximado já considerando a embalagem.", reserved: "Reservado", availableAfterReserved: "Disponível após reservas", bundleTitle: "Kit configurável", bundleHelp: "O cliente escolhe os produtos e distribui as quantidades do kit antes de adicionar ao carrinho.", bundleToggle: "Vender como kit configurável", bundleUnits: "Total de unidades por kit", bundleOptions: "Produtos disponíveis para escolha", bundleOptionsHelp: "Selecione pelo menos dois produtos que poderão compor este kit.", bundleSelected: "selecionados", bundleNoProducts: "Cadastre primeiro produtos normais para usá-los como opções do kit." };
 
   const updateContent = (language: ProductLanguage, field: keyof ProductContent[ProductLanguage], value: string) => {
     setContent({ ...content, [language]: { ...content[language], [field]: value } });
@@ -95,6 +105,18 @@ export default function ProductForm(props: Props) {
   const selectableCategories = category && !categories.includes(category) ? [category, ...categories] : categories;
   const costLabel = lang === "ja" ? `原価 (${currency})` : lang === "en" ? `Cost price (${currency})` : `Preço de custo (${currency})`;
   const saleLabel = lang === "ja" ? `販売価格 (${currency})` : lang === "en" ? `Sale price (${currency})` : `Preço de venda (${currency})`;
+  const bundleCandidates = availableProducts.filter((product) =>
+    product.id !== currentProductId &&
+    product.status !== "inactive" &&
+    !product.bundleConfig?.enabled
+  );
+  const toggleBundleOption = (productId: string) => {
+    setBundleOptionProductIds(
+      bundleOptionProductIds.includes(productId)
+        ? bundleOptionProductIds.filter((item) => item !== productId)
+        : [...bundleOptionProductIds, productId],
+    );
+  };
 
   return <div className="grid gap-5 sm:grid-cols-2">
     <div className="space-y-1">
@@ -167,6 +189,84 @@ export default function ProductForm(props: Props) {
       </select>
       {status === "made_to_order" && <p className="mt-2 rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-xs font-bold text-violet-700 dark:border-violet-900/50 dark:bg-violet-950/20 dark:text-violet-300">{copy.madeToOrderHelp}</p>}
     </div>
+
+    <section className="space-y-4 rounded-2xl border border-violet-200 bg-violet-50/60 p-4 dark:border-violet-900/50 dark:bg-violet-950/20 sm:col-span-2">
+      <label className="flex cursor-pointer items-start justify-between gap-4">
+        <div>
+          <p className="text-sm font-black">{copy.bundleTitle}</p>
+          <p className="mt-1 text-xs font-semibold text-violet-800/80 dark:text-violet-200/80">{copy.bundleHelp}</p>
+        </div>
+        <input
+          type="checkbox"
+          checked={bundleEnabled}
+          onChange={(event) => setBundleEnabled(event.target.checked)}
+          disabled={disabled}
+          className="mt-1 h-5 w-5 accent-violet-700"
+        />
+      </label>
+
+      {bundleEnabled && (
+        <div className="space-y-4 border-t border-violet-200 pt-4 dark:border-violet-900/50">
+          <div className="space-y-1">
+            <label className="text-xs font-black uppercase tracking-wider">{copy.bundleUnits}</label>
+            <input
+              value={bundleTotalUnits}
+              onChange={(event) => setBundleTotalUnits(event.target.value)}
+              inputMode="numeric"
+              disabled={disabled}
+              placeholder="100"
+              className={fieldClass(Boolean(errors.bundleTotalUnits))}
+            />
+            <FieldError message={errors.bundleTotalUnits} />
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-black uppercase tracking-wider">{copy.bundleOptions}</p>
+                <p className="mt-1 text-[11px] font-semibold text-neutral-500 dark:text-neutral-400">{copy.bundleOptionsHelp}</p>
+              </div>
+              <span className="rounded-full bg-violet-600 px-3 py-1 text-xs font-black text-white">
+                {bundleOptionProductIds.length} {copy.bundleSelected}
+              </span>
+            </div>
+
+            {bundleCandidates.length === 0 ? (
+              <p className="mt-3 rounded-xl bg-white/80 p-4 text-sm font-bold text-neutral-500 dark:bg-neutral-900/70 dark:text-neutral-400">{copy.bundleNoProducts}</p>
+            ) : (
+              <div className="mt-3 grid max-h-80 grid-cols-2 gap-2 overflow-y-auto pr-1 sm:grid-cols-3">
+                {bundleCandidates.map((product) => {
+                  const selected = bundleOptionProductIds.includes(product.id);
+                  return (
+                    <button
+                      key={product.id}
+                      type="button"
+                      onClick={() => toggleBundleOption(product.id)}
+                      disabled={disabled}
+                      className={[
+                        "overflow-hidden rounded-xl border text-left transition",
+                        selected
+                          ? "border-violet-500 bg-violet-100 ring-2 ring-violet-300 dark:bg-violet-950/60"
+                          : "border-neutral-200 bg-white hover:border-violet-300 dark:border-neutral-800 dark:bg-neutral-900",
+                      ].join(" ")}
+                    >
+                      <div className="aspect-[4/3] bg-neutral-100 dark:bg-neutral-800">
+                        {product.imageUrl ? <img src={product.imageUrl} alt="" className="h-full w-full object-cover" /> : null}
+                      </div>
+                      <div className="p-2">
+                        <p className="line-clamp-2 text-xs font-black">{product.name}</p>
+                        <p className="mt-1 text-[10px] font-bold uppercase text-neutral-400">{product.category}</p>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            <FieldError message={errors.bundleOptions} />
+          </div>
+        </div>
+      )}
+    </section>
 
     <div className="space-y-3 sm:col-span-2">
       <label className="text-xs font-black uppercase tracking-wider">{copy.main}</label>

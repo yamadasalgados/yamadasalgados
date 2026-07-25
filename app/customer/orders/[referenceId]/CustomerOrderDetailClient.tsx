@@ -432,6 +432,16 @@ export default function CustomerOrderDetailClient({ referenceId }: Props) {
                     <div className="min-w-0 flex-1">
                       <p className="font-black">{item.name}</p>
                       <p className="mt-1 text-xs font-bold text-neutral-500">{text.quantity}: {item.quantity}</p>
+                      {item.options.length > 0 && (
+                        <ul className="mt-2 space-y-1 rounded-xl bg-violet-50 p-3 text-xs font-bold text-violet-800 dark:bg-violet-950/30 dark:text-violet-200">
+                          {item.options.map((option) => (
+                            <li key={option.productId || option.name} className="flex justify-between gap-3">
+                              <span>{option.name}</span>
+                              <span>{option.quantity}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
                       {(item.productionRequired > 0 || item.producedQuantity > 0) && (
                         <p className="mt-1 text-[11px] font-bold text-amber-600 dark:text-amber-300">
                           {item.producedQuantity} {text.unitsProduced} • {item.productionRequired} {text.productionPending}

@@ -80,8 +80,11 @@ export interface StoreOrderInventoryState {
 
 export interface StoreOrderOption {
   id?: string;
+  productId?: string;
   name: string;
   price?: number;
+  quantity?: number;
+  imageUrl?: string;
 }
 
 export interface StoreOrderItem {

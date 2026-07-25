@@ -220,6 +220,9 @@ export default function ItemsCard({
                                 }
                               >
                                 +{" "}
+                                {typeof option.quantity === "number" && option.quantity > 0
+                                  ? `${option.quantity}× `
+                                  : ""}
                                 {option.name}
                                 {typeof option.price ===
                                 "number"

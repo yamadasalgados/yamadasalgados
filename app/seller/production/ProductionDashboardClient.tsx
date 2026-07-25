@@ -114,6 +114,7 @@ type WorkOrderLine = {
   quantity: number;
   producedQuantity: number;
   totalProductionQuantity: number;
+  composition: string[];
   detailHref: string;
 };
 
@@ -418,7 +419,10 @@ function orderSearchText(order: UnifiedOrder): string {
     order.order.customerName,
     order.order.customerPhone,
     order.eventTitle,
-    ...order.order.items.map((item) => item.name),
+    ...order.order.items.flatMap((item) => [
+      item.name,
+      ...(item.options ?? []).map((option) => option.name),
+    ]),
   ]
     .filter(Boolean)
     .join(" ")
@@ -486,6 +490,9 @@ function groupWork(
         quantity,
         producedQuantity: produced,
         totalProductionQuantity: totalProduction,
+        composition: (item.options ?? [])
+          .filter((option) => option.name && (option.quantity ?? 0) > 0)
+          .map((option) => `${option.quantity}× ${option.name}`),
         detailHref: orderDetailHref(unified),
       });
 
@@ -1563,6 +1570,11 @@ export default function ProductionDashboardClient() {
                                 {" · "}
                                 {line.deliveryDate || text.noDate}
                               </p>
+                              {line.composition.length > 0 && (
+                                <p className="mt-1 line-clamp-2 text-[10px] font-bold text-violet-700 dark:text-violet-300">
+                                  {line.composition.join(" · ")}
+                                </p>
+                              )}
                             </div>
                             <div className="shrink-0 text-right">
                               <p className="text-lg font-black text-neutral-950 dark:text-white">

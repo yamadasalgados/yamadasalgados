@@ -128,6 +128,17 @@ function serializeItem(value: unknown) {
     producedQuantity: nonNegativeInteger(
       state.producedQuantity ?? raw.producedQuantity,
     ),
+    options: Array.isArray(raw.options)
+      ? raw.options.map((optionValue) => {
+          const option = record(optionValue);
+          return {
+            productId: cleanString(option.productId ?? option.id, 160),
+            name: cleanString(option.name, 240),
+            imageUrl: cleanString(option.imageUrl, 2000),
+            quantity: nonNegativeInteger(option.quantity),
+          };
+        }).filter((option) => option.name && option.quantity > 0)
+      : [],
   };
 }
 

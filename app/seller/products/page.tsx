@@ -22,7 +22,7 @@ import MetricStrip from "@/app/_components/MetricStrip";
 import PageHeader from "@/app/_components/PageHeader";
 import { useSellerSession } from "@/app/_components/SellerSessionContext";
 import { db } from "@/app/lib/firebase";
-import { normalizeInventory, normalizeProductContent, normalizeProductPriceMajor } from "@/app/lib/product-schema";
+import { normalizeInventory, normalizeProductBundleConfig, normalizeProductContent, normalizeProductPriceMajor } from "@/app/lib/product-schema";
 import { normalizeProductShipping } from "@/app/lib/shipping-schema";
 import { useI18n } from "@/app/lib/i18n";
 import { formatMoneyMajor } from "@/app/lib/money";
@@ -343,6 +343,7 @@ export default function ProductsCatalogPage() {
             ) as ProductStatus,
             imageUrl: String(data.imageUrl || data.image || ""),
             extraImageUrls: Array.isArray(data.extraImageUrls) ? data.extraImageUrls.filter(Boolean) : [],
+            bundleConfig: normalizeProductBundleConfig(data.bundleConfig),
           };
         }).filter((p) => p.name);
 
@@ -1068,6 +1069,7 @@ export default function ProductsCatalogPage() {
           authUser={authUser}
           sellerId={sellerId}
           categories={categoriesForSellerSelect}
+          availableProducts={ownProducts}
           ownCount={ownCount}
           maxProducts={maxProducts}
           plan={plan}
@@ -1227,7 +1229,9 @@ function ProductCard({
 
           <div className={`rounded-xl border px-3 py-2 text-xs font-black ${stockClass}`}>
             {madeToOrder
-              ? badgeLabelMadeToOrder
+              ? product.bundleConfig.enabled
+                ? `${lang === "ja" ? "選択式セット" : lang === "en" ? "Configurable bundle" : "Kit configurável"} · ${product.bundleConfig.totalUnits} ${lang === "ja" ? "個" : lang === "en" ? "units" : "unidades"} · ${product.bundleConfig.optionProductIds.length} ${lang === "ja" ? "種類" : lang === "en" ? "options" : "opções"}`
+                : badgeLabelMadeToOrder
               : <>
                   {lang === "ja"
                     ? "在庫: "

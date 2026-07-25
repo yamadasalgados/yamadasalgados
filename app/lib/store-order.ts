@@ -124,8 +124,13 @@ function normalizeOption(
     id:
       toSafeString(value.id) ||
       undefined,
+    productId:
+      toSafeString(value.productId) ||
+      undefined,
     name,
     price: toOptionalNumber(value.price),
+    quantity: toOptionalNumber(value.quantity),
+    imageUrl: toSafeString(value.imageUrl) || undefined,
   };
 }
 
