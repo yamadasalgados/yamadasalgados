@@ -1,11 +1,13 @@
 "use client";
 
-import { ArrowLeft, CheckCircle2, Loader2, MapPin, Save, ShoppingBag, Sparkles, Store, UserRound } from "lucide-react";
+import { Loader2, MapPin, Save, UserRound } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState, type FormEvent } from "react";
 
-import CustomerAppReadiness from "@/app/_components/CustomerAppReadiness";
+import BackLink from "@/app/_components/BackLink";
+import FeedbackBanner from "@/app/_components/FeedbackBanner";
+import PageHeader from "@/app/_components/PageHeader";
 import useCustomerSession from "@/app/hooks/useCustomerSession";
 import { EMPTY_CUSTOMER_ADDRESS, type CustomerAddressProfile } from "@/app/lib/customer-profile";
 import { writeStoredCustomerProfile } from "@/app/lib/customer-storage";
@@ -106,15 +108,7 @@ const COPY = {
 };
 
 function safePath(value: string | null): string {
-  return value && value.startsWith("/") && !value.startsWith("//") ? value : "/";
-}
-
-function storeHrefFromPath(path: string): string {
-  const eventMatch = path.match(/^\/event\/([^/]+)/);
-  if (eventMatch?.[1]) return `/store/${encodeURIComponent(eventMatch[1])}`;
-  const storeMatch = path.match(/^\/store\/([^/]+)/);
-  if (storeMatch?.[1]) return `/store/${encodeURIComponent(storeMatch[1])}`;
-  return "";
+  return value && value.startsWith("/") && !value.startsWith("//") ? value : "/customer/orders";
 }
 
 function Field({
@@ -150,11 +144,6 @@ function Field({
 function CustomerProfileContent() {
   const params = useSearchParams();
   const next = useMemo(() => safePath(params.get("next")), [params]);
-  const storeHref = useMemo(() => storeHrefFromPath(next), [next]);
-  const rewardSellerId = useMemo(
-    () => storeHref.match(/^\/store\/([^/]+)/)?.[1] || "",
-    [storeHref],
-  );
   const { lang } = useI18n();
   const language = lang === "en" || lang === "ja" ? lang : "pt";
   const text = COPY[language];
@@ -245,49 +234,12 @@ function CustomerProfileContent() {
   return (
     <main className="min-h-screen bg-neutral-50 px-4 py-8 text-neutral-950 dark:bg-neutral-950 dark:text-white sm:py-12">
       <form onSubmit={submit} className="mx-auto w-full max-w-3xl space-y-5">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <Link href={next} className="inline-flex items-center gap-2 text-sm font-black text-neutral-500 hover:text-neutral-950 dark:hover:text-white">
-            <ArrowLeft size={17} />
-            {text.back}
-          </Link>
-          <div className="flex flex-wrap items-center gap-2">
-            <Link href="/customer/orders" className="inline-flex items-center gap-2 rounded-xl border border-neutral-300 px-3 py-2 text-xs font-black hover:bg-white dark:border-neutral-700 dark:hover:bg-neutral-900">
-              <ShoppingBag size={16} />
-              {text.orders}
-            </Link>
-            {storeHref && (
-              <Link href={storeHref} className="inline-flex items-center gap-2 rounded-xl border border-neutral-300 px-3 py-2 text-xs font-black hover:bg-white dark:border-neutral-700 dark:hover:bg-neutral-900">
-                <Store size={16} />
-                {text.visitStore}
-              </Link>
-            )}
-          </div>
-        </div>
-
-        <CustomerAppReadiness language={language} />
-
-        <section className="rounded-3xl border border-neutral-200 bg-white p-6 shadow-sm dark:border-neutral-800 dark:bg-neutral-900 sm:p-8">
-          <div className="flex items-start gap-3">
-            <div className="rounded-2xl bg-emerald-100 p-3 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
-              <UserRound size={24} />
-            </div>
-            <div>
-              <h1 className="text-2xl font-black">{text.title}</h1>
-              <p className="mt-1 text-sm text-neutral-600 dark:text-neutral-300">{text.subtitle}</p>
-              {rewardSellerId && (
-                <Link
-                  href={`/customer/rewards?sellerId=${encodeURIComponent(rewardSellerId)}&next=${encodeURIComponent(next)}`}
-                  className="mt-2 inline-flex items-center gap-2 text-xs font-black text-violet-700 underline dark:text-violet-300"
-                >
-                  <Sparkles size={14} />
-                  {text.rewards}
-                </Link>
-              )}
-              <p className="mt-1 text-[11px] font-bold text-neutral-400">{text.rewardsHelp}</p>
-            </div>
-          </div>
-          <p className="mt-5 rounded-2xl bg-neutral-100 px-4 py-3 text-xs font-bold text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300">{text.help}</p>
-        </section>
+        <PageHeader
+          back={<BackLink href={next} label={text.back} />}
+          title={text.title}
+          description={text.subtitle}
+          meta={<p className="text-xs font-bold text-neutral-600 dark:text-neutral-300">{text.help}</p>}
+        />
 
         <section className="rounded-3xl border border-neutral-200 bg-white p-6 shadow-sm dark:border-neutral-800 dark:bg-neutral-900 sm:p-8">
           <h2 className="text-lg font-black">{text.personal}</h2>
@@ -327,15 +279,8 @@ function CustomerProfileContent() {
           </div>
         </section>
 
-        {message && (
-          <div className="flex items-center gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-bold text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300">
-            <CheckCircle2 size={18} />
-            {message}
-          </div>
-        )}
-        {error && (
-          <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300">{error}</div>
-        )}
+        {message && <FeedbackBanner tone="success">{message}</FeedbackBanner>}
+        {error && <FeedbackBanner tone="error" role="alert">{error}</FeedbackBanner>}
 
         <button
           type="submit"

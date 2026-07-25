@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { useI18n } from "@/app/lib/i18n";
 import EventClientLoader from "./EventClientLoader";
+import { PublicStoreNav } from "@/app/_components/RoleNavigation";
 
 type ResolvedEventIds = {
   sellerId: string;
@@ -83,9 +84,19 @@ export default function CatchAllEventPage() {
   }
 
   return (
-    <EventClientLoader
-      sellerId={resolvedIds.sellerId}
-      id={resolvedIds.eventId}
-    />
+    <>
+      <PublicStoreNav
+        kind="public"
+        sellerId={resolvedIds.sellerId}
+        storeHref={`/store/${encodeURIComponent(resolvedIds.sellerId)}`}
+        contextLabel={lang === "ja" ? "イベント" : lang === "en" ? "Event" : "Evento"}
+      />
+      <div className="pb-24 lg:pb-0">
+        <EventClientLoader
+          sellerId={resolvedIds.sellerId}
+          id={resolvedIds.eventId}
+        />
+      </div>
+    </>
   );
 }

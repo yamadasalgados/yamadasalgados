@@ -1,6 +1,5 @@
 import type { Metadata, Viewport } from "next";
 import { I18nProvider } from "@/app/lib/i18n"; // Ajustado para _old
-import StoreNavClientOnly from "@/app/_components/StoreNavClientOnly"; // Ajustado para _old
 import PwaRegister from "@/app/_components/PwaRegister"; // Ajustado para _old
 import PWAClient from "@/app/_components/pwa-client"; // Ajustado para _old
 import "./globals.css";
@@ -57,7 +56,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <PWAClient />
 
           <div className="flex min-h-screen flex-col">
-            <StoreNavClientOnly />
             <main className="flex-1 flex flex-col">{children}</main>
           </div>
         </I18nProvider>

@@ -16,8 +16,11 @@ import {
   Timestamp,
   updateDoc,
 } from "firebase/firestore";
-import { Plus } from "lucide-react";
+import { AlertTriangle, Clock3, Package, Plus, Tags } from "lucide-react";
 
+import FeedbackBanner from "@/app/_components/FeedbackBanner";
+import MetricStrip from "@/app/_components/MetricStrip";
+import PageHeader from "@/app/_components/PageHeader";
 import { auth, db } from "@/app/lib/firebase";
 import { normalizeInventory, normalizeProductContent, normalizeProductPriceMajor } from "@/app/lib/product-schema";
 import { normalizeProductShipping } from "@/app/lib/shipping-schema";
@@ -103,7 +106,7 @@ export default function ProductsCatalogPage() {
             subtitle:
               "商品、カテゴリー、価格、在庫を一か所で管理します。",
             statsTotal: "商品数",
-            statsActive: "販売中",
+            statsMadeToOrder: "受注生産",
             statsOut: "在庫切れ",
             statsCategories: "カテゴリー",
             legacyTitle: "既存カテゴリーを検出しました",
@@ -134,7 +137,7 @@ export default function ProductsCatalogPage() {
               subtitle:
                 "Manage products, categories, prices, and stock in one place.",
               statsTotal: "Products",
-              statsActive: "Active",
+              statsMadeToOrder: "Made to order",
               statsOut: "Out of stock",
               statsCategories: "Categories",
               legacyTitle: "Existing categories detected",
@@ -164,7 +167,7 @@ export default function ProductsCatalogPage() {
               subtitle:
                 "Gerencie produtos, categorias, preços e estoque em um só lugar.",
               statsTotal: "Produtos",
-              statsActive: "Ativos",
+              statsMadeToOrder: "Sob encomenda",
               statsOut: "Sem estoque",
               statsCategories: "Categorias",
               legacyTitle: "Categorias existentes detectadas",
@@ -684,9 +687,8 @@ export default function ProductsCatalogPage() {
   const catalogStats = useMemo(
     () => ({
       total: ownProducts.length,
-      active: ownProducts.filter(
-        (product) =>
-          product.status !== "inactive"
+      madeToOrder: ownProducts.filter(
+        (product) => product.status === "made_to_order"
       ).length,
       outOfStock: ownProducts.filter(
         (product) =>
@@ -855,124 +857,110 @@ export default function ProductsCatalogPage() {
   return (
     <main className="min-h-screen bg-neutral-50 text-neutral-950 transition-colors dark:bg-neutral-950 dark:text-neutral-100">
       <div className="mx-auto w-full max-w-7xl space-y-8 p-4 sm:p-6 lg:p-8">
-        <header className="overflow-hidden rounded-[2rem] border border-neutral-200 bg-white shadow-sm dark:border-neutral-800 dark:bg-neutral-900">
-          <div className="flex flex-col gap-6 p-6 sm:flex-row sm:items-end sm:justify-between sm:p-8">
-            <div className="min-w-0">
-              <p className="text-xs font-black uppercase tracking-[0.2em] text-orange-600 dark:text-orange-300">
-                Yamada Seller
+        <PageHeader
+          eyebrow="Yamada Seller"
+          title={t("products.title")}
+          description={catalogText.subtitle}
+          action={
+            <button
+              type="button"
+              onClick={openCreateProduct}
+              disabled={!canCreateProduct}
+              className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl bg-black px-5 text-sm font-black text-white shadow-lg transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40 dark:bg-white dark:text-black sm:w-auto"
+            >
+              <Plus className="h-5 w-5" />
+              {lang === "ja"
+                ? "商品を追加"
+                : lang === "en"
+                  ? "Add Product"
+                  : "Adicionar Produto"}
+            </button>
+          }
+          meta={
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-xs font-bold text-neutral-500 dark:text-neutral-400">
+                {t("products.planLimitLine")
+                  .replace("{plan}", String(plan))
+                  .replace("{max}", String(maxProducts || 0))
+                  .replace("{used}", String(ownCount))
+                  .replace("{remain}", String(remaining))}
               </p>
-
-              <h1 className="mt-2 text-3xl font-black tracking-tight sm:text-4xl">
-                {t("products.title")}
-              </h1>
-
-              <p className="mt-2 max-w-2xl text-sm font-medium leading-relaxed text-neutral-500 dark:text-neutral-400">
-                {catalogText.subtitle}
-              </p>
-            </div>
-
-            <div className="w-full space-y-3 sm:max-w-sm">
-              <button
-                type="button"
-                onClick={openCreateProduct}
-                disabled={!canCreateProduct}
-                className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl bg-black px-5 text-sm font-black text-white shadow-lg transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40 dark:bg-white dark:text-black"
-              >
-                <Plus className="h-5 w-5" />
-                {lang === "ja"
-                  ? "商品を追加"
-                  : lang === "en"
-                    ? "Add Product"
-                    : "Adicionar Produto"}
-              </button>
-
-              <div className="rounded-2xl border border-neutral-200 bg-neutral-50 p-4 dark:border-neutral-700 dark:bg-neutral-950/50">
-                <div className="flex items-center justify-between gap-4">
-                <span className="text-xs font-black uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
-                  {String(plan).toUpperCase()}
-                </span>
-
-                <span className="text-sm font-black">
-                  {maxProducts > 0
-                    ? `${ownCount}/${maxProducts}`
-                    : ownCount}
-                </span>
-              </div>
 
               {maxProducts > 0 && (
-                <div className="mt-3 h-2 overflow-hidden rounded-full bg-neutral-200 dark:bg-neutral-800">
-                  <div
-                    className="h-full rounded-full bg-orange-500 transition-all"
-                    style={{
-                      width: `${Math.min(
-                        100,
-                        Math.max(
-                          0,
-                          (ownCount / maxProducts) * 100
-                        )
-                      )}%`,
-                    }}
-                  />
+                <div className="flex min-w-0 items-center gap-3 sm:w-72">
+                  <div className="h-2 flex-1 overflow-hidden rounded-full bg-neutral-200 dark:bg-neutral-800">
+                    <div
+                      className="h-full rounded-full bg-orange-500 transition-all"
+                      style={{
+                        width: `${Math.min(
+                          100,
+                          Math.max(0, (ownCount / maxProducts) * 100),
+                        )}%`,
+                      }}
+                    />
+                  </div>
+                  <span className="shrink-0 text-xs font-black text-neutral-700 dark:text-neutral-200">
+                    {ownCount}/{maxProducts}
+                  </span>
                 </div>
               )}
-
-                <p className="mt-3 text-xs font-bold text-neutral-500 dark:text-neutral-400">
-                  {t("products.planLimitLine")
-                    .replace("{plan}", String(plan))
-                    .replace("{max}", String(maxProducts || 0))
-                    .replace("{used}", String(ownCount))
-                    .replace("{remain}", String(remaining))}
-                </p>
-              </div>
             </div>
-          </div>
-        </header>
+          }
+        />
 
         {(errMsg || successMsg) && (
-          <div
-            role="status"
-            className={`rounded-2xl border px-4 py-3.5 text-sm font-bold ${
-              errMsg
-                ? "border-red-200 bg-red-50 text-red-700 dark:border-red-900/40 dark:bg-red-950/20 dark:text-red-300"
-                : "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-950/20 dark:text-emerald-300"
-            }`}
-          >
+          <FeedbackBanner tone={errMsg ? "error" : "success"} role={errMsg ? "alert" : "status"}>
             {errMsg || successMsg}
-          </div>
+          </FeedbackBanner>
         )}
 
         {categoryWarning && (
-          <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3.5 text-sm font-bold text-amber-800 dark:border-amber-900/40 dark:bg-amber-950/20 dark:text-amber-200">
-            {categoryWarning}
-          </div>
+          <FeedbackBanner tone="warning">{categoryWarning}</FeedbackBanner>
         )}
 
-        <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          <CatalogMetric
-            label={catalogText.statsTotal}
-            value={catalogStats.total}
-            icon="📦"
-          />
-
-          <CatalogMetric
-            label={catalogText.statsActive}
-            value={catalogStats.active}
-            icon="✅"
-          />
-
-          <CatalogMetric
-            label={catalogText.statsOut}
-            value={catalogStats.outOfStock}
-            icon="⚠️"
-            alert={catalogStats.outOfStock > 0}
-          />
-
-          <CatalogMetric
-            label={catalogText.statsCategories}
-            value={catalogStats.categories}
-            icon="🗂️"
-          />
-        </section>
+        <MetricStrip
+          items={[
+            {
+              label: catalogText.statsTotal,
+              value: catalogStats.total,
+              icon: <Package size={16} />,
+              onClick: () => {
+                setSearchQuery("");
+                setCategoryFilter("all");
+                setStatusFilter("all");
+                setStockFilter("all");
+              },
+              active: !hasActiveFilters,
+            },
+            {
+              label: catalogText.statsOut,
+              value: catalogStats.outOfStock,
+              icon: <AlertTriangle size={16} />,
+              tone: catalogStats.outOfStock > 0 ? "danger" : "default",
+              onClick: () => {
+                setStatusFilter("all");
+                setStockFilter("out");
+              },
+              active: stockFilter === "out",
+            },
+            {
+              label: catalogText.statsMadeToOrder,
+              value: catalogStats.madeToOrder,
+              icon: <Clock3 size={16} />,
+              tone: "violet",
+              onClick: () => {
+                setStockFilter("all");
+                setStatusFilter("made_to_order");
+              },
+              active: statusFilter === "made_to_order",
+            },
+            {
+              label: catalogText.statsCategories,
+              value: catalogStats.categories,
+              icon: <Tags size={16} />,
+            },
+          ]}
+        />
 
         {missingCategoryNames.length > 0 && (
           <section className="flex flex-col gap-4 rounded-3xl border border-blue-200 bg-blue-50 p-5 dark:border-blue-900/50 dark:bg-blue-950/20 sm:flex-row sm:items-center sm:justify-between">
@@ -1011,35 +999,31 @@ export default function ProductsCatalogPage() {
         )}
 
         <section className="space-y-5">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-            <div>
-              <h2 className="text-2xl font-black">
-                {catalogText.catalogTitle}
-              </h2>
-
-              <p className="mt-1 text-sm font-medium text-neutral-500 dark:text-neutral-400">
+          <div className="rounded-3xl border border-neutral-200 bg-white p-4 shadow-sm dark:border-neutral-800 dark:bg-neutral-900">
+            <div className="flex flex-col gap-3 border-b border-neutral-100 pb-4 dark:border-neutral-800 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-sm font-bold text-neutral-500 dark:text-neutral-400">
                 {listening
                   ? t("products.updating")
                   : `${catalogText.visibleProducts}: ${filteredProducts.length}/${ownProducts.length}`}
               </p>
+
+              {hasActiveFilters && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearchQuery("");
+                    setCategoryFilter("all");
+                    setStatusFilter("all");
+                    setStockFilter("all");
+                  }}
+                  className="self-start rounded-xl px-3 py-2 text-xs font-black text-orange-700 transition hover:bg-orange-50 dark:text-orange-300 dark:hover:bg-orange-950/30 sm:self-auto"
+                >
+                  {catalogText.clearFilters}
+                </button>
+              )}
             </div>
 
-            <button
-              type="button"
-              onClick={openCreateProduct}
-              disabled={!canCreateProduct}
-              className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-black px-5 text-sm font-black text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40 dark:bg-white dark:text-black"
-            >
-              <Plus className="h-4 w-4" />
-              {lang === "ja"
-                ? "商品を追加"
-                : lang === "en"
-                  ? "Add Product"
-                  : "Adicionar Produto"}
-            </button>
-          </div>
-
-          <div className="grid gap-3 rounded-3xl border border-neutral-200 bg-white p-4 shadow-sm dark:border-neutral-800 dark:bg-neutral-900 md:grid-cols-2 xl:grid-cols-[minmax(240px,1fr)_220px_180px_180px_auto]">
+            <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-[minmax(240px,1fr)_220px_180px_180px]">
             <input
               value={searchQuery}
               onChange={(event) => setSearchQuery(event.target.value)}
@@ -1113,19 +1097,7 @@ export default function ProductsCatalogPage() {
               </option>
             </select>
 
-            <button
-              type="button"
-              onClick={() => {
-                setSearchQuery("");
-                setCategoryFilter("all");
-                setStatusFilter("all");
-                setStockFilter("all");
-              }}
-              disabled={!hasActiveFilters}
-              className="min-h-11 rounded-xl border border-neutral-200 px-4 text-sm font-black transition hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-40 dark:border-neutral-700 dark:hover:bg-neutral-800"
-            >
-              {catalogText.clearFilters}
-            </button>
+            </div>
           </div>
 
           {ownProducts.length === 0 ? (
@@ -1245,46 +1217,6 @@ export default function ProductsCatalogPage() {
         </div>
       )}
     </main>
-  );
-}
-
-function CatalogMetric({
-  label,
-  value,
-  icon,
-  alert = false,
-}: {
-  label: string;
-  value: number;
-  icon: string;
-  alert?: boolean;
-}) {
-  return (
-    <div
-      className={`rounded-2xl border bg-white p-4 shadow-sm dark:bg-neutral-900 ${
-        alert
-          ? "border-red-200 dark:border-red-900/50"
-          : "border-neutral-200 dark:border-neutral-800"
-      }`}
-    >
-      <div className="flex items-center justify-between gap-3">
-        <span className="text-xl">{icon}</span>
-
-        <span
-          className={`text-2xl font-black ${
-            alert
-              ? "text-red-600 dark:text-red-300"
-              : "text-neutral-950 dark:text-white"
-          }`}
-        >
-          {value}
-        </span>
-      </div>
-
-      <p className="mt-3 text-xs font-black uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
-        {label}
-      </p>
-    </div>
   );
 }
 

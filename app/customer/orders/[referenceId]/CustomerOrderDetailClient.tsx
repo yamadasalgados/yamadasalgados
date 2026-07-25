@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  ArrowLeft,
   CalendarDays,
   Check,
   CheckCircle2,
@@ -20,8 +19,10 @@ import {
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import CustomerAppReadiness from "@/app/_components/CustomerAppReadiness";
 import useCustomerSession from "@/app/hooks/useCustomerSession";
+import PageHeader from "@/app/_components/PageHeader";
+import BackLink from "@/app/_components/BackLink";
+import FeedbackBanner from "@/app/_components/FeedbackBanner";
 import {
   loadCustomerOrder,
   type CustomerOrderDetail,
@@ -330,29 +331,20 @@ export default function CustomerOrderDetailClient({ referenceId }: Props) {
   return (
     <main className="min-h-screen bg-neutral-50 px-4 py-6 text-neutral-950 dark:bg-neutral-950 dark:text-white sm:px-6">
       <div className="mx-auto max-w-4xl space-y-5">
-        <header className="flex flex-col gap-4 rounded-3xl border border-neutral-200 bg-white p-5 shadow-sm dark:border-neutral-800 dark:bg-neutral-900 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <Link href="/customer/orders" className="inline-flex items-center gap-2 text-xs font-black text-neutral-500 hover:text-neutral-950 dark:hover:text-white">
-              <ArrowLeft size={15} /> {text.back}
-            </Link>
-            <h1 className="mt-3 text-3xl font-black">{text.title}</h1>
-          </div>
-          <div className="flex flex-wrap gap-2">
+        <PageHeader
+          back={<BackLink href="/customer/orders" label={text.back} />}
+          title={text.title}
+          action={
             <button
               type="button"
               onClick={() => void refresh(true)}
               disabled={refreshing}
-              className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-neutral-300 px-3 py-2 text-xs font-black dark:border-neutral-700"
+              className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-neutral-300 bg-white px-4 py-2 text-xs font-black transition hover:bg-neutral-50 disabled:opacity-60 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800"
             >
               <RefreshCw className={refreshing ? "animate-spin" : ""} size={15} /> {text.refresh}
             </button>
-            <Link href={`/customer/profile?next=${encodeURIComponent(`/customer/orders/${referenceId}`)}`} className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-black px-4 py-2 text-xs font-black text-white dark:bg-white dark:text-black">
-              <UserRound size={15} /> {text.profile}
-            </Link>
-          </div>
-        </header>
-
-        <CustomerAppReadiness language={language} />
+          }
+        />
 
         {loading ? (
           <div className="flex items-center justify-center rounded-3xl border border-neutral-200 bg-white p-12 dark:border-neutral-800 dark:bg-neutral-900">
@@ -360,12 +352,14 @@ export default function CustomerOrderDetailClient({ referenceId }: Props) {
             <span className="ml-3 text-sm font-bold text-neutral-500">{text.loading}</span>
           </div>
         ) : error || !order ? (
-          <div className="rounded-3xl border border-red-200 bg-red-50 p-6 text-center text-red-700 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-300">
-            <p className="font-bold">{error || text.error}</p>
-            <button type="button" onClick={() => void refresh()} className="mt-4 rounded-xl bg-red-600 px-4 py-2 text-sm font-black text-white">
-              {text.retry}
-            </button>
-          </div>
+          <FeedbackBanner tone="error" role="alert">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <span>{error || text.error}</span>
+              <button type="button" onClick={() => void refresh()} className="rounded-xl bg-red-600 px-4 py-2 text-xs font-black text-white">
+                {text.retry}
+              </button>
+            </div>
+          </FeedbackBanner>
         ) : (
           <>
             <section className="rounded-3xl border border-neutral-200 bg-white p-5 shadow-sm dark:border-neutral-800 dark:bg-neutral-900">

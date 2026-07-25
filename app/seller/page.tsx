@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { auth, db } from "@/app/lib/firebase";
-import { onAuthStateChanged, signOut, type User } from "firebase/auth";
+import { onAuthStateChanged, type User } from "firebase/auth";
 import {
   collection,
   doc,
@@ -23,6 +23,10 @@ import type {
 import { useI18n } from "@/app/lib/i18n";
 import StoreOrdersCard from "@/app/store/StoreOrdersCard";
 import EventOrdersAlerts from "@/app/seller/events/EventOrdersAlerts";
+import PageHeader from "@/app/_components/PageHeader";
+import MetricStrip from "@/app/_components/MetricStrip";
+import FeedbackBanner from "@/app/_components/FeedbackBanner";
+import { CalendarDays, ChartNoAxesCombined, CircleDollarSign, Plus } from "lucide-react";
 
 type EventStatus = "active" | "closed" | "cancelled";
 type PlanId = "starter" | "pro" | "business";
@@ -270,10 +274,7 @@ const dashboardText =
     );
   }, [authUser, loadProfile, t]);
 
-  const handleLogout = useCallback(async () => {
-    await signOut(auth);
-    router.replace("/login");
-  }, [router]);
+
 
   const handleCreateProfileNow = useCallback(async () => {
     if (!authUser) return;
@@ -380,110 +381,59 @@ const showPlanWarning =
   }
 
   return (
-    <main className="p-4 sm:p-6 space-y-8 bg-white dark:bg-neutral-950 min-h-screen transition-colors animate-fade-in">
-      <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between border-b border-neutral-200 dark:border-neutral-800 pb-6">
-        <div className="space-y-1">
-          <h1 className="text-3xl font-black tracking-tight text-neutral-900 dark:text-white">
-            {t("dashboard.title")}
-          </h1>
-          <p className="text-sm font-medium text-neutral-500 dark:text-neutral-400">{t("dashboard.subtitle")}</p>
-
-          {autoFixedIds && (
-            <div className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-emerald-50 text-emerald-700 dark:bg-emerald-900/10 dark:text-emerald-400 px-3 py-1 text-[10px] font-black uppercase tracking-wider">
-              ✨ {dashboardText.identitySynced}
-            </div>
-          )}
-        </div>
-
-        <div className="flex flex-wrap gap-2">
-
+    <main className="mx-auto min-h-screen w-full max-w-7xl space-y-8 bg-white p-4 transition-colors animate-fade-in dark:bg-neutral-950 sm:p-6">
+      <PageHeader
+        eyebrow="Yamada Seller"
+        title={t("dashboard.title")}
+        description={t("dashboard.subtitle")}
+        action={
           <Link
             href="/seller/events/new"
-            className="rounded-2xl bg-black px-5 py-3.5 text-xs font-black uppercase tracking-wider text-white shadow-md transition-all hover:scale-[1.02] active:scale-[0.98] dark:bg-white dark:text-black"
+            className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-neutral-950 px-5 py-3 text-sm font-black text-white transition hover:bg-neutral-800 dark:bg-white dark:text-neutral-950 dark:hover:bg-neutral-200"
           >
+            <Plus size={18} />
             {t("dashboard.create_event")}
           </Link>
-
-          <button
-            type="button"
-            onClick={handleLogout}
-            className="rounded-2xl border border-neutral-200 bg-white px-5 py-3.5 text-xs font-black uppercase tracking-wider text-neutral-700 transition-all hover:border-black hover:text-black active:scale-[0.98] dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:border-white dark:hover:text-white"
-          >
-            {t("common.logout")}
-          </button>
-        </div>
-      </header>
+        }
+        meta={autoFixedIds ? (
+          <p className="text-xs font-black text-emerald-700 dark:text-emerald-300">✨ {dashboardText.identitySynced}</p>
+        ) : undefined}
+      />
 
 {typeof planDaysLeft === "number" && (
-  <section
-    className={`rounded-[2rem] border p-5 space-y-1 ${
-      showPlanWarning
-        ? "border-red-200 bg-red-50 text-red-800 dark:border-red-900/30 dark:bg-red-950/10 dark:text-red-300"
-        : "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900/30 dark:bg-amber-950/10 dark:text-amber-300"
-    }`}
-  >
-    <h2 className="text-sm font-black uppercase tracking-widest">
-      {showPlanWarning
-        ? t("dashboard.plan.warningTitle")
-        : t("dashboard.plan.title")}
-    </h2>
-
-    <p className="text-xs font-bold leading-relaxed">
-      {planDaysLeft > 0
-        ? t("dashboard.plan.daysLeft").replace("{days}", String(planDaysLeft))
-        : t("dashboard.plan.expired")}
-    </p>
-
-    {showPlanWarning && (
-      <p className="text-[11px] font-black leading-relaxed">
-        {t("dashboard.plan.cleanupWarning")}
-      </p>
-    )}
-
-    <Link
-      href="/seller/settings"
-      className="inline-block mt-2 rounded-xl bg-black text-white dark:bg-white dark:text-black px-4 py-2 text-xs font-black uppercase"
-    >
-      {t("dashboard.plan.manage")}
-    </Link>
-  </section>
+  <FeedbackBanner tone={showPlanWarning ? "error" : "warning"} role={showPlanWarning ? "alert" : "status"}>
+    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div>
+        <p className="text-xs font-black uppercase tracking-widest">
+          {showPlanWarning ? t("dashboard.plan.warningTitle") : t("dashboard.plan.title")}
+        </p>
+        <p className="mt-1 text-xs">
+          {planDaysLeft > 0
+            ? t("dashboard.plan.daysLeft").replace("{days}", String(planDaysLeft))
+            : t("dashboard.plan.expired")}
+        </p>
+        {showPlanWarning && <p className="mt-1 text-[11px]">{t("dashboard.plan.cleanupWarning")}</p>}
+      </div>
+      <Link href="/seller/settings" className="shrink-0 rounded-xl bg-neutral-950 px-4 py-2 text-xs font-black text-white dark:bg-white dark:text-neutral-950">
+        {t("dashboard.plan.manage")}
+      </Link>
+    </div>
+  </FeedbackBanner>
 )}
 
       {loading && <div className="animate-pulse h-28 bg-neutral-100 dark:bg-neutral-900 rounded-[2rem]" />}
 
-      {errMsg && (
-        <div className="rounded-2xl border border-red-200 bg-red-50 text-red-700 dark:border-red-900/30 dark:bg-red-900/10 dark:text-red-200 px-4 py-3.5 text-xs font-black uppercase tracking-wider">
-          {errMsg}
-        </div>
-      )}
+      {errMsg && <FeedbackBanner tone="error" role="alert">{errMsg}</FeedbackBanner>}
 
 
 {stats && (
-  <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-    <Card
-      title={dashboardText.statsActive}
-      value={String(stats.activeEvents)}
-      hint={dashboardText.statsActiveHint}
-      tone="good"
-      href="/seller/events"
-    />
-
-    <Card
-      title={dashboardText.statsClosed}
-      value={String(stats.closedEvents)}
-      hint={dashboardText.statsClosedHint}
-      tone="neutral"
-      href="/seller/reports"
-    />
-
-    <Card
-      title={dashboardText.statsRevenue}
-      value={money(stats.revenueClosedSum)}
-      hint={dashboardText.statsRevenueHint}
-      tone="neutral"
-      href="/seller/reports"
-    />
-  </section>
+  <MetricStrip
+    items={[
+      { label: dashboardText.statsActive, value: stats.activeEvents, icon: <CalendarDays size={16} />, tone: "success", href: "/seller/events" },
+      { label: dashboardText.statsClosed, value: stats.closedEvents, icon: <ChartNoAxesCombined size={16} />, href: "/seller/reports" },
+      { label: dashboardText.statsRevenue, value: money(stats.revenueClosedSum), icon: <CircleDollarSign size={16} />, href: "/seller/reports" },
+    ]}
+  />
 )}
 
 
@@ -499,146 +449,6 @@ const showPlanWarning =
   </section>
 )}
 
-{/* Seção de Acessos Rápidos (Ações Modulares) */}
-<section className="rounded-[2.5rem] border border-neutral-200 dark:border-neutral-800 bg-neutral-50/50 dark:bg-neutral-900/30 p-6 space-y-4">
-        <h2 className="text-xs font-black uppercase tracking-widest text-neutral-400 dark:text-neutral-500">
-          {t("dashboard.quick.title")}
-        </h2>
-
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-          <Action
-            title={t("dashboard.quick.events")}
-            desc={t("dashboard.quick.events_desc")}
-            href="/seller/events"
-            icon="📅"
-          />
-
-          <Action
-            title={t("dashboard.quick.products")}
-            desc={t("dashboard.quick.products_desc")}
-            href="/seller/products"
-            icon="📦"
-          />
-
-          <Action
-            title={dashboardText.storeOrdersTitle}
-            desc={dashboardText.storeOrdersDesc}
-            href="/seller/store-orders"
-            icon="🛒"
-          />
-
-          <Action
-            title={dashboardText.productionTitle}
-            desc={dashboardText.productionDesc}
-            href="/seller/production"
-            icon="🏭"
-          />
-
-          <Action
-            title={dashboardText.offersTitle}
-            desc={dashboardText.offersDesc}
-            href="/seller/offers"
-            icon="🎁"
-          />
-
-          {sellerId && (
-            <Action
-              title={dashboardText.publicStoreTitle}
-              desc={dashboardText.publicStoreDesc}
-              href={`/store/${encodeURIComponent(sellerId)}`}
-              icon="🏪"
-              external
-            />
-          )}
-
-          <Action
-            title={t("dashboard.quick.reports")}
-            desc={t("dashboard.quick.reports_desc")}
-            href="/seller/reports"
-            icon="📊"
-          />
-
-          <Action
-            title={t("dashboard.quick.settings")}
-            desc={t("dashboard.quick.settings_desc")}
-            href="/seller/settings"
-            icon="⚙️"
-          />
-        </div>
-      </section>
     </main>
-  );
-}
-
-function Card({
-  title,
-  value,
-  hint,
-  tone,
-  href,
-}: {
-  title: string;
-  value: string;
-  hint: string;
-  tone: "good" | "neutral";
-  href: string;
-}) {
-  const toneCls =
-    tone === "good"
-      ? "border-emerald-200 dark:border-emerald-900/30 bg-emerald-50/20 dark:bg-emerald-950/10"
-      : "border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900";
-
-  return (
-    <Link
-      href={href}
-      className={`rounded-[2rem] border p-6 hover:scale-[1.01] active:scale-[0.99] hover:shadow-lg transition-all block ${toneCls}`}
-    >
-      <p className="text-[10px] font-black text-neutral-400 dark:text-neutral-500 uppercase tracking-wider">{title}</p>
-      <p className="text-3xl font-black mt-2 tracking-tight text-neutral-900 dark:text-white">{value}</p>
-      <p className="text-xs text-neutral-500 dark:text-neutral-400 font-medium mt-2 leading-relaxed">{hint}</p>
-    </Link>
-  );
-}
-
-function Action({
-  title,
-  desc,
-  href,
-  icon,
-  external = false,
-}: {
-  title: string;
-  desc: string;
-  href: string;
-  icon: string;
-  external?: boolean;
-}) {
-  return (
-    <Link
-      href={href}
-      target={external ? "_blank" : undefined}
-      rel={external ? "noopener noreferrer" : undefined}
-      className="group flex min-h-[120px] flex-col justify-between rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm transition-all hover:border-black hover:shadow-md dark:border-neutral-800 dark:bg-neutral-900 dark:hover:border-white"
-    >
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-lg">{icon}</span>
-
-        {external && (
-          <span className="text-xs font-black text-neutral-400 transition group-hover:text-neutral-700 dark:group-hover:text-neutral-200">
-            ↗
-          </span>
-        )}
-      </div>
-
-      <div className="mt-4">
-        <p className="text-sm font-black tracking-tight text-neutral-900 dark:text-white">
-          {title}
-        </p>
-
-        <p className="mt-1 text-xs font-medium leading-relaxed text-neutral-400 dark:text-neutral-500">
-          {desc}
-        </p>
-      </div>
-    </Link>
   );
 }

@@ -1,11 +1,12 @@
 "use client";
 
-import { ArrowLeft, Gift, Loader2, RefreshCw, ShoppingBag, Sparkles, Store, TicketPercent } from "lucide-react";
+import { Gift, Loader2, RefreshCw, Sparkles, TicketPercent } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useMemo } from "react";
 
-import CustomerAppReadiness from "@/app/_components/CustomerAppReadiness";
+import BackLink from "@/app/_components/BackLink";
+import FeedbackBanner from "@/app/_components/FeedbackBanner";
 import useCustomerRewards from "@/app/hooks/useCustomerRewards";
 import useCustomerSession from "@/app/hooks/useCustomerSession";
 import { useI18n } from "@/app/lib/i18n";
@@ -123,15 +124,9 @@ function Inner() {
     <main className="min-h-screen bg-neutral-50 px-4 py-8 text-neutral-950 dark:bg-neutral-950 dark:text-white sm:py-12">
       <div className="mx-auto max-w-4xl space-y-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <Link href={next} className="inline-flex items-center gap-2 text-sm font-black text-neutral-500 hover:text-neutral-950 dark:hover:text-white"><ArrowLeft size={17} />{text.back}</Link>
-          <div className="flex flex-wrap gap-2">
-            <Link href="/customer/orders" className="inline-flex items-center gap-2 rounded-xl border border-neutral-300 px-3 py-2 text-xs font-black dark:border-neutral-700"><ShoppingBag size={15} />{text.orders}</Link>
-            <Link href={`/store/${encodeURIComponent(sellerId)}`} className="inline-flex items-center gap-2 rounded-xl border border-neutral-300 px-3 py-2 text-xs font-black dark:border-neutral-700"><Store size={15} />{text.store}</Link>
-            <button type="button" onClick={() => void rewards.refresh()} className="inline-flex items-center gap-2 rounded-xl border border-neutral-300 px-3 py-2 text-xs font-black dark:border-neutral-700"><RefreshCw size={15} className={rewards.loading ? "animate-spin" : ""} />{text.refresh}</button>
-          </div>
+          <BackLink href={next} label={text.back} />
+          <button type="button" onClick={() => void rewards.refresh()} className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-neutral-300 bg-white px-3 py-2 text-xs font-black transition hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800"><RefreshCw size={15} className={rewards.loading ? "animate-spin" : ""} />{text.refresh}</button>
         </div>
-
-        <CustomerAppReadiness language={language} />
 
         <section className="rounded-3xl border border-violet-200 bg-gradient-to-br from-violet-600 to-fuchsia-600 p-6 text-white shadow-lg sm:p-8">
           <div className="flex items-start gap-3"><Sparkles size={26} /><div><p className="text-xs font-black uppercase tracking-widest text-violet-100">{wallet?.storeName || text.title}</p><h1 className="mt-1 text-3xl font-black">{text.title}</h1><p className="mt-2 text-sm font-medium text-violet-100">{text.subtitle}</p></div></div>
@@ -157,7 +152,7 @@ function Inner() {
           {rewards.loading && !wallet ? (
             <div className="flex justify-center py-12"><Loader2 className="animate-spin text-neutral-400" /></div>
           ) : rewards.error ? (
-            <p className="mt-5 rounded-xl bg-red-50 p-4 text-sm font-bold text-red-700 dark:bg-red-950/30 dark:text-red-300">{rewards.error}</p>
+            <div className="mt-5"><FeedbackBanner tone="error" role="alert">{rewards.error}</FeedbackBanner></div>
           ) : !wallet?.transactions.length ? (
             <p className="mt-5 rounded-xl bg-neutral-50 p-5 text-sm font-bold text-neutral-500 dark:bg-neutral-950">{text.empty}</p>
           ) : (

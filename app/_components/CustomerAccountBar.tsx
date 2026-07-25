@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Gift, LogIn, LogOut, ShoppingBag, Sparkles, Store, UserRound } from "lucide-react";
+import { Gift, LogIn, UserRound } from "lucide-react";
 
 import CustomerPushNotifications from "@/app/_components/CustomerPushNotifications";
 import CustomerAppReadiness from "@/app/_components/CustomerAppReadiness";
@@ -107,50 +107,19 @@ export default function CustomerAccountBar({
 
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-900/60 dark:bg-emerald-950/30">
-        <div className="flex min-w-0 items-center gap-3">
-          <div className="rounded-xl bg-emerald-100 p-2 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300">
-            <UserRound size={20} />
-          </div>
-          <div className="min-w-0">
-            <p className="truncate text-sm font-black text-emerald-950 dark:text-emerald-100">
-              {session.displayName || text.registered}
-            </p>
-            {sellerId && (
-              <p className="text-xs font-bold text-emerald-700 dark:text-emerald-300">
-                {rewards.loading ? "…" : pointsBalance} {text.points}
-              </p>
-            )}
-          </div>
+      <div className="flex items-center gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-900/60 dark:bg-emerald-950/30">
+        <div className="rounded-xl bg-emerald-100 p-2 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300">
+          <UserRound size={20} />
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {storeHref && (
-            <Link href={storeHref} className="inline-flex min-h-9 items-center gap-2 rounded-xl border border-emerald-300 px-3 py-2 text-xs font-black text-emerald-800 transition hover:bg-emerald-100 dark:border-emerald-800 dark:text-emerald-200 dark:hover:bg-emerald-900/50">
-              <Store size={15} />
-              {text.visitStore}
-            </Link>
-          )}
-          <Link href="/customer/orders" className="inline-flex min-h-9 items-center gap-2 rounded-xl border border-emerald-300 px-3 py-2 text-xs font-black text-emerald-800 transition hover:bg-emerald-100 dark:border-emerald-800 dark:text-emerald-200 dark:hover:bg-emerald-900/50">
-            <ShoppingBag size={15} />
-            {text.orders}
-          </Link>
+        <div className="min-w-0">
+          <p className="truncate text-sm font-black text-emerald-950 dark:text-emerald-100">
+            {session.displayName || text.registered}
+          </p>
           {sellerId && (
-            <Link
-              href={`/customer/rewards?sellerId=${encodeURIComponent(sellerId)}&next=${encodeURIComponent(returnTo || "/")}`}
-              className="inline-flex min-h-9 items-center gap-2 rounded-xl border border-emerald-300 px-3 py-2 text-xs font-black text-emerald-800 transition hover:bg-emerald-100 dark:border-emerald-800 dark:text-emerald-200 dark:hover:bg-emerald-900/50"
-            >
-              <Sparkles size={15} />
-              {text.rewards}
-            </Link>
+            <p className="text-xs font-bold text-emerald-700 dark:text-emerald-300">
+              {rewards.loading ? "…" : pointsBalance} {text.points}
+            </p>
           )}
-          <Link href={`/customer/profile?next=${encodeURIComponent(returnTo || "/")}`} className="inline-flex min-h-9 items-center gap-2 rounded-xl border border-emerald-300 px-3 py-2 text-xs font-black text-emerald-800 transition hover:bg-emerald-100 dark:border-emerald-800 dark:text-emerald-200 dark:hover:bg-emerald-900/50">
-            <UserRound size={15} />
-            {text.profile}
-          </Link>
-          <button type="button" onClick={() => void session.signOutCustomer()} className="inline-flex min-h-9 items-center gap-2 rounded-xl border border-emerald-300 px-3 py-2 text-xs font-black text-emerald-800 transition hover:bg-emerald-100 dark:border-emerald-800 dark:text-emerald-200 dark:hover:bg-emerald-900/50">
-            <LogOut size={15} />
-            {text.exit}
-          </button>
         </div>
       </div>
       <CustomerPushNotifications session={session} language={language} compact />

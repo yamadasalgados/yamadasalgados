@@ -1,0 +1,213 @@
+app
+├── _components
+│   ├── AdminGuard.tsx
+│   ├── CustomerAccountBar.tsx
+│   ├── CustomerAppReadiness.tsx
+│   ├── CustomerPushNotifications.tsx
+│   ├── OpenInBrowserGate.tsx
+│   ├── PushSubscribeBanner.tsx
+│   ├── PwaRegister.tsx
+│   ├── RewardsCheckoutPanel.tsx
+│   ├── SellerGuard.tsx
+│   ├── StoreNav.tsx
+│   ├── StoreNavClientOnly.tsx
+│   └── pwa-client.tsx
+├── admin
+│   ├── cleanup
+│   │   └── page.tsx
+│   ├── events
+│   │   ├── [id]
+│   │   │   └── page.tsx
+│   │   └── page.tsx
+│   ├── layout.tsx
+│   ├── page.tsx
+│   ├── plans
+│   │   ├── PlanAccessAdminClient.tsx
+│   │   └── page.tsx
+│   ├── products
+│   │   ├── [id]
+│   │   │   └── page.tsx
+│   │   ├── new
+│   │   │   └── page.tsx
+│   │   └── page.tsx
+│   ├── sellers
+│   │   ├── [sellerUid]
+│   │   │   ├── page.tsx
+│   │   │   └── products
+│   │   │       └── page.tsx
+│   │   └── page.tsx
+│   └── settings
+│       └── page.tsx
+├── api
+│   ├── admin
+│   │   └── delete-seller
+│   │       └── route.ts
+│   ├── customer
+│   │   ├── orders
+│   │   │   ├── [referenceId]
+│   │   │   │   └── route.ts
+│   │   │   └── route.ts
+│   │   ├── push
+│   │   │   ├── subscribe
+│   │   │   │   └── route.ts
+│   │   │   └── unsubscribe
+│   │   │       └── route.ts
+│   │   ├── rewards
+│   │   │   └── route.ts
+│   │   └── session
+│   │       └── route.ts
+│   ├── orders
+│   │   ├── create
+│   │   │   └── route.ts
+│   │   ├── production
+│   │   │   ├── report
+│   │   │   │   └── route.ts
+│   │   │   └── route.ts
+│   │   └── status
+│   │       └── route.ts
+│   └── region
+│       ├── resolve
+│       │   └── route.ts
+│       └── subscribe
+│           └── route.ts
+├── c
+│   └── [sellerId]
+│       └── [regionId]
+│           └── page.tsx
+├── customer
+│   ├── error.tsx
+│   ├── loading.tsx
+│   ├── login
+│   │   └── page.tsx
+│   ├── orders
+│   │   ├── CustomerOrdersClient.tsx
+│   │   ├── [referenceId]
+│   │   │   ├── CustomerOrderDetailClient.tsx
+│   │   │   └── page.tsx
+│   │   └── page.tsx
+│   ├── profile
+│   │   └── page.tsx
+│   └── rewards
+│       ├── CustomerRewardsClient.tsx
+│       └── page.tsx
+├── event
+│   └── [...id]
+│       ├── EventClient.tsx
+│       ├── EventClientLoader.tsx
+│       └── page.tsx
+├── favicon.ico
+├── globals.css
+├── hooks
+│   ├── useCustomerRewards.ts
+│   ├── useCustomerSession.ts
+│   ├── useSellerId.ts
+│   └── useStoreOrder.ts
+├── layout.tsx
+├── lib
+│   ├── access-control.ts
+│   ├── customer-order-client.ts
+│   ├── customer-profile.ts
+│   ├── customer-rewards-client.ts
+│   ├── customer-storage.ts
+│   ├── deleteSeller.ts
+│   ├── ensureUserProfile.ts
+│   ├── firebase.ts
+│   ├── firebaseAdmin.ts
+│   ├── i18n.messages.ts
+│   ├── i18n.tsx
+│   ├── inventory-schema.ts
+│   ├── money.ts
+│   ├── offer-schema.ts
+│   ├── order-status-client.ts
+│   ├── order-status.ts
+│   ├── plan-catalog.ts
+│   ├── product-schema.ts
+│   ├── production-client.ts
+│   ├── production-report-client.ts
+│   ├── public-order-client.ts
+│   ├── regional.ts
+│   ├── reward-schema.ts
+│   ├── seller-regional-profile.ts
+│   ├── shipping-schema.ts
+│   ├── store-order-ui.ts
+│   ├── store-order.ts
+│   └── theme.ts
+├── login
+│   └── page.tsx
+├── page.tsx
+├── seller
+│   ├── events
+│   │   ├── EventOrdersAlerts.tsx
+│   │   ├── SellerEventsClient.tsx
+│   │   ├── [eventId]
+│   │   │   ├── EventPanelClient.tsx
+│   │   │   ├── orders
+│   │   │   │   └── [orderId]
+│   │   │   │       ├── OrderDetailClient.tsx
+│   │   │   │       └── page.tsx
+│   │   │   └── page.tsx
+│   │   ├── new
+│   │   │   └── page.tsx
+│   │   └── page.tsx
+│   ├── layout.tsx
+│   ├── offers
+│   │   ├── OfferForm.tsx
+│   │   ├── OfferModal.tsx
+│   │   └── page.tsx
+│   ├── onboarding
+│   │   └── page.tsx
+│   ├── page.tsx
+│   ├── production
+│   │   ├── OrderPrintDialog.tsx
+│   │   ├── ProductionDashboardClient.tsx
+│   │   ├── history
+│   │   │   ├── ProductionHistoryClient.tsx
+│   │   │   └── page.tsx
+│   │   └── page.tsx
+│   ├── products
+│   │   ├── ProductForm.tsx
+│   │   ├── ProductModal.tsx
+│   │   ├── page.tsx
+│   │   ├── product-catalog-utils.ts
+│   │   └── product-types.ts
+│   ├── rent
+│   │   └── page.tsx
+│   ├── reports
+│   │   └── page.tsx
+│   ├── settings
+│   │   └── page.tsx
+│   └── store-orders
+│       ├── StoreOrdersClient.tsx
+│       ├── [orderId]
+│       │   ├── StoreOrderDetailClient.tsx
+│       │   ├── components
+│       │   │   ├── CustomerCard.tsx
+│       │   │   ├── Header.tsx
+│       │   │   ├── HistoryCard.tsx
+│       │   │   ├── ItemsCard.tsx
+│       │   │   ├── StatusActions.tsx
+│       │   │   └── Timeline.tsx
+│       │   └── page.tsx
+│       └── page.tsx
+├── store
+│   ├── StoreOrdersCard.tsx
+│   └── [sellerId]
+│       ├── StoreClient.tsx
+│       └── page.tsx
+└── types
+    ├── regional.ts
+    └── store-order.ts
+public
+├── file.svg
+├── globe.svg
+├── icon-192x192.png
+├── icon-512x512.png
+├── logo-yamada.png
+├── manifest.json
+├── manifest.webmanifest
+├── next.svg
+├── sw.js
+├── vercel.svg
+└── window.svg
+
+68 directories, 143 files

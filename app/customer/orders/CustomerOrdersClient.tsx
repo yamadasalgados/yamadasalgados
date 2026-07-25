@@ -1,9 +1,7 @@
 "use client";
 
 import {
-  ArrowLeft,
   CalendarDays,
-  CheckCircle2,
   Clock3,
   Loader2,
   PackageCheck,
@@ -16,8 +14,8 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import useCustomerSession from "@/app/hooks/useCustomerSession";
-import CustomerPushNotifications from "@/app/_components/CustomerPushNotifications";
-import CustomerAppReadiness from "@/app/_components/CustomerAppReadiness";
+import PageHeader from "@/app/_components/PageHeader";
+import FeedbackBanner from "@/app/_components/FeedbackBanner";
 import {
   loadCustomerOrders,
   type CustomerOrderSummary,
@@ -221,6 +219,12 @@ export default function CustomerOrdersClient() {
     return orders;
   }, [filter, orders]);
 
+  const counts = useMemo(() => ({
+    all: orders.length,
+    open: orders.filter((order) => order.status === "pending" || order.status === "ready").length,
+    completed: orders.filter((order) => order.status === "delivered" || order.status === "cancelled").length,
+  }), [orders]);
+
   if (session.loading) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-neutral-50 dark:bg-neutral-950">
@@ -250,36 +254,21 @@ export default function CustomerOrdersClient() {
   return (
     <main className="min-h-screen bg-neutral-50 px-4 py-6 text-neutral-950 dark:bg-neutral-950 dark:text-white sm:px-6">
       <div className="mx-auto max-w-4xl space-y-6">
-        <header className="flex flex-col gap-4 rounded-3xl border border-neutral-200 bg-white p-5 shadow-sm dark:border-neutral-800 dark:bg-neutral-900 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <Link href="/" className="inline-flex items-center gap-2 text-xs font-black text-neutral-500 hover:text-neutral-950 dark:hover:text-white">
-              <ArrowLeft size={15} /> {text.back}
-            </Link>
-            <h1 className="mt-3 text-3xl font-black">{text.title}</h1>
-            <p className="mt-1 text-sm text-neutral-500">{text.subtitle}</p>
-          </div>
-          <div className="flex flex-wrap gap-2">
+        <PageHeader
+          title={text.title}
+          description={text.subtitle}
+          action={
             <button
               type="button"
               onClick={() => void refresh(true)}
               disabled={refreshing}
-              className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-neutral-300 px-3 py-2 text-xs font-black dark:border-neutral-700"
+              className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-neutral-300 bg-white px-4 py-2 text-xs font-black transition hover:bg-neutral-50 disabled:opacity-60 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800"
             >
               <RefreshCw className={refreshing ? "animate-spin" : ""} size={15} />
               {text.refresh}
             </button>
-            <Link
-              href="/customer/profile?next=%2Fcustomer%2Forders"
-              className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-black px-4 py-2 text-xs font-black text-white dark:bg-white dark:text-black"
-            >
-              <UserRound size={15} /> {text.profile}
-            </Link>
-          </div>
-        </header>
-
-        <CustomerAppReadiness language={language} />
-
-        <CustomerPushNotifications session={session} language={language} />
+          }
+        />
 
         <div className="grid grid-cols-3 gap-2 rounded-2xl border border-neutral-200 bg-white p-2 dark:border-neutral-800 dark:bg-neutral-900">
           {(["all", "open", "completed"] as Filter[]).map((value) => (
@@ -294,6 +283,7 @@ export default function CustomerOrdersClient() {
               }`}
             >
               {value === "all" ? text.all : value === "open" ? text.open : text.completed}
+              <span className="ml-1 opacity-65">{counts[value]}</span>
             </button>
           ))}
         </div>
@@ -304,12 +294,14 @@ export default function CustomerOrdersClient() {
             <span className="ml-3 text-sm font-bold text-neutral-500">{text.loading}</span>
           </div>
         ) : error ? (
-          <div className="rounded-3xl border border-red-200 bg-red-50 p-6 text-center text-red-700 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-300">
-            <p className="font-bold">{error || text.error}</p>
-            <button type="button" onClick={() => void refresh()} className="mt-4 rounded-xl bg-red-600 px-4 py-2 text-sm font-black text-white">
-              {text.retry}
-            </button>
-          </div>
+          <FeedbackBanner tone="error" role="alert">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <span>{error || text.error}</span>
+              <button type="button" onClick={() => void refresh()} className="rounded-xl bg-red-600 px-4 py-2 text-xs font-black text-white">
+                {text.retry}
+              </button>
+            </div>
+          </FeedbackBanner>
         ) : filtered.length === 0 ? (
           <div className="rounded-3xl border border-dashed border-neutral-300 bg-white p-12 text-center dark:border-neutral-700 dark:bg-neutral-900">
             <ShoppingBag className="mx-auto text-neutral-400" size={38} />
@@ -373,10 +365,6 @@ export default function CustomerOrdersClient() {
           </div>
         )}
 
-        <div className="flex items-center justify-center gap-2 pb-6 text-[11px] font-bold text-neutral-400">
-          <CheckCircle2 size={14} />
-          {session.displayName}
-        </div>
       </div>
     </main>
   );
