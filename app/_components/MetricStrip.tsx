@@ -21,11 +21,17 @@ const TONE_CLASS = {
 
 export default function MetricStrip({ items }: { items: MetricStripItem[] }) {
   const columns =
-    items.length >= 4
-      ? "lg:grid-cols-4"
-      : items.length === 3
-        ? "sm:grid-cols-3"
-        : "sm:grid-cols-2";
+    items.length >= 7
+      ? "lg:grid-cols-4 xl:grid-cols-7"
+      : items.length === 6
+        ? "lg:grid-cols-3 xl:grid-cols-6"
+        : items.length === 5
+          ? "lg:grid-cols-5"
+          : items.length === 4
+            ? "lg:grid-cols-4"
+            : items.length === 3
+              ? "sm:grid-cols-3"
+              : "sm:grid-cols-2";
 
   return (
     <section className={`grid grid-cols-2 gap-px overflow-hidden rounded-2xl border border-neutral-200 bg-neutral-200 shadow-sm dark:border-neutral-800 dark:bg-neutral-800 ${columns}`}>

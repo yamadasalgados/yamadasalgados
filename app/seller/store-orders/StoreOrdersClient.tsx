@@ -34,6 +34,8 @@ import {
   useI18n,
 } from "@/app/lib/i18n";
 import useSellerId from "@/app/hooks/useSellerId";
+import PageHeader from "@/app/_components/PageHeader";
+import FeedbackBanner from "@/app/_components/FeedbackBanner";
 
 import {
   type StoreOrder,
@@ -368,15 +370,11 @@ export default function StoreOrdersClient() {
   return (
     <main className="min-h-screen bg-slate-50 text-slate-950 dark:bg-slate-950 dark:text-slate-100">
       <div className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6 lg:px-8">
-        <header className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:p-7">
-          <h1 className="text-2xl font-black sm:text-3xl">
-            {lang === "ja"
-              ? "店舗注文"
-              : lang === "en"
-                ? "Store Orders"
-                : "Pedidos da Loja"}
-          </h1>
-        </header>
+        <PageHeader
+          eyebrow={lang === "ja" ? "注文" : lang === "en" ? "Orders" : "Pedidos"}
+          title={lang === "ja" ? "店舗注文" : lang === "en" ? "Store Orders" : "Pedidos da Loja"}
+          description={lang === "ja" ? "通常店舗から受け付けた注文を管理します。" : lang === "en" ? "Manage orders received through the permanent store." : "Gerencie os pedidos recebidos pela loja permanente."}
+        />
 
         <section className="mt-5 overflow-x-auto pb-2">
           <div className="flex min-w-max gap-2">
@@ -423,13 +421,8 @@ export default function StoreOrdersClient() {
             ))}
           </section>
         ) : listError ? (
-          <section
-            role="alert"
-            className="mt-4 rounded-3xl border border-rose-200 bg-rose-50 p-8 text-center dark:border-rose-900/60 dark:bg-rose-950/30"
-          >
-            <h2 className="text-xl font-black text-rose-950 dark:text-rose-200">
-              {listError}
-            </h2>
+          <section className="mt-4 space-y-4">
+            <FeedbackBanner tone="error" role="alert">{listError}</FeedbackBanner>
 
             <button
               type="button"

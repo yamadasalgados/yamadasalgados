@@ -57,6 +57,8 @@ import {
 import {
   useI18n,
 } from "@/app/lib/i18n";
+import PageHeader from "@/app/_components/PageHeader";
+import FeedbackBanner from "@/app/_components/FeedbackBanner";
 import type {
   OperatingCountry,
   SupportedCurrency,
@@ -575,34 +577,27 @@ export default function PlanAccessAdminClient() {
 
   return (
     <main className="mx-auto w-full max-w-6xl space-y-7 px-4 py-6 sm:px-6">
-      <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h1 className="text-3xl font-black tracking-tight">{copy.title}</h1>
-          <p className="mt-2 text-sm font-medium text-neutral-500">{copy.subtitle}</p>
-        </div>
-
-        <button
-          type="button"
-          onClick={() => void load()}
-          disabled={loading || Boolean(busyKey)}
-          className="inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl border border-neutral-300 px-4 text-sm font-black dark:border-neutral-700"
-        >
-          <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-          {copy.refresh}
-        </button>
-      </header>
+      <PageHeader
+        eyebrow="Admin"
+        title={copy.title}
+        description={copy.subtitle}
+        action={
+          <button
+            type="button"
+            onClick={() => void load()}
+            disabled={loading || Boolean(busyKey)}
+            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl border border-neutral-300 px-4 text-sm font-black disabled:opacity-50 dark:border-neutral-700"
+          >
+            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+            {copy.refresh}
+          </button>
+        }
+      />
 
       {(error || message) && (
-        <p
-          role="status"
-          className={`rounded-2xl border p-4 text-sm font-bold ${
-            error
-              ? "border-red-200 bg-red-50 text-red-700 dark:border-red-900/40 dark:bg-red-950/20 dark:text-red-300"
-              : "border-green-200 bg-green-50 text-green-700 dark:border-green-900/40 dark:bg-green-950/20 dark:text-green-300"
-          }`}
-        >
+        <FeedbackBanner tone={error ? "error" : "success"} role={error ? "alert" : "status"}>
           {error || message}
-        </p>
+        </FeedbackBanner>
       )}
 
       <Section title={`${copy.pendingTitle} (${pendingRequests.length})`}>

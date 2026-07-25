@@ -1,18 +1,21 @@
 import Link from "next/link";
+import PageHeader from "@/app/_components/PageHeader";
+import BackLink from "@/app/_components/BackLink";
+import FeedbackBanner from "@/app/_components/FeedbackBanner";
 
 export default function AdminCleanupPage() {
   return (
     <main className="mx-auto max-w-3xl space-y-6">
-      <header>
-        <h1 className="text-3xl font-black">
-          Limpeza de contas
-        </h1>
-        <p className="mt-2 text-sm text-neutral-500">
-          A limpeza automática antiga foi desativada para não excluir contas Lifetime ou anuais por engano.
-        </p>
-      </header>
+      <PageHeader
+        eyebrow="Admin"
+        title="Limpeza de contas"
+        description="A limpeza automática antiga foi desativada para proteger contas Lifetime e anuais."
+        back={<BackLink href="/admin" label="Voltar ao painel" />}
+      />
 
-      <section className="space-y-4 rounded-3xl border border-amber-200 bg-amber-50 p-6 dark:border-amber-900/40 dark:bg-amber-950/20">
+      <FeedbackBanner tone="warning">Nesta etapa, nenhuma conta é apagada automaticamente.</FeedbackBanner>
+
+      <section className="space-y-4 rounded-3xl border border-neutral-200 bg-white p-6 dark:border-neutral-800 dark:bg-neutral-900">
         <h2 className="text-lg font-black">
           Proteção aplicada
         </h2>
@@ -23,9 +26,6 @@ export default function AdminCleanupPage() {
           <code className="mx-1 font-black">access.status</code> e
           <code className="mx-1 font-black">access.currentPeriodEnd</code>
           no backend antes de apagar qualquer dado.
-        </p>
-        <p className="text-sm font-bold text-amber-800 dark:text-amber-200">
-          Nesta etapa, nenhuma conta é apagada automaticamente.
         </p>
       </section>
 

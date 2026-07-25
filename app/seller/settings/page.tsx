@@ -42,6 +42,8 @@ import {
 } from "@/app/lib/shipping-schema";
 import { useI18n } from "@/app/lib/i18n";
 import { useSellerSession } from "@/app/_components/SellerSessionContext";
+import PageHeader from "@/app/_components/PageHeader";
+import FeedbackBanner from "@/app/_components/FeedbackBanner";
 import type {
   OperatingCountry,
   SupportedLanguage,
@@ -432,11 +434,8 @@ export default function SellerSettingsPage() {
   }
 
   return (
-    <main className="mx-auto w-full max-w-3xl px-4 py-8">
-      <header>
-        <h1 className="text-3xl font-black tracking-tight">{copy.title}</h1>
-        <p className="mt-2 text-sm text-neutral-500">{copy.subtitle}</p>
-      </header>
+    <main className="mx-auto w-full max-w-4xl space-y-6 px-4 py-6 sm:px-6">
+      <PageHeader eyebrow={copy.title} title={copy.title} description={copy.subtitle} />
 
       <section className="mt-8 space-y-6 rounded-[2rem] border border-neutral-200 bg-white p-6 dark:border-neutral-800 dark:bg-neutral-950 sm:p-8">
         <SettingField icon={Building2} label={copy.store}>
@@ -656,15 +655,9 @@ export default function SellerSettingsPage() {
         </div>
 
         {(message || error) && (
-          <p
-            className={`rounded-2xl border p-4 text-sm font-bold ${
-              error
-                ? "border-red-200 bg-red-50 text-red-700"
-                : "border-green-200 bg-green-50 text-green-700"
-            }`}
-          >
+          <FeedbackBanner tone={error ? "error" : "success"} role={error ? "alert" : "status"}>
             {error || message}
-          </p>
+          </FeedbackBanner>
         )}
 
         <button

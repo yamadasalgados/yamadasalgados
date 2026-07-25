@@ -49,6 +49,8 @@ import {
 import {
   useSellerSession,
 } from "@/app/_components/SellerSessionContext";
+import PageHeader from "@/app/_components/PageHeader";
+import FeedbackBanner from "@/app/_components/FeedbackBanner";
 import type {
   RegionalLocale,
   SupportedCurrency,
@@ -637,37 +639,26 @@ export default function SellerOffersPage() {
 
   return (
     <main className="mx-auto w-full max-w-6xl space-y-6 px-4 py-6 sm:px-6">
-      <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h1 className="text-3xl font-black tracking-tight">
-            {copy.title}
-          </h1>
-          <p className="mt-2 text-sm font-medium text-neutral-500">
-            {copy.subtitle}
-          </p>
-        </div>
+      <PageHeader
+        eyebrow={copy.title}
+        title={copy.title}
+        description={copy.subtitle}
+        action={
+          <button
+            type="button"
+            onClick={() => {
+              setSelectedOffer(null);
+              setModalOpen(true);
+            }}
+            className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl bg-black px-5 text-sm font-black text-white dark:bg-white dark:text-black"
+          >
+            <Plus size={18} />
+            {copy.add}
+          </button>
+        }
+      />
 
-        <button
-          type="button"
-          onClick={() => {
-            setSelectedOffer(null);
-            setModalOpen(true);
-          }}
-          className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl bg-black px-5 text-sm font-black text-white dark:bg-white dark:text-black"
-        >
-          <Plus size={18} />
-          {copy.add}
-        </button>
-      </header>
-
-      {error && (
-        <p
-          role="alert"
-          className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm font-bold text-red-700 dark:border-red-900/50 dark:bg-red-950/20 dark:text-red-300"
-        >
-          {error}
-        </p>
-      )}
+      {error && <FeedbackBanner tone="error" role="alert">{error}</FeedbackBanner>}
 
       <section className="grid gap-3 rounded-3xl border border-neutral-200 bg-white p-4 dark:border-neutral-800 dark:bg-neutral-900 sm:grid-cols-[minmax(0,1fr)_auto]">
         <label className="flex min-h-12 items-center gap-3 rounded-xl border border-neutral-300 bg-neutral-50 px-3 dark:border-neutral-700 dark:bg-neutral-950">

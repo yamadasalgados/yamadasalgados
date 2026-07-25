@@ -25,6 +25,8 @@ import {
 import {
   useI18n,
 } from "@/app/lib/i18n";
+import PageHeader from "@/app/_components/PageHeader";
+import FeedbackBanner from "@/app/_components/FeedbackBanner";
 
 type Row = {
   sellerId: string;
@@ -110,27 +112,24 @@ export default function AdminProductsPage() {
 
   return (
     <main className="space-y-6">
-      <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h1 className="text-3xl font-black tracking-tight">{copy.title}</h1>
-          <p className="mt-2 text-sm font-medium text-neutral-500">{copy.subtitle}</p>
-        </div>
-        <button
-          type="button"
-          onClick={() => void load()}
-          disabled={loading}
-          className="inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl border border-neutral-300 px-4 text-sm font-black disabled:opacity-50 dark:border-neutral-700"
-        >
-          <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-          {copy.refresh}
-        </button>
-      </header>
+      <PageHeader
+        eyebrow="Admin"
+        title={copy.title}
+        description={copy.subtitle}
+        action={
+          <button
+            type="button"
+            onClick={() => void load()}
+            disabled={loading}
+            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl border border-neutral-300 px-4 text-sm font-black disabled:opacity-50 dark:border-neutral-700"
+          >
+            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+            {copy.refresh}
+          </button>
+        }
+      />
 
-      {error && (
-        <p className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm font-bold text-red-700">
-          {error}
-        </p>
-      )}
+      {error && <FeedbackBanner tone="error" role="alert">{error}</FeedbackBanner>}
 
       <section className="overflow-hidden rounded-3xl border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-950">
         {loading ? (

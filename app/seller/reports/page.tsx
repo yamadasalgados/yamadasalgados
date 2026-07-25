@@ -22,6 +22,9 @@ import type {
 } from "@/app/types/regional";
 import { useI18n } from "@/app/lib/i18n";
 import { useSellerSession } from "@/app/_components/SellerSessionContext";
+import PageHeader from "@/app/_components/PageHeader";
+import MetricStrip from "@/app/_components/MetricStrip";
+import FeedbackBanner from "@/app/_components/FeedbackBanner";
 
 // --- 📝 Interfaces de Tipagem Estrita (TypeScript) ---
 
@@ -443,8 +446,13 @@ const downloadCsv = useCallback(() => {
   }
 
   return (
-    <main className="p-4 sm:p-6 space-y-8 bg-white dark:bg-neutral-950 min-h-screen transition-colors animate-fade-in max-w-5xl mx-auto">
-<div className="flex flex-wrap gap-2">
+    <main className="mx-auto min-h-screen w-full max-w-6xl space-y-6 bg-white p-4 text-neutral-950 transition-colors dark:bg-neutral-950 dark:text-white sm:p-6">
+      <PageHeader
+        eyebrow={t("reports.list.title")}
+        title={t("reports.title")}
+        description={t("reports.subtitle")}
+        action={
+          <div className="flex flex-wrap gap-2">
   <button
     type="button"
     onClick={downloadCsv}
@@ -462,18 +470,22 @@ const downloadCsv = useCallback(() => {
   >
     {t("reports.export.fullBackup")}
   </button>
-</div>
+          </div>
+        }
+      />
 
       {loadingReports && <div className="animate-pulse h-28 bg-neutral-100 dark:bg-neutral-900 rounded-[2rem]" />}
-      {errMsg && <div className="rounded-2xl border border-red-200 bg-red-50 text-red-700 dark:border-red-900/30 dark:bg-red-950/20 dark:text-red-400 px-4 py-3.5 text-xs font-black uppercase tracking-wider">{errMsg}</div>}
+      {errMsg && <FeedbackBanner tone="error" role="alert">{errMsg}</FeedbackBanner>}
 
       {!loadingReports && (
         <>
-          <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            <MiniCard title={t("reports.cards.total")} value={money(totalAll)} hint={t("reports.cards.totalHint")} tone="good" />
-            <MiniCard title={t("reports.cards.count")} value={String(rows.length)} hint={t("reports.cards.countHint")} tone="neutral" />
-            <MiniCard title={t("reports.cards.average")} value={rows.length ? money(totalAll / rows.length) : "—"} hint={t("reports.cards.averageHint")} tone="neutral" />
-          </section>
+          <MetricStrip
+            items={[
+              { label: t("reports.cards.total"), value: money(totalAll), tone: "success" },
+              { label: t("reports.cards.count"), value: rows.length },
+              { label: t("reports.cards.average"), value: rows.length ? money(totalAll / rows.length) : "—" },
+            ]}
+          />
 
           <section className="bg-neutral-50 dark:bg-neutral-900/40 border border-neutral-200 dark:border-neutral-800 rounded-[2.5rem] p-6 space-y-4">
             <h2 className="text-xs font-black uppercase tracking-widest text-neutral-400 dark:text-neutral-500">{t("reports.monthly.title")}</h2>
@@ -546,15 +558,3 @@ const downloadCsv = useCallback(() => {
   );
 }
 
-function MiniCard({ title, value, hint, tone }: { title: string; value: string; hint: string; tone: "good" | "neutral" }) {
-  const toneCls =
-    tone === "good" ? "border-emerald-200 dark:border-emerald-900/30 bg-emerald-50/20 dark:bg-emerald-950/10" : "border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900";
-
-  return (
-    <div className={`rounded-[2rem] border p-5 shadow-sm ${toneCls} animate-fade-in`}>
-      <p className="text-[10px] font-black text-neutral-400 dark:text-neutral-500 uppercase tracking-wider">{title}</p>
-      <p className="text-3xl font-black mt-2 tracking-tight text-neutral-900 dark:text-white">{value}</p>
-      <p className="text-xs text-neutral-500 dark:text-neutral-400 font-medium mt-2 leading-relaxed">{hint}</p>
-    </div>
-  );
-}

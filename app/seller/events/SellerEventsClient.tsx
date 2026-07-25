@@ -1,13 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState, useCallback, useRef } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { db } from "@/app/lib/firebase";
 import { collection, getDocs, limit, orderBy, query, Timestamp } from "firebase/firestore";
 import { useI18n } from "@/app/lib/i18n";
 import { formatMoneyMajor } from "@/app/lib/money";
 import { useSellerSession } from "@/app/_components/SellerSessionContext";
+import PageHeader from "@/app/_components/PageHeader";
+import MetricStrip from "@/app/_components/MetricStrip";
+import FeedbackBanner from "@/app/_components/FeedbackBanner";
 import type {
   RegionalLocale,
   SupportedCurrency,
@@ -170,6 +173,14 @@ export default function SellerEventsPage() {
     [events]
   );
 
+
+  const filterLabels =
+    lang === "ja"
+      ? { active: "開催中", closed: "終了", all: "すべて" }
+      : lang === "en"
+        ? { active: "Active", closed: "Closed", all: "All" }
+        : { active: "Ativos", closed: "Encerrados", all: "Todos" };
+
   const handleChangeFilter = (v: string) => {
     const params = new URLSearchParams(search.toString());
     if (v === "all") params.delete("status");
@@ -189,23 +200,43 @@ export default function SellerEventsPage() {
   };
 
   return (
-    <main className="p-4 sm:p-6 space-y-8 bg-white dark:bg-neutral-950 min-h-screen transition-colors animate-fade-in max-w-5xl mx-auto">
-      {/* HEADER */}
-      <header className="space-y-4 border-b border-neutral-200 dark:border-neutral-800 pb-6">
-        <div className="flex items-center justify-between gap-4">
-          <h1 className="text-3xl font-black tracking-tight text-neutral-900 dark:text-white">{t("events.title")}</h1>
-          <Link href="/seller/events/new" className="rounded-2xl bg-black dark:bg-white dark:text-black text-white text-xs font-black px-5 py-3.5 transition-all hover:scale-[1.02] shadow-md uppercase tracking-wider">
+    <main className="mx-auto min-h-screen w-full max-w-6xl space-y-6 bg-white p-4 text-neutral-950 transition-colors dark:bg-neutral-950 dark:text-white sm:p-6">
+      <PageHeader
+        eyebrow={t("events.title")}
+        title={t("events.title")}
+        action={
+          <Link
+            href="/seller/events/new"
+            className="inline-flex min-h-12 items-center justify-center rounded-2xl bg-black px-5 text-sm font-black text-white shadow-sm transition hover:opacity-85 dark:bg-white dark:text-black"
+          >
             + {t("events.new")}
           </Link>
-        </div>
+        }
+      />
 
-        {/* FILTROS PILLS */}
-        <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none">
-          <FilterPill label={t("events.filter.active").replace("{n}", String(counts.active))} active={statusFilter === "active"} onClick={() => handleChangeFilter("active")} />
-          <FilterPill label={t("events.filter.closed").replace("{n}", String(counts.closed))} active={statusFilter === "closed"} onClick={() => handleChangeFilter("closed")} />
-          <FilterPill label={t("events.filter.all").replace("{n}", String(counts.total))} active={statusFilter === "all"} onClick={() => handleChangeFilter("all")} />
-        </div>
-      </header>
+      <MetricStrip
+        items={[
+          {
+            label: filterLabels.active,
+            value: counts.active,
+            active: statusFilter === "active",
+            onClick: () => handleChangeFilter("active"),
+            tone: "success",
+          },
+          {
+            label: filterLabels.closed,
+            value: counts.closed,
+            active: statusFilter === "closed",
+            onClick: () => handleChangeFilter("closed"),
+          },
+          {
+            label: filterLabels.all,
+            value: counts.total,
+            active: statusFilter === "all",
+            onClick: () => handleChangeFilter("all"),
+          },
+        ]}
+      />
 
       {copiedMsg && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-black dark:bg-white text-white dark:text-black px-6 py-3 rounded-full text-xs font-black shadow-2xl z-50 tracking-wider transition-all uppercase">
@@ -214,9 +245,7 @@ export default function SellerEventsPage() {
       )}
 
       {errMsg && (
-        <div className="rounded-2xl border border-red-200 bg-red-50 text-red-700 dark:border-red-900/30 dark:bg-red-950/20 dark:text-red-400 px-4 py-3.5 text-xs font-black uppercase tracking-wider">
-          {errMsg}
-        </div>
+        <FeedbackBanner tone="error" role="alert">{errMsg}</FeedbackBanner>
       )}
 
       {loading ? (
@@ -269,14 +298,6 @@ export default function SellerEventsPage() {
         </div>
       )}
     </main>
-  );
-}
-
-function FilterPill({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
-  return (
-    <button onClick={onClick} className={`px-5 py-2 rounded-full text-xs font-black tracking-wide border transition-all active:scale-95 ${active ? "bg-black text-white border-black dark:bg-white dark:text-black dark:border-white shadow-sm" : "bg-white text-neutral-500 border-neutral-200 hover:bg-neutral-50 dark:bg-neutral-900 dark:text-neutral-400 dark:border-neutral-800 dark:hover:bg-neutral-800"}`}>
-      {label}
-    </button>
   );
 }
 

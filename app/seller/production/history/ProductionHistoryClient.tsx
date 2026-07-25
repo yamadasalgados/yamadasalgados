@@ -17,6 +17,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import useSellerId from "@/app/hooks/useSellerId";
 import { useI18n } from "@/app/lib/i18n";
+import PageHeader from "@/app/_components/PageHeader";
+import BackLink from "@/app/_components/BackLink";
+import MetricStrip from "@/app/_components/MetricStrip";
+import FeedbackBanner from "@/app/_components/FeedbackBanner";
 import {
   loadProductionReport,
   ProductionReportError,
@@ -267,33 +271,6 @@ function issueText(code: string, text: (typeof COPY)[keyof typeof COPY]): string
   return code;
 }
 
-function SummaryCard(props: {
-  icon: React.ReactNode;
-  title: string;
-  value: number;
-  warning?: boolean;
-}) {
-  return (
-    <div
-      className={`rounded-2xl border p-4 ${
-        props.warning
-          ? "border-amber-200 bg-amber-50 dark:border-amber-900/50 dark:bg-amber-950/20"
-          : "border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900"
-      }`}
-    >
-      <div className="flex items-center justify-between gap-3">
-        <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200">
-          {props.icon}
-        </span>
-        <strong className="text-2xl font-black">{props.value}</strong>
-      </div>
-      <p className="mt-3 text-xs font-black uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
-        {props.title}
-      </p>
-    </div>
-  );
-}
-
 export default function ProductionHistoryClient() {
   const { lang } = useI18n();
   const language = lang === "en" || lang === "ja" ? lang : "pt";
@@ -470,31 +447,12 @@ export default function ProductionHistoryClient() {
   return (
     <main className="min-h-screen bg-neutral-50 p-4 text-neutral-950 dark:bg-neutral-950 dark:text-white sm:p-6">
       <div className="mx-auto max-w-7xl space-y-6">
-        <header className="flex flex-col gap-4 border-b border-neutral-200 pb-6 dark:border-neutral-800 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex items-center gap-3">
-            <span className="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-violet-100 text-violet-700 dark:bg-violet-950/40 dark:text-violet-200">
-              <ClipboardList className="h-6 w-6" />
-            </span>
-            <div>
-              <h1 className="text-3xl font-black tracking-tight">{text.title}</h1>
-              <p className="mt-1 max-w-3xl text-sm font-medium text-neutral-500 dark:text-neutral-400">
-                {text.subtitle}
-              </p>
-            </div>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Link
-              href="/seller/production"
-              className="inline-flex min-h-11 items-center justify-center rounded-xl border border-neutral-300 bg-white px-4 text-xs font-black transition hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800"
-            >
-              {text.back}
-            </Link>
-            <Link
-              href="/seller"
-              className="inline-flex min-h-11 items-center justify-center rounded-xl border border-neutral-300 bg-white px-4 text-xs font-black transition hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800"
-            >
-              {text.dashboard}
-            </Link>
+        <PageHeader
+          eyebrow={text.history}
+          title={text.title}
+          description={text.subtitle}
+          back={<BackLink href="/seller/production" label={text.back} />}
+          action={
             <button
               type="button"
               disabled={!report}
@@ -504,8 +462,8 @@ export default function ProductionHistoryClient() {
               <ClipboardList className="h-4 w-4" />
               {text.export}
             </button>
-          </div>
-        </header>
+          }
+        />
 
         <section className="rounded-3xl border border-neutral-200 bg-white p-4 shadow-sm dark:border-neutral-800 dark:bg-neutral-900 sm:p-5">
           <div className="grid gap-3 md:grid-cols-[1fr_1fr_auto]">
@@ -556,19 +514,9 @@ export default function ProductionHistoryClient() {
           </div>
         </section>
 
-        {error && (
-          <div className="flex items-center gap-3 rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm font-bold text-rose-800 dark:border-rose-900/50 dark:bg-rose-950/20 dark:text-rose-200">
-            <CircleAlert className="h-5 w-5 shrink-0" />
-            {error}
-          </div>
-        )}
+        {error && <FeedbackBanner tone="error" role="alert">{error}</FeedbackBanner>}
 
-        {report?.truncated && (
-          <div className="flex items-center gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm font-bold text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-200">
-            <CircleAlert className="h-5 w-5 shrink-0" />
-            {text.truncated}
-          </div>
-        )}
+        {report?.truncated && <FeedbackBanner tone="warning">{text.truncated}</FeedbackBanner>}
 
         {loading ? (
           <div className="flex min-h-64 items-center justify-center rounded-3xl border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900">
@@ -579,21 +527,20 @@ export default function ProductionHistoryClient() {
           </div>
         ) : report && report.summary.totalMovements > 0 ? (
           <>
-            <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
-              <SummaryCard icon={<Factory className="h-5 w-5" />} title={text.produced} value={report.summary.totalQuantity} />
-              <SummaryCard icon={<ClipboardList className="h-5 w-5" />} title={text.movements} value={report.summary.totalMovements} />
-              <SummaryCard icon={<Boxes className="h-5 w-5" />} title={text.products} value={report.summary.uniqueProducts} />
-              <SummaryCard icon={<PackageCheck className="h-5 w-5" />} title={text.orders} value={report.summary.uniqueOrders} />
-              <SummaryCard icon={<CheckCircle2 className="h-5 w-5" />} title={text.ready} value={report.summary.readyOrders} />
-              <SummaryCard icon={<Factory className="h-5 w-5" />} title={text.actors} value={report.summary.uniqueActors} />
-              <SummaryCard icon={<CircleAlert className="h-5 w-5" />} title={text.issues} value={report.summary.issueCount} warning={report.summary.issueCount > 0} />
-            </section>
+            <MetricStrip
+              items={[
+                { label: text.produced, value: report.summary.totalQuantity, tone: "violet" },
+                { label: text.movements, value: report.summary.totalMovements },
+                { label: text.products, value: report.summary.uniqueProducts },
+                { label: text.orders, value: report.summary.uniqueOrders },
+                { label: text.ready, value: report.summary.readyOrders, tone: "success" },
+                { label: text.actors, value: report.summary.uniqueActors },
+                { label: text.issues, value: report.summary.issueCount, tone: report.summary.issueCount > 0 ? "warning" : "success" },
+              ]}
+            />
 
             {report.summary.issueCount > 0 && (
-              <div className="flex items-center gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm font-bold text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-200">
-                <CircleAlert className="h-5 w-5 shrink-0" />
-                {text.issueWarning}
-              </div>
+              <FeedbackBanner tone="warning">{text.issueWarning}</FeedbackBanner>
             )}
 
             <section className="grid gap-6 xl:grid-cols-2">

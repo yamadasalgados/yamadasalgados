@@ -22,6 +22,9 @@ import { useI18n } from "@/app/lib/i18n";
 import { formatMoneyMajor } from "@/app/lib/money";
 import { updateSellerOrderStatus } from "@/app/lib/order-status-client";
 import { useSellerSession } from "@/app/_components/SellerSessionContext";
+import PageHeader from "@/app/_components/PageHeader";
+import BackLink from "@/app/_components/BackLink";
+import FeedbackBanner from "@/app/_components/FeedbackBanner";
 import type {
   RegionalLocale,
   SupportedCurrency,
@@ -465,36 +468,28 @@ export default function OrderDetailClient({ eventId, orderId }: { eventId: strin
   }
 
   return (
-    <main className="p-4 sm:p-6 space-y-8 bg-white dark:bg-neutral-950 min-h-screen transition-colors animate-fade-in max-w-5xl mx-auto">
-      <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between border-b border-neutral-200 dark:border-neutral-800 pb-6">
-        <div className="space-y-1">
-          <span className="text-[10px] font-black uppercase text-neutral-400 tracking-wider">
-            {lang === "ja" ? "注文の詳細" : lang === "en" ? "Order Details" : "Raio-X de Pedido"}
-          </span>
-          <h1 className="text-3xl font-black tracking-tight text-neutral-900 dark:text-white truncate max-w-lg">{event?.title || (lang === "ja" ? "注文" : lang === "en" ? "Order" : "Pedido")}</h1>
-          <p className="text-[11px] font-mono text-neutral-400">
-            ID: {safeOrderId} {order?.createdAt && `• ${fmtDate(order.createdAt)}`}
-          </p>
-        </div>
-
-        <div className="flex gap-2 flex-wrap sm:flex-nowrap">
-          <Link href={`/seller/events/${safeEventId}?tab=orders`} className="rounded-xl border border-neutral-200 dark:border-neutral-800 text-xs font-black px-5 py-3 bg-white dark:bg-neutral-900 text-neutral-800 dark:text-white transition">
-            {t("eventPanel.btn.back")}
-          </Link>
-          <select value={orderStatus} onChange={(e) => handleSetOrderStatus(e.target.value as OrderStatus)} disabled={saving} className="border border-neutral-200 dark:border-neutral-800 rounded-xl px-4 py-3 text-xs font-black bg-white dark:bg-neutral-900 text-neutral-900 dark:text-white focus:outline-none">
+    <main className="mx-auto min-h-screen w-full max-w-6xl space-y-6 bg-white p-4 text-neutral-950 transition-colors dark:bg-neutral-950 dark:text-white sm:p-6">
+      <PageHeader
+        eyebrow={lang === "ja" ? "注文の詳細" : lang === "en" ? "Order details" : "Detalhes do pedido"}
+        title={event?.title || (lang === "ja" ? "注文" : lang === "en" ? "Order" : "Pedido")}
+        back={<BackLink href={`/seller/events/${safeEventId}?tab=orders`} label={t("eventPanel.btn.back")} />}
+        description={`ID: ${safeOrderId}${order?.createdAt ? ` • ${fmtDate(order.createdAt)}` : ""}`}
+        action={
+          <select
+            value={orderStatus}
+            onChange={(event) => handleSetOrderStatus(event.target.value as OrderStatus)}
+            disabled={saving}
+            className="min-h-11 rounded-xl border border-neutral-200 bg-white px-4 text-xs font-black text-neutral-900 outline-none dark:border-neutral-800 dark:bg-neutral-900 dark:text-white"
+          >
             <option value="pending">{t("eventPanel.orderStatus.pending")}</option>
             <option value="ready">{t("eventPanel.orderStatus.ready")}</option>
             <option value="delivered">{t("eventPanel.orderStatus.delivered")}</option>
             <option value="cancelled">{t("eventPanel.orderStatus.cancelled")}</option>
           </select>
-        </div>
-      </header>
+        }
+      />
 
-      {error && (
-        <div className="rounded-2xl border border-red-200 bg-red-50 text-red-700 dark:border-red-900/30 dark:bg-red-950/20 dark:text-red-400 px-4 py-3.5 text-xs font-black uppercase tracking-wider">
-          {error}
-        </div>
-      )}
+      {error && <FeedbackBanner tone="error" role="alert">{error}</FeedbackBanner>}
 
       {order && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

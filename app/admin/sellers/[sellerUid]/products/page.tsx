@@ -16,6 +16,9 @@ import {
 import {
   db,
 } from "@/app/lib/firebase";
+import PageHeader from "@/app/_components/PageHeader";
+import BackLink from "@/app/_components/BackLink";
+import FeedbackBanner from "@/app/_components/FeedbackBanner";
 
 type ProductRow = {
   id: string;
@@ -123,20 +126,14 @@ export default function AdminSellerProductsPage() {
 
   return (
     <main className="space-y-6">
-      <header>
-        <h1 className="text-3xl font-black">
-          Produtos do seller
-        </h1>
-        <p className="mt-1 break-all text-xs text-neutral-500">
-          sellers/{sellerId}/products
-        </p>
-      </header>
+      <PageHeader
+        eyebrow="Catálogo"
+        title="Produtos do seller"
+        description={`sellers/${sellerId}/products`}
+        back={<BackLink href={`/admin/sellers/${encodeURIComponent(sellerId)}`} label="Voltar ao seller" />}
+      />
 
-      {error && (
-        <p className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm font-bold text-red-700">
-          {error}
-        </p>
-      )}
+      {error && <FeedbackBanner tone="error" role="alert">{error}</FeedbackBanner>}
 
       <section className="overflow-hidden rounded-3xl border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-950">
         {loading ? (

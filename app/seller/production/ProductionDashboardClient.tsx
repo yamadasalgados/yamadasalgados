@@ -27,7 +27,6 @@ import {
   Search,
   XCircle,
 } from "lucide-react";
-import type { ReactNode } from "react";
 import {
   useCallback,
   useEffect,
@@ -37,6 +36,9 @@ import {
 } from "react";
 
 import useSellerId from "@/app/hooks/useSellerId";
+import PageHeader from "@/app/_components/PageHeader";
+import MetricStrip from "@/app/_components/MetricStrip";
+import FeedbackBanner from "@/app/_components/FeedbackBanner";
 import {
   db,
 } from "@/app/lib/firebase";
@@ -504,62 +506,6 @@ function createProductionRequestId(): string {
   }
 
   return `production_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-}
-
-function SummaryCard({
-  active,
-  icon,
-  title,
-  value,
-  hint,
-  onClick,
-  tone,
-}: {
-  active: boolean;
-  icon: ReactNode;
-  title: string;
-  value: number;
-  hint: string;
-  onClick: () => void;
-  tone: "violet" | "blue" | "green" | "amber" | "neutral";
-}) {
-  const toneClasses = {
-    violet:
-      "border-violet-200 bg-violet-50/70 text-violet-950 dark:border-violet-900/60 dark:bg-violet-950/20 dark:text-violet-100",
-    blue:
-      "border-blue-200 bg-blue-50/70 text-blue-950 dark:border-blue-900/60 dark:bg-blue-950/20 dark:text-blue-100",
-    green:
-      "border-emerald-200 bg-emerald-50/70 text-emerald-950 dark:border-emerald-900/60 dark:bg-emerald-950/20 dark:text-emerald-100",
-    amber:
-      "border-amber-200 bg-amber-50/70 text-amber-950 dark:border-amber-900/60 dark:bg-amber-950/20 dark:text-amber-100",
-    neutral:
-      "border-neutral-200 bg-white text-neutral-950 dark:border-neutral-800 dark:bg-neutral-900 dark:text-white",
-  }[tone];
-
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={[
-        "w-full rounded-3xl border p-5 text-left transition",
-        active
-          ? "ring-2 ring-neutral-950 shadow-lg dark:ring-white"
-          : "hover:-translate-y-0.5 hover:shadow-md",
-        toneClasses,
-      ].join(" ")}
-    >
-      <div className="flex items-center justify-between gap-3">
-        <span className="inline-flex h-11 w-11 items-center justify-center rounded-2xl bg-white/80 shadow-sm dark:bg-black/20">
-          {icon}
-        </span>
-        <span className="text-3xl font-black tracking-tight">
-          {value}
-        </span>
-      </div>
-      <p className="mt-4 text-sm font-black">{title}</p>
-      <p className="mt-1 text-xs font-medium opacity-70">{hint}</p>
-    </button>
-  );
 }
 
 function StatusBadge({
@@ -1692,120 +1638,44 @@ export default function ProductionDashboardClient() {
   return (
     <main className="min-h-screen bg-white p-4 text-neutral-950 dark:bg-neutral-950 dark:text-white sm:p-6">
       <div className="mx-auto max-w-7xl space-y-6">
-        <header className="flex flex-col gap-4 border-b border-neutral-200 pb-6 dark:border-neutral-800 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <div className="flex items-center gap-3">
-              <span className="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-violet-100 text-violet-700 dark:bg-violet-950/40 dark:text-violet-200">
-                <Factory className="h-6 w-6" />
-              </span>
-              <div>
-                <h1 className="text-3xl font-black tracking-tight">
-                  {text.title}
-                </h1>
-                <p className="mt-1 max-w-3xl text-sm font-medium text-neutral-500 dark:text-neutral-400">
-                  {text.subtitle}
-                </p>
-              </div>
+        <PageHeader
+          eyebrow={text.production}
+          title={text.title}
+          description={text.subtitle}
+          action={
+            <div className="flex flex-wrap gap-2">
+              <Link
+                href="/seller/production/history"
+                className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-violet-300 bg-violet-50 px-4 text-xs font-black text-violet-800 transition hover:bg-violet-100 dark:border-violet-900 dark:bg-violet-950/30 dark:text-violet-200"
+              >
+                <ClipboardList className="h-4 w-4" />
+                {text.history}
+              </Link>
+              <button
+                type="button"
+                onClick={() => setReloadKey((current) => current + 1)}
+                className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-black px-4 text-xs font-black text-white transition hover:opacity-85 dark:bg-white dark:text-black"
+              >
+                <RefreshCw className="h-4 w-4" />
+                {text.refresh}
+              </button>
             </div>
-          </div>
+          }
+        />
 
-          <div className="flex flex-wrap gap-2">
-            <Link
-              href="/seller"
-              className="inline-flex min-h-11 items-center justify-center rounded-xl border border-neutral-300 px-4 text-xs font-black transition hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
-            >
-              {text.back}
-            </Link>
-            <Link
-              href="/seller/production/history"
-              className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-violet-300 bg-violet-50 px-4 text-xs font-black text-violet-800 transition hover:bg-violet-100 dark:border-violet-900 dark:bg-violet-950/30 dark:text-violet-200"
-            >
-              <ClipboardList className="h-4 w-4" />
-              {text.history}
-            </Link>
-            <button
-              type="button"
-              onClick={() =>
-                setReloadKey(
-                  (current) => current + 1,
-                )
-              }
-              className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-black px-4 text-xs font-black text-white transition hover:opacity-85 dark:bg-white dark:text-black"
-            >
-              <RefreshCw className="h-4 w-4" />
-              {text.refresh}
-            </button>
-          </div>
-        </header>
+        {loadError && <FeedbackBanner tone="warning">{text.loadError}</FeedbackBanner>}
+        {actionError && <FeedbackBanner tone="error" role="alert">{actionError}</FeedbackBanner>}
+        {actionMessage && <FeedbackBanner tone="success">{actionMessage}</FeedbackBanner>}
 
-        {loadError && (
-          <div className="flex items-center gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm font-bold text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-200">
-            <CircleAlert className="h-5 w-5 shrink-0" />
-            {text.loadError}
-          </div>
-        )}
-
-        {actionError && (
-          <div className="flex items-center gap-3 rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm font-bold text-rose-800 dark:border-rose-900/50 dark:bg-rose-950/20 dark:text-rose-200">
-            <CircleAlert className="h-5 w-5 shrink-0" />
-            {actionError}
-          </div>
-        )}
-
-        {actionMessage && (
-          <div className="flex items-center gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm font-bold text-emerald-800 dark:border-emerald-900/50 dark:bg-emerald-950/20 dark:text-emerald-200">
-            <CheckCircle2 className="h-5 w-5 shrink-0" />
-            {actionMessage}
-          </div>
-        )}
-
-        <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-          <SummaryCard
-            active={view === "production"}
-            icon={<Factory className="h-5 w-5" />}
-            title={text.production}
-            value={productionUnits}
-            hint={text.productionHint}
-            tone="violet"
-            onClick={() => setView("production")}
-          />
-          <SummaryCard
-            active={view === "picking"}
-            icon={<Boxes className="h-5 w-5" />}
-            title={text.picking}
-            value={pickingUnits}
-            hint={text.pickingHint}
-            tone="blue"
-            onClick={() => setView("picking")}
-          />
-          <SummaryCard
-            active={view === "ready"}
-            icon={<PackageCheck className="h-5 w-5" />}
-            title={text.ready}
-            value={readyOrders.length}
-            hint={text.readyHint}
-            tone="green"
-            onClick={() => setView("ready")}
-          />
-          <SummaryCard
-            active={view === "today"}
-            icon={<CalendarDays className="h-5 w-5" />}
-            title={text.today}
-            value={todayOrders.length}
-            hint={text.todayHint}
-            tone="amber"
-            onClick={() => setView("today")}
-          />
-          <SummaryCard
-            active={view === "delivered"}
-            icon={<CheckCircle2 className="h-5 w-5" />}
-            title={text.delivered}
-            value={deliveredOrders.length}
-            hint={text.deliveredHint}
-            tone="neutral"
-            onClick={() => setView("delivered")}
-          />
-        </section>
+        <MetricStrip
+          items={[
+            { label: text.production, value: productionUnits, active: view === "production", onClick: () => setView("production"), tone: "violet" },
+            { label: text.picking, value: pickingUnits, active: view === "picking", onClick: () => setView("picking") },
+            { label: text.ready, value: readyOrders.length, active: view === "ready", onClick: () => setView("ready"), tone: "success" },
+            { label: text.today, value: todayOrders.length, active: view === "today", onClick: () => setView("today"), tone: "warning" },
+            { label: text.delivered, value: deliveredOrders.length, active: view === "delivered", onClick: () => setView("delivered") },
+          ]}
+        />
 
         <section className="rounded-3xl border border-neutral-200 bg-neutral-50/70 p-4 dark:border-neutral-800 dark:bg-neutral-900/40">
           <div className="mb-4 flex items-center justify-between gap-3">

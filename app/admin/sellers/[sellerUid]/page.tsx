@@ -27,6 +27,10 @@ import {
 import {
   normalizeSellerRegionalProfile,
 } from "@/app/lib/seller-regional-profile";
+import PageHeader from "@/app/_components/PageHeader";
+import BackLink from "@/app/_components/BackLink";
+import MetricStrip from "@/app/_components/MetricStrip";
+import FeedbackBanner from "@/app/_components/FeedbackBanner";
 
 type Detail = {
   sellerId: string;
@@ -237,56 +241,39 @@ export default function AdminSellerDetailPage() {
   if (!detail) {
     return (
       <main className="space-y-4 p-6">
-        <p className="text-red-600">
-          {error ||
-            "Seller não encontrado."}
-        </p>
-        <Link
-          href="/admin/sellers"
-          className="text-sm font-black underline"
-        >
-          Voltar
-        </Link>
+        <FeedbackBanner tone="error" role="alert">
+          {error || "Seller não encontrado."}
+        </FeedbackBanner>
+        <BackLink href="/admin/sellers" label="Voltar aos vendedores" />
       </main>
     );
   }
 
   return (
     <main className="space-y-6">
-      <header>
-        <Link
-          href="/admin/sellers"
-          className="text-xs font-black text-neutral-500 underline"
-        >
-          ← Vendedores
-        </Link>
-        <h1 className="mt-3 text-3xl font-black">
-          {detail.storeName}
-        </h1>
-        <p className="mt-1 text-sm text-neutral-500">
-          {detail.email ||
-            detail.ownerUid}
-        </p>
-      </header>
+      <PageHeader
+        eyebrow="Seller"
+        title={detail.storeName}
+        description={`${detail.email || detail.ownerUid || detail.sellerId} · ${detail.country} · ${detail.currency}`}
+        back={<BackLink href="/admin/sellers" label="Voltar aos vendedores" />}
+        action={
+          <Link
+            href={`/admin/sellers/${encodeURIComponent(detail.sellerId)}/products`}
+            className="inline-flex min-h-11 items-center justify-center rounded-xl bg-black px-4 text-xs font-black text-white dark:bg-white dark:text-black"
+          >
+            Ver produtos
+          </Link>
+        }
+      />
 
-      <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <Card
-          label="Produtos"
-          value={detail.products}
-        />
-        <Card
-          label="Eventos"
-          value={detail.events}
-        />
-        <Card
-          label="Pedidos da loja"
-          value={detail.storeOrders}
-        />
-        <Card
-          label="Solicitações"
-          value={detail.planRequests}
-        />
-      </section>
+      <MetricStrip
+        items={[
+          { label: "Produtos", value: detail.products },
+          { label: "Eventos", value: detail.events },
+          { label: "Pedidos da loja", value: detail.storeOrders },
+          { label: "Solicitações", value: detail.planRequests },
+        ]}
+      />
 
       <section className="grid gap-4 rounded-3xl border border-neutral-200 bg-white p-6 dark:border-neutral-800 dark:bg-neutral-950 sm:grid-cols-2">
         <Info
@@ -330,33 +317,8 @@ export default function AdminSellerDetailPage() {
         >
           Gerenciar acesso
         </Link>
-        <Link
-          href={`/admin/sellers/${detail.sellerId}/products`}
-          className="rounded-2xl border border-neutral-300 px-5 py-3 text-sm font-black dark:border-neutral-700"
-        >
-          Ver produtos
-        </Link>
       </div>
     </main>
-  );
-}
-
-function Card({
-  label,
-  value,
-}: {
-  label: string;
-  value: number;
-}) {
-  return (
-    <div className="rounded-3xl border border-neutral-200 bg-white p-5 dark:border-neutral-800 dark:bg-neutral-950">
-      <p className="text-xs font-black uppercase tracking-widest text-neutral-400">
-        {label}
-      </p>
-      <p className="mt-2 text-3xl font-black">
-        {value}
-      </p>
-    </div>
   );
 }
 

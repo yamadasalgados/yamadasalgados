@@ -2,21 +2,18 @@
 
 import Link from "next/link";
 import { useI18n } from "@/app/lib/i18n";
+import PageHeader from "@/app/_components/PageHeader";
 
 export default function AdminHomePage() {
   const { t } = useI18n();
 
   return (
     <div className="space-y-6 animate-fade-in">
-      {/* Section: Visão Geral / Welcome Banner Internacionalizado */}
-      <section className="rounded-3xl border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-900/50 p-6 space-y-2">
-        <h2 className="text-xs font-black uppercase tracking-widest text-neutral-400 dark:text-neutral-500">
-          {t("admin.home.overview.title")}
-        </h2>
-        <p className="text-sm font-medium text-neutral-700 dark:text-neutral-300 max-w-2xl leading-relaxed">
-          {t("admin.home.overview.desc")}
-        </p>
-      </section>
+      <PageHeader
+        eyebrow={t("admin.home.overview.title")}
+        title={t("admin.home.overview.title")}
+        description={t("admin.home.overview.desc")}
+      />
 
       {/* Section: Grid de Ações Rápidas Internacionalizadas */}
       <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -37,12 +34,6 @@ export default function AdminHomePage() {
           desc={t("admin.home.card.events.desc")}
           href="/admin/events"
           icon="📅"
-        />
-        <ActionCard
-          title={t("admin.home.card.settings.title")}
-          desc={t("admin.home.card.settings.desc")}
-          href="/admin/settings"
-          icon="⚙️"
         />
       </section>
     </div>

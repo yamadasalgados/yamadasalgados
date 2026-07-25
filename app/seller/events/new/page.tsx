@@ -19,6 +19,9 @@ import {
 } from "firebase/firestore";
 import { useI18n } from "@/app/lib/i18n";
 import { useSellerSession } from "@/app/_components/SellerSessionContext";
+import PageHeader from "@/app/_components/PageHeader";
+import BackLink from "@/app/_components/BackLink";
+import FeedbackBanner from "@/app/_components/FeedbackBanner";
 import { Gift } from "lucide-react";
 import {
   formatMoneyMinor,
@@ -510,32 +513,17 @@ export default function CreateNewEventPage() {
   }
 
   return (
-    <main className="p-4 sm:p-6 space-y-8 bg-white dark:bg-neutral-950 min-h-screen transition-colors animate-fade-in max-w-3xl mx-auto">
-      <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between border-b border-neutral-200 dark:border-neutral-800 pb-6">
-        <div className="space-y-1">
-          <h1 className="text-3xl font-black tracking-tight text-neutral-900 dark:text-white">
-            {t("events.create.title")}
-          </h1>
-        </div>
-
-        <Link
-          href="/seller/events"
-          className="rounded-2xl border border-neutral-200 dark:border-neutral-800 text-xs font-black px-5 py-3.5 hover:bg-neutral-50 dark:hover:bg-neutral-800 dark:text-white transition uppercase tracking-wider"
-        >
-          {t("events.create.back")}
-        </Link>
-      </header>
+    <main className="mx-auto min-h-screen w-full max-w-4xl space-y-6 bg-white p-4 text-neutral-950 transition-colors dark:bg-neutral-950 dark:text-white sm:p-6">
+      <PageHeader
+        eyebrow={t("events.title")}
+        title={t("events.create.title")}
+        back={<BackLink href="/seller/events" label={t("events.create.back")} />}
+      />
 
       {(errMsg || okMsg) && (
-        <div
-          className={`rounded-2xl border px-4 py-3.5 text-xs font-black uppercase tracking-wider ${
-            errMsg
-              ? "border-red-200 bg-red-50 text-red-700 dark:border-red-900/30 dark:bg-red-950/20 dark:text-red-400"
-              : "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/30 dark:bg-emerald-950/20 dark:text-emerald-400"
-          }`}
-        >
+        <FeedbackBanner tone={errMsg ? "error" : "success"} role={errMsg ? "alert" : "status"}>
           {errMsg || okMsg}
-        </div>
+        </FeedbackBanner>
       )}
 
       <form

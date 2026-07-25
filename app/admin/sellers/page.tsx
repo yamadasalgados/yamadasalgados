@@ -28,6 +28,8 @@ import {
 import {
   useI18n,
 } from "@/app/lib/i18n";
+import PageHeader from "@/app/_components/PageHeader";
+import FeedbackBanner from "@/app/_components/FeedbackBanner";
 
 type Row = {
   id: string;
@@ -178,32 +180,24 @@ export default function AdminSellersPage() {
 
   return (
     <main className="space-y-6">
-      <header className="flex items-end justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-black">
-            {title}
-          </h1>
-          <p className="mt-1 text-sm text-neutral-500">
-            users contém identidade; sellers contém comércio e acesso.
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={() =>
-            void load()
-          }
-          className="inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-black"
-        >
-          <RefreshCw className="h-4 w-4" />
-          Atualizar
-        </button>
-      </header>
+      <PageHeader
+        eyebrow="Admin"
+        title={title}
+        description="A identidade fica em users; comércio, acesso e catálogo ficam em sellers."
+        action={
+          <button
+            type="button"
+            onClick={() => void load()}
+            disabled={loading}
+            className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-neutral-300 px-4 text-xs font-black disabled:opacity-50 dark:border-neutral-700"
+          >
+            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+            Atualizar
+          </button>
+        }
+      />
 
-      {error && (
-        <p className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm font-bold text-red-700">
-          {error}
-        </p>
-      )}
+      {error && <FeedbackBanner tone="error" role="alert">{error}</FeedbackBanner>}
 
       <section className="overflow-hidden rounded-3xl border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-950">
         {loading ? (

@@ -15,6 +15,8 @@ import {
 import {
   db,
 } from "@/app/lib/firebase";
+import PageHeader from "@/app/_components/PageHeader";
+import FeedbackBanner from "@/app/_components/FeedbackBanner";
 
 type EventRow = {
   eventId: string;
@@ -113,20 +115,13 @@ export default function AdminEventsPage() {
 
   return (
     <main className="space-y-6">
-      <header>
-        <h1 className="text-3xl font-black">
-          Eventos
-        </h1>
-        <p className="mt-1 text-sm text-neutral-500">
-          Somente sellers/{"{sellerId}"}/events.
-        </p>
-      </header>
+      <PageHeader
+        eyebrow="Admin"
+        title="Eventos"
+        description="Visão consolidada dos eventos criados pelos sellers."
+      />
 
-      {error && (
-        <p className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm font-bold text-red-700">
-          {error}
-        </p>
-      )}
+      {error && <FeedbackBanner tone="error" role="alert">{error}</FeedbackBanner>}
 
       <section className="overflow-hidden rounded-3xl border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-950">
         {loading ? (

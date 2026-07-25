@@ -45,6 +45,10 @@ import {
 } from "@/app/lib/order-status";
 import { updateSellerOrderStatus } from "@/app/lib/order-status-client";
 import { useSellerSession } from "@/app/_components/SellerSessionContext";
+import PageHeader from "@/app/_components/PageHeader";
+import BackLink from "@/app/_components/BackLink";
+import MetricStrip from "@/app/_components/MetricStrip";
+import FeedbackBanner from "@/app/_components/FeedbackBanner";
 
 // --- 📝 Interfaces de Tipagem Estrita ---
 
@@ -965,42 +969,48 @@ const markOrderMessagesAsRead = useCallback(
   if (!safeId) return null;
 
   return (
-    <main className="p-4 sm:p-6 space-y-8 bg-white dark:bg-neutral-950 min-h-screen transition-colors use-i18n animate-fade-in max-w-5xl mx-auto">
-      <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between border-b border-neutral-200 dark:border-neutral-800 pb-6">
-        <div className="space-y-1">
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] font-black uppercase text-neutral-400 tracking-wider">{t("eventPanel.title")}</span>
-            <StatusBadge status={status} t={t} />
+    <main className="mx-auto min-h-screen w-full max-w-6xl space-y-6 bg-white p-4 text-neutral-950 transition-colors dark:bg-neutral-950 dark:text-white sm:p-6">
+      <PageHeader
+        eyebrow={t("eventPanel.title")}
+        title={title || t("eventPanel.title")}
+        back={<BackLink href="/seller/events" label={t("eventPanel.btn.back")} />}
+        description={`ID: ${safeId}${event?.createdAt ? ` • ${fmtDate(event.createdAt)}` : ""}`}
+        action={
+          <div className="flex flex-wrap gap-2">
+            <Link
+              href={`/event/${sellerUid}/${safeId}`}
+              target="_blank"
+              className="inline-flex min-h-11 items-center justify-center rounded-xl border border-neutral-200 bg-white px-4 text-xs font-black text-neutral-800 transition hover:bg-neutral-50 dark:border-neutral-800 dark:bg-neutral-900 dark:text-white dark:hover:bg-neutral-800"
+            >
+              {t("eventPanel.btn.openLandpage")}
+            </Link>
+            <button
+              type="button"
+              onClick={handleCloseEvent}
+              disabled={saving || !isActive}
+              className="inline-flex min-h-11 items-center justify-center rounded-xl bg-black px-5 text-xs font-black text-white shadow-sm transition disabled:opacity-40 dark:bg-white dark:text-black"
+            >
+              {saving ? t("eventPanel.btn.processing") : t("eventPanel.btn.closeEvent")}
+            </button>
           </div>
-          <h1 className="text-3xl font-black tracking-tight text-neutral-900 dark:text-white truncate max-w-lg">{title || t("eventPanel.title")}</h1>
-          <p className="text-[11px] font-mono text-neutral-400">
-            ID: {safeId} {event?.createdAt && `• ${fmtDate(event.createdAt)}`}
-          </p>
-        </div>
-
-        <div className="flex gap-2 flex-wrap">
-          <Link href={`/event/${sellerUid}/${safeId}`} target="_blank" className="rounded-xl border border-neutral-200 dark:border-neutral-800 text-xs font-black px-4 py-2.5 bg-white dark:bg-neutral-900 text-neutral-800 dark:text-white transition">
-            {t("eventPanel.btn.openLandpage")}
-          </Link>
-          <button onClick={handleCloseEvent} disabled={saving || !isActive} className="rounded-xl bg-black dark:bg-white text-white dark:text-black text-xs font-black px-5 py-2.5 shadow-md transition disabled:opacity-40">
-            {saving ? t("eventPanel.btn.processing") : t("eventPanel.btn.closeEvent")}
-          </button>
-        </div>
-      </header>
+        }
+        meta={<StatusBadge status={status} t={t} />}
+      />
 
       {(error || success) && (
-        <div className={`rounded-2xl border px-4 py-3.5 text-xs font-black uppercase tracking-wider ${error ? "border-red-200 bg-red-50 text-red-700 dark:border-red-900/30 dark:bg-red-950/20 dark:text-red-400" : "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/30 dark:bg-emerald-950/20 dark:text-emerald-400"}`}>
+        <FeedbackBanner tone={error ? "error" : "success"} role={error ? "alert" : "status"}>
           {error || success}
-        </div>
+        </FeedbackBanner>
       )}
 
-      {/* METRICAS MINI CARDS */}
-      <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <MiniCard title={t("eventPanel.cards.officialRevenue.title")} value={revenueOfficial > 0 ? yen(revenueOfficial) : "—"} hint={status === "closed" ? t("eventPanel.cards.officialRevenue.hintClosed") : t("eventPanel.cards.officialRevenue.hintOpen")} tone="good" />
-        <MiniCard title={t("eventPanel.cards.estimatedRevenue.title")} value={ordersRevenueSum > 0 ? yen(ordersRevenueSum) : "—"} hint={t("eventPanel.cards.estimatedRevenue.hint")} tone="neutral" />
-        <MiniCard title={t("eventPanel.cards.orders.title")} value={String(totalOrders)} hint={t("eventPanel.cards.orders.hint")} tone="neutral" />
-        <MiniCard title={t("eventPanel.cards.delivered.title")} value={String(deliveredCount)} hint={t("eventPanel.cards.delivered.hint").replace("{n}", String(pendingCount))} tone="warn" />
-      </section>
+      <MetricStrip
+        items={[
+          { label: t("eventPanel.cards.officialRevenue.title"), value: revenueOfficial > 0 ? yen(revenueOfficial) : "—", tone: "success" },
+          { label: t("eventPanel.cards.estimatedRevenue.title"), value: ordersRevenueSum > 0 ? yen(ordersRevenueSum) : "—" },
+          { label: t("eventPanel.cards.orders.title"), value: totalOrders },
+          { label: t("eventPanel.cards.delivered.title"), value: deliveredCount, tone: pendingCount > 0 ? "warning" : "success" },
+        ]}
+      />
 
       {/* NAVEGAÇÃO INTERNA TABS */}
       <nav className="flex flex-wrap gap-1.5 border-b border-neutral-100 dark:border-neutral-800 pb-2">
@@ -1603,20 +1613,6 @@ function TabButton({ active, children, onClick }: { active: boolean; children: R
     <button type="button" onClick={onClick} className={`rounded-full px-5 py-2 text-xs font-black tracking-wide border transition-all ${active ? "bg-black text-white border-black dark:bg-white dark:text-black dark:border-white shadow-sm" : "bg-white text-neutral-500 border-neutral-200 hover:bg-neutral-50 dark:bg-neutral-900 dark:text-neutral-400 dark:border-neutral-800 dark:hover:bg-neutral-800"}`}>
       {children}
     </button>
-  );
-}
-
-function MiniCard({ title, value, hint, tone }: { title: string; value: string; hint: string; tone: "good" | "warn" | "neutral" }) {
-  const toneCls =
-    tone === "good" ? "border-emerald-200 dark:border-emerald-900/30 bg-emerald-50/20 dark:bg-emerald-950/10" :
-    tone === "warn" ? "border-amber-200 dark:border-amber-900/30 bg-amber-50/20 dark:bg-amber-950/10" : "border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900";
-
-  return (
-    <div className={`rounded-[2rem] border p-5 shadow-sm ${toneCls} animate-fade-in`}>
-      <p className="text-[10px] font-black text-neutral-400 dark:text-neutral-500 uppercase tracking-wider">{title}</p>
-      <p className="text-3xl font-black mt-2 tracking-tight text-neutral-900 dark:text-white">{value}</p>
-      <p className="text-xs text-neutral-500 dark:text-neutral-400 font-medium mt-2 leading-relaxed">{hint}</p>
-    </div>
   );
 }
 
