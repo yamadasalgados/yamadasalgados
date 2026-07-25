@@ -341,6 +341,25 @@ function movementSnapshot(inventory: { quantity: number; reserved: number }) {
   };
 }
 
+function productSnapshotName(data: Record<string, unknown>): string {
+  const legacyName = cleanString(data.name ?? data.title, 240);
+  const content = record(data.content);
+  for (const language of ["pt", "en", "ja"]) {
+    const localized = record(content[language]);
+    const name = cleanString(localized.name, 240);
+    if (name) return name;
+  }
+  return legacyName;
+}
+
+function orderCustomerName(data: Record<string, unknown>): string {
+  const customer = record(data.customer);
+  return cleanString(
+    data.customerName ?? data.name ?? customer.name ?? customer.fullName,
+    240,
+  );
+}
+
 export async function POST(request: NextRequest) {
   try {
     const clean = cleanRequest(await request.json().catch(() => null));
@@ -429,6 +448,7 @@ export async function POST(request: NextRequest) {
       let stockProducedQuantity = 0;
       const autoReadyOrderIds: string[] = [];
       const productData = productSnapshot.data() ?? {};
+      const productName = productSnapshotName(productData);
       const normalizedInventory = normalizeProductInventory(
         productData.inventory,
         productData.stockQty ?? productData.stock,
@@ -538,9 +558,12 @@ export async function POST(request: NextRequest) {
           type: "production_recorded",
           sellerId: clean.sellerId,
           productId: clean.productId,
+          productName: productName || null,
           orderId: targetOrder.target.orderId,
           orderSource: targetOrder.target.source,
           eventId: targetOrder.target.eventId || null,
+          customerName: orderCustomerName(targetOrder.data) || null,
+          deliveryDate: cleanString(targetOrder.data.deliveryDate, 40) || null,
           quantity: orderRecorded,
           orderBecameReady: ready && currentStatus !== "ready",
           requestId: clean.requestId,

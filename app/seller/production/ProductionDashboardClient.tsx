@@ -139,6 +139,7 @@ const COPY = {
     subtitle:
       "Reúna pedidos da Loja e dos eventos, produza encomendas e separe o estoque reservado.",
     back: "Painel",
+    history: "Histórico",
     refresh: "Atualizar",
     loading: "Carregando pedidos...",
     loadError: "Não foi possível carregar todos os pedidos.",
@@ -210,6 +211,7 @@ const COPY = {
     subtitle:
       "Bring Store and event orders together, produce made-to-order items, and pick reserved stock.",
     back: "Dashboard",
+    history: "History",
     refresh: "Refresh",
     loading: "Loading orders...",
     loadError: "Some orders could not be loaded.",
@@ -280,6 +282,7 @@ const COPY = {
     subtitle:
       "常設店舗とイベントの注文をまとめ、受注生産と予約在庫の取り分けを管理します。",
     back: "ダッシュボード",
+    history: "履歴",
     refresh: "更新",
     loading: "注文を読み込み中...",
     loadError: "一部の注文を読み込めませんでした。",
@@ -1712,6 +1715,13 @@ export default function ProductionDashboardClient() {
               className="inline-flex min-h-11 items-center justify-center rounded-xl border border-neutral-300 px-4 text-xs font-black transition hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
             >
               {text.back}
+            </Link>
+            <Link
+              href="/seller/production/history"
+              className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-violet-300 bg-violet-50 px-4 text-xs font-black text-violet-800 transition hover:bg-violet-100 dark:border-violet-900 dark:bg-violet-950/30 dark:text-violet-200"
+            >
+              <ClipboardList className="h-4 w-4" />
+              {text.history}
             </Link>
             <button
               type="button"
