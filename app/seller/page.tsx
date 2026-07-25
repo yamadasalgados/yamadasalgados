@@ -94,6 +94,10 @@ const dashboardText =
           "オファーとセット",
         offersDesc:
           "プロモーション、セット、割引を管理します。",
+        productionTitle:
+          "製造・取り分け",
+        productionDesc:
+          "製造、予約在庫、準備完了の注文をまとめて管理します。",
       }
     : lang === "en"
       ? {
@@ -123,6 +127,10 @@ const dashboardText =
             "Offers and kits",
           offersDesc:
             "Manage promotions, kits, and discounts.",
+          productionTitle:
+            "Production and picking",
+          productionDesc:
+            "Manage production, reserved stock, and ready orders.",
         }
       : {
           identitySynced:
@@ -151,6 +159,10 @@ const dashboardText =
             "Ofertas e kits",
           offersDesc:
             "Gerencie promoções, kits e descontos.",
+          productionTitle:
+            "Produção e separação",
+          productionDesc:
+            "Gerencie produção, estoque reservado e pedidos prontos.",
         };
 
   const [checkingAuth, setCheckingAuth] = useState(true);
@@ -493,7 +505,7 @@ const showPlanWarning =
           {t("dashboard.quick.title")}
         </h2>
 
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           <Action
             title={t("dashboard.quick.events")}
             desc={t("dashboard.quick.events_desc")}
@@ -513,6 +525,13 @@ const showPlanWarning =
             desc={dashboardText.storeOrdersDesc}
             href="/seller/store-orders"
             icon="🛒"
+          />
+
+          <Action
+            title={dashboardText.productionTitle}
+            desc={dashboardText.productionDesc}
+            href="/seller/production"
+            icon="🏭"
           />
 
           <Action
