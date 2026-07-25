@@ -3,6 +3,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { db } from "@/app/lib/firebase";
 import { useI18n } from "@/app/lib/i18n";
+import {
+  createPublicOrder,
+  getPublicOrderErrorCode,
+} from "@/app/lib/public-order-client";
 import OpenInBrowserGate from "@/app/_components/OpenInBrowserGate";
 
 import {
@@ -15,18 +19,15 @@ import {
   onSnapshot,
   orderBy,
   query,
-  runTransaction,
   serverTimestamp,
   type Timestamp,
 } from "firebase/firestore";
 import { Gift } from "lucide-react";
 import {
-  createAppliedOfferSnapshot,
   evaluateOfferForCart,
   normalizeOffer,
   offerIsCurrentlyActive,
   resolveLocalizedOfferText,
-  type AppliedOfferSnapshot,
   type OfferDoc,
   type OfferEvaluation,
 } from "@/app/lib/offer-schema";
@@ -791,206 +792,49 @@ return Array.from(set).sort((a, b) => a.localeCompare(b, locale));
   const registerOrderInFirestore = useCallback(async () => {
     if (!event) return "";
 
-    const selectedProductIds = orderableIds.filter(
-      (productId) => (quantities[productId] || 0) > 0,
-    );
-    const orderReference = doc(
-      collection(db, "sellers", sellerId, "events", id, "orders"),
-    );
-
-    await runTransaction(db, async (transaction) => {
-      const eventReference = doc(db, "sellers", sellerId, "events", id);
-      const eventSnapshot = await transaction.get(eventReference);
-
-      if (!eventSnapshot.exists()) {
-        throw new Error("EVENT_UNAVAILABLE");
-      }
-
-      const eventData = eventSnapshot.data() as any;
-      if (String(eventData.status || "active") !== "active") {
-        throw new Error("EVENT_UNAVAILABLE");
-      }
-
-      const productReads = await Promise.all(
-        selectedProductIds.map(async (productId) => {
-          const reference = doc(
-            db,
-            "sellers",
-            sellerId,
-            "events",
-            id,
-            "items",
-            productId,
-          );
-          const snapshot = await transaction.get(reference);
-          return { productId, snapshot };
-        }),
-      );
-
-      const offerSnapshot = selectedOfferId
-        ? await transaction.get(
-            doc(
-              db,
-              "sellers",
-              sellerId,
-              "events",
-              id,
-              "offers",
-              selectedOfferId,
+    const quantitiesClean = Object.fromEntries(
+      orderableIds
+        .map((productId) => [
+          productId,
+          Math.max(
+            0,
+            Math.floor(
+              quantities[productId] || 0,
             ),
-          )
-        : null;
+          ),
+        ] as const)
+        .filter(([, quantity]) => quantity > 0),
+    );
 
-      const quantitiesClean: Record<string, number> = {};
-      const items: Array<Record<string, unknown>> = [];
-      const offerLines: Array<{
-        productId: string;
-        quantity: number;
-        priceMinor: number;
-      }> = [];
-      let currentSubtotalMinor = 0;
-
-      for (const productRead of productReads) {
-        if (!productRead.snapshot.exists()) {
-          throw new Error("PRODUCT_UNAVAILABLE");
-        }
-
-        const data = productRead.snapshot.data() as any;
-        const quantity = Math.max(
-          0,
-          Math.floor(quantities[productRead.productId] || 0),
-        );
-        if (quantity <= 0) continue;
-
-        const madeToOrder =
-          data.status === "made_to_order" ||
-          data.availabilityStatus === "made_to_order" ||
-          data.productionMode === "made_to_order";
-        const inventory =
-          data.inventory && typeof data.inventory === "object"
-            ? data.inventory
-            : {};
-        const stock =
-          typeof inventory.quantity === "number"
-            ? inventory.quantity
-            : typeof data.stockQty === "number"
-              ? data.stockQty
-              : null;
-
-        if (
-          !madeToOrder &&
-          typeof stock === "number" &&
-          Number.isFinite(stock) &&
-          stock < quantity
-        ) {
-          throw new Error("PRODUCT_UNAVAILABLE");
-        }
-
-        const priceMinor =
-          typeof data.priceMinor === "number" && Number.isFinite(data.priceMinor)
-            ? Math.max(0, Math.round(data.priceMinor))
-            : legacyMajorValueToMinor(
-                data.price ?? data.sellPrice ?? 0,
-                event.currency,
-              );
-        const unitPrice = minorToMajor(priceMinor, event.currency);
-
-        quantitiesClean[productRead.productId] = quantity;
-        currentSubtotalMinor += priceMinor * quantity;
-        offerLines.push({
-          productId: productRead.productId,
-          quantity,
-          priceMinor,
-        });
-        items.push({
-          productId: productRead.productId,
-          name: String(data.name || productRead.productId),
-          qty: quantity,
-          quantity,
-          unitPrice,
-          unitPriceMinor: priceMinor,
-          subtotal: unitPrice * quantity,
-          subtotalMinor: priceMinor * quantity,
-          imageUrl: String(data.imageUrl || ""),
-          category: String(data.category || ""),
-          availabilityStatus: madeToOrder ? "made_to_order" : "active",
-          productionMode: madeToOrder ? "made_to_order" : "stock",
-        });
-      }
-
-      let offersApplied: AppliedOfferSnapshot[] = [];
-      let currentDiscountMinor = 0;
-
-      if (selectedOfferId) {
-        if (!offerSnapshot || !offerSnapshot.exists()) {
-          throw new Error("OFFER_UNAVAILABLE");
-        }
-
-        const currentOffer = normalizeOffer(
-          offerSnapshot.id,
-          offerSnapshot.data(),
-          event.currency,
-        );
-
-        if (!currentOffer || !offerIsCurrentlyActive(currentOffer)) {
-          throw new Error("OFFER_UNAVAILABLE");
-        }
-
-        const evaluation = evaluateOfferForCart(currentOffer, offerLines);
-        const appliedSnapshot = createAppliedOfferSnapshot(
-          evaluation,
-          language,
-          event.defaultLanguage,
-        );
-
-        if (appliedSnapshot) {
-          offersApplied = [appliedSnapshot];
-          currentDiscountMinor = appliedSnapshot.discountAmountMinor;
-        }
-      }
-
-      const currentSubtotal = minorToMajor(
-        currentSubtotalMinor,
-        event.currency,
-      );
-      const currentDiscount = minorToMajor(
-        currentDiscountMinor,
-        event.currency,
-      );
-      const currentTotal = Math.max(0, currentSubtotal - currentDiscount);
-
-      transaction.set(orderReference, {
-        customerName: customerName.trim(),
-        customerPhone: customerPhone.trim(),
-        note: note.trim(),
-        quantities: quantitiesClean,
-        items,
-        totalItems,
-        subtotal: currentSubtotal,
-        discount: currentDiscount,
-        totalAmount: currentTotal,
-        offersApplied,
-        status: "pending",
-        channel: "pwa",
-        deliveryMode,
-        deliveryDate: getChosenDate(),
-        deliveryTimeSlot: getChosenTimeLabel(),
+    const result = await createPublicOrder({
+      source: "event",
+      sellerId,
+      eventId: id,
+      language,
+      selectedOfferId:
+        selectedOfferId || undefined,
+      customerClientId: customerId,
+      quantities: quantitiesClean,
+      customer: {
+        name: customerName,
+        phone: customerPhone,
+      },
+      delivery: {
+        mode: deliveryMode,
+        date: getChosenDate(),
+        time: getChosenTimeLabel(),
         locationLink:
           deliveryMode === "delivery"
-            ? locationLink.trim()
-            : "",
-        customerClientId: customerId,
-        sellerUnread: true,
-        sellerReadAt: null,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
+            ? locationLink
+            : undefined,
+        note: note || undefined,
+      },
     });
 
-    setLastOrderId(orderReference.id);
+    setLastOrderId(result.orderId);
     setChatOpen(true);
 
-    return orderReference.id;
+    return result.orderId;
   }, [
     event,
     sellerId,
@@ -1001,7 +845,6 @@ return Array.from(set).sort((a, b) => a.localeCompare(b, locale));
     customerName,
     customerPhone,
     note,
-    totalItems,
     deliveryMode,
     locationLink,
     customerId,
@@ -1021,8 +864,33 @@ return Array.from(set).sort((a, b) => a.localeCompare(b, locale));
       await registerOrderInFirestore();
       resetOrderForm();
       showSentToast();
-    } catch (err: any) {
-      alert(err?.message || tr("event.error.register_order", "Não foi possível registrar o pedido."));
+    } catch (err: unknown) {
+      const errorCode =
+        getPublicOrderErrorCode(err);
+
+      const message =
+        errorCode === "PRODUCT_UNAVAILABLE"
+          ? tr(
+              "event.error.product_unavailable",
+              "Um dos produtos selecionados não está mais disponível.",
+            )
+          : errorCode === "OFFER_UNAVAILABLE"
+            ? tr(
+                "event.error.offer_unavailable",
+                "A oferta selecionada não está mais disponível.",
+              )
+            : errorCode === "EVENT_UNAVAILABLE" ||
+                errorCode === "SELLER_UNAVAILABLE"
+              ? tr(
+                  "event.error.unavailable",
+                  "Este evento não está aceitando pedidos neste momento.",
+                )
+              : tr(
+                  "event.error.register_order",
+                  "Não foi possível registrar o pedido.",
+                );
+
+      alert(message);
     } finally {
       setSubmitting(false);
     }

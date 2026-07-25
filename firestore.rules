@@ -696,15 +696,25 @@ service cloud.firestore {
           || isSellerOwner(sellerId);
       }
 
+      /*
+       * Marcadores privados de idempotência criados pelo backend.
+       * Nem clientes públicos nem sellers precisam acessar esta coleção.
+       */
+      match /orderRequests/{requestId} {
+        allow read, write: if false;
+      }
+
       // =======================================================
       // STORE ORDERS
       // =======================================================
 
       match /storeOrders/{orderId} {
-        allow create:
-          if sellerAcceptsOrders(sellerId)
-          && isValidPublicOrderCreate()
-          && request.resource.data.channel == "store";
+        /*
+         * Pedidos públicos são criados exclusivamente pelo backend
+         * /api/orders/create usando Firebase Admin.
+         * O SDK do cliente não pode definir preços, descontos ou totais.
+         */
+        allow create: if false;
 
         allow read, update:
           if isAdmin()
@@ -749,9 +759,11 @@ service cloud.firestore {
         }
 
         match /orders/{orderId} {
-          allow create:
-            if sellerAcceptsOrders(sellerId)
-            && isValidPublicOrderCreate();
+          /*
+           * Pedidos de eventos também passam pelo backend unificado.
+           * A criação direta pelo navegador permanece bloqueada.
+           */
+          allow create: if false;
 
           allow read, update:
             if isAdmin()

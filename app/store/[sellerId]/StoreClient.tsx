@@ -15,8 +15,6 @@ import {
   collection,
   doc,
   onSnapshot,
-  runTransaction,
-  serverTimestamp,
 } from "firebase/firestore";
 
 import {
@@ -42,6 +40,11 @@ import {
 } from "@/app/lib/firebase";
 
 import {
+  createPublicOrder,
+  getPublicOrderErrorCode,
+} from "@/app/lib/public-order-client";
+
+import {
   accessIsActive,
 } from "@/app/lib/access-control";
 
@@ -61,12 +64,10 @@ import {
   resolveLocalizedProductText,
 } from "@/app/lib/product-schema";
 import {
-  createAppliedOfferSnapshot,
   evaluateOfferForCart,
   normalizeOffer,
   offerIsCurrentlyActive,
   resolveLocalizedOfferText,
-  type AppliedOfferSnapshot,
   type OfferDoc,
   type OfferEvaluation,
 } from "@/app/lib/offer-schema";
@@ -797,200 +798,6 @@ function formatCurrency(
   );
 }
 
-function cleanOrderItem(
-  item: CartItem,
-  currentProduct: Product,
-): Record<string, unknown> {
-  const result: Record<
-    string,
-    unknown
-  > = {
-    productId:
-      currentProduct.id,
-    name:
-      currentProduct.name,
-    qty: item.qty,
-    price:
-      currentProduct.price,
-    priceMinor:
-      currentProduct.priceMinor,
-    subtotal:
-      item.qty *
-      currentProduct.price,
-    availabilityStatus:
-      currentProduct.availabilityStatus,
-    productionMode:
-      currentProduct.availabilityStatus === "made_to_order"
-        ? "made_to_order"
-        : "stock",
-  };
-
-  if (
-    currentProduct.category
-  ) {
-    result.category =
-      currentProduct.category;
-  }
-
-  if (
-    currentProduct.imageUrl
-  ) {
-    result.imageUrl =
-      currentProduct.imageUrl;
-  }
-
-  return result;
-}
-
-function buildOrderPayload({
-  customer,
-  delivery,
-  items,
-  subtotal,
-  discount,
-  total,
-  offersApplied,
-}: {
-  customer: CustomerForm;
-  delivery: DeliveryForm;
-  items: Array<
-    Record<string, unknown>
-  >;
-  subtotal: number;
-  discount: number;
-  total: number;
-  offersApplied: AppliedOfferSnapshot[];
-}): Record<string, unknown> {
-  const quantities: Record<
-    string,
-    number
-  > = {};
-
-  let totalItems = 0;
-
-  for (const item of items) {
-    const productId =
-      typeof item.productId ===
-      "string"
-        ? item.productId
-        : "";
-
-    const qty =
-      typeof item.qty ===
-        "number" &&
-      Number.isInteger(item.qty)
-        ? Math.max(
-            0,
-            item.qty,
-          )
-        : 0;
-
-    if (
-      productId &&
-      qty > 0
-    ) {
-      quantities[productId] =
-        qty;
-
-      totalItems += qty;
-    }
-  }
-
-  const payload: Record<
-    string,
-    unknown
-  > = {
-    customerName:
-      customer.name.trim(),
-
-    customerPhone:
-      customer.phone.trim(),
-
-    quantities,
-
-    items,
-
-    totalItems,
-
-    subtotal:
-      Math.max(
-        0,
-        subtotal,
-      ),
-
-    discount:
-      Math.max(
-        0,
-        discount,
-      ),
-
-    totalAmount:
-      Math.max(
-        0,
-        total,
-      ),
-
-    offersApplied,
-
-    status: "pending",
-
-    channel: "store",
-
-    deliveryMode:
-      delivery.mode,
-
-    sellerUnread: true,
-
-    sellerReadAt: null,
-
-    createdAt:
-      serverTimestamp(),
-
-    updatedAt:
-      serverTimestamp(),
-  };
-
-  if (
-    customer.email.trim()
-  ) {
-    payload.customerEmail =
-      customer.email.trim();
-  }
-
-  if (delivery.date) {
-    payload.deliveryDate =
-      delivery.date;
-  }
-
-  if (delivery.time) {
-    payload.deliveryTimeSlot =
-      delivery.time;
-  }
-
-  if (
-    delivery.address.trim()
-  ) {
-    payload.address =
-      delivery.address.trim();
-  }
-
-  if (
-    delivery.locationLink.trim()
-  ) {
-    payload.locationLink =
-      delivery.locationLink.trim();
-  }
-
-  if (
-    delivery.note.trim()
-  ) {
-    payload.note =
-      delivery.note.trim();
-  }
-
-  return payload;
-}
-
 export default function StoreClient({
   sellerId,
 }: {
@@ -1669,215 +1476,44 @@ const showingProducts =
     setFormError("");
 
     try {
-      const orderReference =
-        doc(
-          collection(
-            db,
-            "sellers",
-            sellerId,
-            "storeOrders",
-          ),
-        );
-
-      await runTransaction(
-        db,
-        async (transaction) => {
-          const productReads =
-            await Promise.all(
-              cartItems.map(
-                async (item) => {
-                  const reference =
-                    doc(
-                      db,
-                      "sellers",
-                      sellerId,
-                      "products",
-                      item.id,
-                    );
-
-                  const snapshot =
-                    await transaction.get(
-                      reference,
-                    );
-
-                  return {
-                    item,
-                    snapshot,
-                  };
-                },
-              ),
-            );
-
-          const offerSnapshot =
-            selectedOfferId
-              ? await transaction.get(
-                  doc(
-                    db,
-                    "sellers",
-                    sellerId,
-                    "offers",
-                    selectedOfferId,
-                  ),
-                )
-              : null;
-
-          const cleanItems: Array<
-            Record<string, unknown>
-          > = [];
-          const offerCartLines: Array<{
-            productId: string;
-            quantity: number;
-            priceMinor: number;
-          }> = [];
-
-          let currentSubtotalMinor = 0;
-
-          for (
-            const productRead
-            of productReads
-          ) {
-            if (
-              !productRead.snapshot.exists()
-            ) {
-              throw new Error(
-                "PRODUCT_UNAVAILABLE",
-              );
-            }
-
-            const currentProduct =
-              normalizeProduct(
-                productRead.snapshot.id,
-                productRead.snapshot.data(),
-                language,
-                storeProfile.currency,
-              );
-
-            if (!currentProduct) {
-              throw new Error(
-                "PRODUCT_UNAVAILABLE",
-              );
-            }
-
-            if (
-              currentProduct.availabilityStatus !== "made_to_order" &&
-              typeof currentProduct.stock === "number" &&
-              currentProduct.stock < productRead.item.qty
-            ) {
-              throw new Error(
-                "PRODUCT_UNAVAILABLE",
-              );
-            }
-
-            cleanItems.push(
-              cleanOrderItem(
-                productRead.item,
-                currentProduct,
-              ),
-            );
-
-            currentSubtotalMinor +=
-              currentProduct.priceMinor *
-              productRead.item.qty;
-
-            offerCartLines.push({
-              productId:
-                currentProduct.id,
-              quantity:
-                productRead.item.qty,
-              priceMinor:
-                currentProduct.priceMinor,
-            });
-
-          }
-
-          let appliedOffers:
-            AppliedOfferSnapshot[] = [];
-          let currentDiscountMinor = 0;
-
-          if (selectedOfferId) {
-            if (
-              !offerSnapshot ||
-              !offerSnapshot.exists()
-            ) {
-              throw new Error(
-                "OFFER_UNAVAILABLE",
-              );
-            }
-
-            const currentOffer =
-              normalizeOffer(
-                offerSnapshot.id,
-                offerSnapshot.data(),
-                storeProfile.currency,
-              );
-
-            if (
-              !currentOffer ||
-              !offerIsCurrentlyActive(
-                currentOffer,
-              )
-            ) {
-              throw new Error(
-                "OFFER_UNAVAILABLE",
-              );
-            }
-
-            const evaluation =
-              evaluateOfferForCart(
-                currentOffer,
-                offerCartLines,
-              );
-            const snapshot =
-              createAppliedOfferSnapshot(
-                evaluation,
-                language,
-                language,
-              );
-
-            if (snapshot) {
-              appliedOffers = [snapshot];
-              currentDiscountMinor =
-                snapshot.discountAmountMinor;
-            }
-          }
-
-          const currentSubtotal =
-            minorToMajor(
-              currentSubtotalMinor,
-              storeProfile.currency,
-            );
-          const currentDiscount =
-            minorToMajor(
-              currentDiscountMinor,
-              storeProfile.currency,
-            );
-          const currentTotal = Math.max(
-            0,
-            currentSubtotal -
-              currentDiscount,
-          );
-
-          transaction.set(
-            orderReference,
-            buildOrderPayload({
-              customer,
-              delivery,
-              items: cleanItems,
-              subtotal:
-                currentSubtotal,
-              discount:
-                currentDiscount,
-              total:
-                currentTotal,
-              offersApplied:
-                appliedOffers,
-            }),
-          );
-        },
+      const quantities = Object.fromEntries(
+        cartItems.map((item) => [
+          item.id,
+          Math.max(0, Math.floor(item.qty)),
+        ]),
       );
 
+      const result = await createPublicOrder({
+        source: "store",
+        sellerId,
+        language,
+        selectedOfferId:
+          selectedOfferId || undefined,
+        quantities,
+        customer: {
+          name: customer.name,
+          phone: customer.phone,
+          email:
+            customer.email || undefined,
+        },
+        delivery: {
+          mode: delivery.mode,
+          date:
+            delivery.date || undefined,
+          time:
+            delivery.time || undefined,
+          address:
+            delivery.address || undefined,
+          locationLink:
+            delivery.locationLink ||
+            undefined,
+          note:
+            delivery.note || undefined,
+        },
+      });
+
       setCreatedOrderId(
-        orderReference.id,
+        result.orderId,
       );
 
       setStep("success");
@@ -1890,32 +1526,21 @@ const showingProducts =
       );
 
       const errorCode =
-        typeof error ===
-          "object" &&
-        error !== null &&
-        "code" in error
-          ? String(
-              (
-                error as {
-                  code?: unknown;
-                }
-              ).code ??
-                "",
-            )
-          : "";
+        getPublicOrderErrorCode(
+          error,
+        );
 
       const message =
-        error instanceof Error &&
-        error.message ===
+        errorCode ===
           "PRODUCT_UNAVAILABLE"
           ? text.stockError
-          : error instanceof Error &&
-              error.message ===
-                "OFFER_UNAVAILABLE"
+          : errorCode ===
+              "OFFER_UNAVAILABLE"
             ? text.offerUnavailable
-            : errorCode.includes(
-                  "permission-denied",
-                )
+            : errorCode ===
+                  "SELLER_UNAVAILABLE" ||
+                errorCode ===
+                  "EVENT_UNAVAILABLE"
               ? text.permissionError
               : text.orderError;
 
