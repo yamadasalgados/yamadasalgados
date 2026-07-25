@@ -48,6 +48,7 @@ export type CreatePublicOrderResult = {
   subtotal: number;
   discount: number;
   totalAmount: number;
+  orderStatus: "pending" | "ready";
   replayed: boolean;
 };
 

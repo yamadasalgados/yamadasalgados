@@ -160,7 +160,7 @@ const TEXT = {
       "Nenhum produto disponível.",
     emptySearch:
       "Nenhum produto corresponde à busca.",
-    outOfStock: "Esgotado",
+    outOfStock: "Sem estoque imediato — o pedido ficará pendente.",
     stock: "Estoque",
     add: "Adicionar",
     cart: "Carrinho",
@@ -272,7 +272,7 @@ const TEXT = {
       "No products are available.",
     emptySearch:
       "No products match your search.",
-    outOfStock: "Out of stock",
+    outOfStock: "No immediate stock — the order will remain pending.",
     stock: "Stock",
     add: "Add",
     cart: "Cart",
@@ -380,7 +380,7 @@ const TEXT = {
       "販売中の商品はありません。",
     emptySearch:
       "検索条件に一致する商品はありません。",
-    outOfStock: "売り切れ",
+    outOfStock: "即納在庫なし — 注文は保留になります。",
     stock: "在庫",
     add: "追加",
     cart: "カート",
@@ -1363,17 +1363,7 @@ const showingProducts =
         product: Product,
         requestedQty: number,
       ) => {
-        const safeQty =
-          Math.max(
-            0,
-            product.availabilityStatus !== "made_to_order" &&
-            typeof product.stock === "number"
-              ? Math.min(
-                  requestedQty,
-                  Math.max(0, product.stock),
-                )
-              : requestedQty,
-          );
+        const safeQty = Math.max(0, requestedQty);
 
         setCart(
           (current) => {
@@ -2689,7 +2679,7 @@ function StoreProductGrid({
       <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
         {products.map((product) => {
           const qty = cart[product.id] ?? 0;
-          const soldOut =
+          const withoutImmediateStock =
             !madeToOrder &&
             typeof product.stock === "number" &&
             product.stock <= 0;
@@ -2767,11 +2757,13 @@ function StoreProductGrid({
                   </p>
                 ) : null}
 
-                {soldOut ? (
-                  <div className="mt-5 rounded-xl bg-neutral-100 px-4 py-3 text-center font-bold text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">
+                {withoutImmediateStock && (
+                  <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-300">
                     {text.outOfStock}
-                  </div>
-                ) : qty > 0 ? (
+                  </p>
+                )}
+
+                {qty > 0 ? (
                   <QuantitySelector
                     qty={qty}
                     onDecrease={() => onSetQuantity(product, qty - 1)}

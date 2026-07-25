@@ -5,8 +5,8 @@ import {
 } from "react";
 
 import {
-  STORE_ORDER_STATUS,
-} from "@/app/types/store-order";
+  FULFILLMENT_ORDER_STATUS,
+} from "@/app/lib/order-status";
 import {
   getStatusLabel,
   getStoreOrderText,
@@ -124,7 +124,7 @@ export default function StatusActions({
       />
 
       <div className="mt-5 grid gap-3">
-        {STORE_ORDER_STATUS.map(
+        {FULFILLMENT_ORDER_STATUS.map(
           (status) => {
             const selected =
               status ===

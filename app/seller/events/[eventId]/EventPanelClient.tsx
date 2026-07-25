@@ -38,7 +38,7 @@ import type {
   SupportedCurrency,
 } from "@/app/types/regional";
 import {
-  ORDER_STATUS,
+  FULFILLMENT_ORDER_STATUS,
   getOrderStatusLabel,
   isOpenOrderStatus,
   normalizeOrderStatus,
@@ -48,6 +48,8 @@ import {
 // --- 📝 Interfaces de Tipagem Estrita ---
 
 type EventStatus = "active" | "closed" | "cancelled";
+type EventProductMode = "normal" | "made_to_order";
+type ProductSelectionMode = "excluded" | EventProductMode;
 
 type UserDoc = {
   role?: "seller" | "admin";
@@ -73,6 +75,7 @@ type EventDoc = {
   deliveryDates?: string[];
   deliveryDateLabel?: string;
   productIds?: string[];
+  productAvailabilityModes?: Record<string, EventProductMode>;
   featuredProductIds?: string[];
   offerIds?: string[];
   whatsapp?: string;
@@ -172,7 +175,18 @@ function pickImageUrl(p: ProductDoc): string {
   return "";
 }
 
-function buildEventItemPayload(p: ProductDoc) {
+function defaultEventProductMode(product?: ProductDoc): EventProductMode {
+  return product?.status === "made_to_order" ? "made_to_order" : "normal";
+}
+
+function normalizeEventProductMode(
+  value: unknown,
+  fallback: EventProductMode = "normal",
+): EventProductMode {
+  return value === "made_to_order" ? "made_to_order" : value === "normal" ? "normal" : fallback;
+}
+
+function buildEventItemPayload(p: ProductDoc, availabilityMode: EventProductMode) {
   return {
     source: "own",
     productId: p.id,
@@ -182,20 +196,14 @@ function buildEventItemPayload(p: ProductDoc) {
     imageUrl: pickImageUrl(p),
     extraImageUrls: normalizeStringArray(p.extraImageUrls),
     category: String(p.category || ""),
-    status:
-      p.status === "inactive"
-        ? "inactive"
-        : p.status === "made_to_order"
-          ? "made_to_order"
-          : "active",
+    status: "active",
+    sourceProductStatus:
+      p.status === "made_to_order" ? "made_to_order" : "active",
+    availabilityMode,
     availabilityStatus:
-      p.status === "made_to_order"
-        ? "made_to_order"
-        : "active",
+      availabilityMode === "made_to_order" ? "made_to_order" : "active",
     productionMode:
-      p.status === "made_to_order"
-        ? "made_to_order"
-        : "stock",
+      availabilityMode === "made_to_order" ? "made_to_order" : "stock",
     stockQty: toNumberOrUndef(p.stockQty),
     lowStockThreshold: toNumberOrUndef(p.lowStockThreshold),
     updatedAt: serverTimestamp(),
@@ -321,6 +329,7 @@ const [messageSummaries, setMessageSummaries] = useState<Record<string, MessageS
   const [deliveryDatesText, setDeliveryDatesText] = useState("");
 
   const [productIds, setProductIds] = useState<string[]>([]);
+  const [productAvailabilityModes, setProductAvailabilityModes] = useState<Record<string, EventProductMode>>({});
   const [featuredProductIds, setFeaturedProductIds] = useState<string[]>([]);
   const [offerIds, setOfferIds] = useState<string[]>([]);
 
@@ -547,7 +556,36 @@ const [messageSummaries, setMessageSummaries] = useState<Record<string, MessageS
         setPickupNote(String(data.pickupNote || ""));
         setMessengerId(String(data.messengerId || ""));
         setDeliveryDatesText(Array.isArray(data.deliveryDates) ? data.deliveryDates.join("\n") : "");
-        setProductIds(Array.isArray(data.productIds) ? uniqStrings(data.productIds) : []);
+
+        const eventItemsSnapshot = await getDocs(collection(resolved.ref, "items"));
+        const storedModes = data.productAvailabilityModes && typeof data.productAvailabilityModes === "object"
+          ? data.productAvailabilityModes as Record<string, unknown>
+          : {};
+        const loadedModes: Record<string, EventProductMode> = {};
+
+        eventItemsSnapshot.docs.forEach((itemDocument) => {
+          const itemData = itemDocument.data() as Record<string, unknown>;
+          loadedModes[itemDocument.id] = normalizeEventProductMode(
+            itemData.availabilityMode,
+            itemData.availabilityStatus === "made_to_order" ||
+              itemData.productionMode === "made_to_order" ||
+              itemData.status === "made_to_order"
+              ? "made_to_order"
+              : "normal",
+          );
+        });
+
+        Object.entries(storedModes).forEach(([productId, mode]) => {
+          loadedModes[productId] = normalizeEventProductMode(mode, loadedModes[productId] ?? "normal");
+        });
+
+        const loadedProductIds = uniqStrings([
+          ...(Array.isArray(data.productIds) ? data.productIds : []),
+          ...eventItemsSnapshot.docs.map((itemDocument) => itemDocument.id),
+        ]);
+
+        setProductIds(loadedProductIds);
+        setProductAvailabilityModes(loadedModes);
         setFeaturedProductIds(Array.isArray(data.featuredProductIds) ? uniqStrings(data.featuredProductIds) : []);
         setOfferIds(Array.isArray(data.offerIds) ? uniqStrings(data.offerIds) : []);
       } catch (e: any) {
@@ -727,36 +765,58 @@ return validOrders.filter((o) => o.deliveryDate === filterDate);
     });
 
     if (selecting) {
-      setProductIds((current) =>
-        uniqStrings([
-          ...current,
-          ...offer.eligibleProductIds.filter((productId) => productById.has(productId)),
-        ]),
-      );
+      const eligibleIds = offer.eligibleProductIds.filter((productId) => productById.has(productId));
+      setProductIds((current) => uniqStrings([...current, ...eligibleIds]));
+      setProductAvailabilityModes((current) => {
+        const next = { ...current };
+        eligibleIds.forEach((productId) => {
+          if (!next[productId]) next[productId] = defaultEventProductMode(productById.get(productId));
+        });
+        return next;
+      });
     }
   }, [productById, selectedOfferSet]);
 
-  const toggleEventProduct = useCallback((productId: string) => {
-    setProductIds((prev) => {
-      const set = new Set(prev);
-      if (set.has(productId)) {
-        if (requiredProductIds.has(productId)) return prev;
-        set.delete(productId);
-      } else {
-        set.add(productId);
-      }
-      return Array.from(set);
+  const setEventProductMode = useCallback((productId: string, mode: ProductSelectionMode) => {
+    if (mode === "excluded" && requiredProductIds.has(productId)) return;
+
+    setProductIds((current) => {
+      const next = new Set(current);
+      if (mode === "excluded") next.delete(productId);
+      else next.add(productId);
+      return Array.from(next);
+    });
+
+    setProductAvailabilityModes((current) => {
+      const next = { ...current };
+      if (mode === "excluded") delete next[productId];
+      else next[productId] = mode;
+      return next;
     });
   }, [requiredProductIds]);
 
   const selectAllEventProducts = useCallback(() => {
-    setProductIds(allProducts.map((p) => p.id));
+    setProductIds(allProducts.map((product) => product.id));
+    setProductAvailabilityModes(
+      Object.fromEntries(
+        allProducts.map((product) => [product.id, defaultEventProductMode(product)]),
+      ) as Record<string, EventProductMode>,
+    );
   }, [allProducts]);
 
   const clearEventProducts = useCallback(() => {
-    setProductIds(Array.from(requiredProductIds));
+    const requiredIds = Array.from(requiredProductIds);
+    setProductIds(requiredIds);
+    setProductAvailabilityModes(
+      Object.fromEntries(
+        requiredIds.map((productId) => [
+          productId,
+          productAvailabilityModes[productId] ?? defaultEventProductMode(productById.get(productId)),
+        ]),
+      ) as Record<string, EventProductMode>,
+    );
     setFeaturedProductIds([]);
-  }, [requiredProductIds]);
+  }, [productAvailabilityModes, productById, requiredProductIds]);
 
   const applySellerDefaults = useCallback(() => {
     setError(null);
@@ -789,6 +849,12 @@ return validOrders.filter((o) => o.deliveryDate === filterDate);
       ...Array.from(requiredProductIds),
     ]);
     const prodSet = new Set(cleanedProductIds);
+    const cleanedAvailabilityModes = Object.fromEntries(
+      cleanedProductIds.map((productId) => [
+        productId,
+        productAvailabilityModes[productId] ?? defaultEventProductMode(productById.get(productId)),
+      ]),
+    ) as Record<string, EventProductMode>;
     const fixedFeatured = uniqStrings(featuredProductIds).filter((pid) => prodSet.has(pid));
 
     setSaving(true);
@@ -816,7 +882,7 @@ return validOrders.filter((o) => o.deliveryDate === filterDate);
 
         const itemRef = doc(eventRef, "items", productId);
         const payload = stripUndefined({
-          ...buildEventItemPayload(product),
+          ...buildEventItemPayload(product, cleanedAvailabilityModes[productId]),
           createdAt: existingItemIds.has(productId) ? undefined : serverTimestamp(),
         });
 
@@ -865,6 +931,7 @@ return validOrders.filter((o) => o.deliveryDate === filterDate);
         deliveryDates: newDeliveryDates,
         deliveryDateLabel: newDeliveryDates.join(" • "),
         productIds: cleanedProductIds,
+        productAvailabilityModes: cleanedAvailabilityModes,
         featuredProductIds: fixedFeatured,
         offerIds: cleanedOfferIds,
         updatedAt: serverTimestamp(),
@@ -873,6 +940,7 @@ return validOrders.filter((o) => o.deliveryDate === filterDate);
       await batch.commit();
 
       setProductIds(cleanedProductIds);
+      setProductAvailabilityModes(cleanedAvailabilityModes);
       setFeaturedProductIds(fixedFeatured);
       setOfferIds(cleanedOfferIds);
       setSuccess(t("eventPanel.msg.saved"));
@@ -881,7 +949,7 @@ return validOrders.filter((o) => o.deliveryDate === filterDate);
     } finally {
       setSaving(false);
     }
-  }, [eventRef, title, region, whatsapp, status, pickupLink, pickupNote, messengerId, deliveryDatesText, productIds, requiredProductIds, featuredProductIds, allProducts, allOffers, offerIds, authUser?.uid, sellerUid, t]);
+  }, [eventRef, title, region, whatsapp, status, pickupLink, pickupNote, messengerId, deliveryDatesText, productIds, productAvailabilityModes, productById, requiredProductIds, featuredProductIds, allProducts, allOffers, offerIds, authUser?.uid, sellerUid, t]);
 
       const deliveryOrders = useMemo(() => {
   return orders.filter((o) => {
@@ -896,6 +964,7 @@ return validOrders.filter((o) => o.deliveryDate === filterDate);
     try {
       await updateDoc(doc(eventRef, "orders", orderId), {
         status: nextStatus,
+        fulfillmentStatus: nextStatus,
         deliveredAt: nextStatus === "delivered" ? serverTimestamp() : null,
         sellerUnread: false,
         sellerReadAt: serverTimestamp(),
@@ -1449,32 +1518,39 @@ const markOrderMessagesAsRead = useCallback(
             ) : (
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 max-h-[520px] overflow-y-auto pr-1 scrollbar-none">
                 {allProducts.map((p) => {
-                  const checked = selectedProductSet.has(p.id);
+                  const selected = selectedProductSet.has(p.id);
+                  const mode: ProductSelectionMode = selected
+                    ? productAvailabilityModes[p.id] ?? defaultEventProductMode(p)
+                    : "excluded";
                   const img = pickImageUrl(p);
+                  const required = requiredProductIds.has(p.id);
+                  const labels = lang === "ja"
+                    ? { excluded: "含めない", normal: "通常販売", madeToOrder: "予約のみ" }
+                    : lang === "en"
+                      ? { excluded: "Do not include", normal: "Regular sale", madeToOrder: "Made to order" }
+                      : { excluded: "Não incluir", normal: "Venda normal", madeToOrder: "Somente encomenda" };
 
                   return (
-                    <label
+                    <div
                       key={p.id}
-                      className={`group border rounded-2xl p-3 cursor-pointer transition-all flex flex-col justify-between h-[210px] relative ${
-                        checked
-                          ? "border-black bg-white dark:border-white dark:bg-neutral-900 shadow-md ring-2 ring-black dark:ring-white"
+                      className={`group border rounded-2xl p-3 transition-all flex flex-col justify-between min-h-[245px] relative ${
+                        selected
+                          ? mode === "made_to_order"
+                            ? "border-violet-500 bg-white dark:bg-neutral-900 shadow-md ring-2 ring-violet-500/30"
+                            : "border-black bg-white dark:border-white dark:bg-neutral-900 shadow-md ring-2 ring-black dark:ring-white"
                           : "border-neutral-200 bg-white dark:border-neutral-800/40 dark:bg-neutral-900"
                       }`}
                     >
                       <div className="flex items-center justify-between z-10">
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={() => toggleEventProduct(p.id)}
-                          disabled={saving}
-                          className="accent-black dark:accent-white h-4 w-4 rounded-md"
-                        />
-
-                        {checked && (
-                          <span className="text-[9px] font-black tracking-wider px-2 py-0.5 rounded-full bg-black text-white dark:bg-white dark:text-black uppercase">
-                            OK
-                          </span>
-                        )}
+                        <span className={`text-[9px] font-black tracking-wider px-2 py-0.5 rounded-full uppercase ${
+                          mode === "made_to_order"
+                            ? "bg-violet-600 text-white"
+                            : selected
+                              ? "bg-black text-white dark:bg-white dark:text-black"
+                              : "bg-neutral-100 text-neutral-400 dark:bg-neutral-800"
+                        }`}>
+                          {mode === "made_to_order" ? labels.madeToOrder : selected ? labels.normal : labels.excluded}
+                        </span>
                       </div>
 
                       <div className="absolute inset-x-3 top-10 h-[100px] rounded-xl overflow-hidden bg-neutral-100 dark:bg-neutral-800 border border-neutral-200/10">
@@ -1487,21 +1563,50 @@ const markOrderMessagesAsRead = useCallback(
                         )}
                       </div>
 
-                      <div className="space-y-0.5 pt-2">
-                        <p className="text-xs font-black text-neutral-900 dark:text-white truncate tracking-tight">{p.name}</p>
-                        <p className="text-[10px] font-bold text-neutral-400 truncate">
-                          {yen(Number(p.price || 0))} {p.category ? `• ${p.category}` : ""}
-                        </p>
-                        {requiredProductIds.has(p.id) && (
-                          <p className="text-[9px] font-black uppercase tracking-wider text-orange-500">
-                            {lang === "ja" ? "セット必須" : lang === "en" ? "Required by kit" : "Obrigatório pelo kit"}
+                      <div className="space-y-2 pt-[112px]">
+                        <div>
+                          <p className="text-xs font-black text-neutral-900 dark:text-white truncate tracking-tight">{p.name}</p>
+                          <p className="text-[10px] font-bold text-neutral-400 truncate">
+                            {yen(Number(p.price || 0))} {p.category ? `• ${p.category}` : ""}
                           </p>
-                        )}
-                        <p className="text-[10px] font-black text-neutral-400">
-                          {lang === "ja" ? "在庫: " : lang === "en" ? "Stock: " : "Estoque: "}{p.stockQty ?? "—"}
-                        </p>
+                          {required && (
+                            <p className="mt-1 text-[9px] font-black uppercase tracking-wider text-orange-500">
+                              {lang === "ja" ? "セット必須" : lang === "en" ? "Required by kit" : "Obrigatório pelo kit"}
+                            </p>
+                          )}
+                          <p className="text-[10px] font-black text-neutral-400">
+                            {lang === "ja" ? "在庫: " : lang === "en" ? "Stock: " : "Estoque: "}{p.stockQty ?? "—"}
+                          </p>
+                        </div>
+
+                        <div className="grid grid-cols-3 gap-1">
+                          <button
+                            type="button"
+                            onClick={() => setEventProductMode(p.id, "excluded")}
+                            disabled={saving || required}
+                            className={`min-h-9 rounded-lg px-1 text-[9px] font-black transition disabled:cursor-not-allowed disabled:opacity-30 ${mode === "excluded" ? "bg-neutral-800 text-white dark:bg-white dark:text-black" : "bg-neutral-100 text-neutral-500 dark:bg-neutral-800"}`}
+                          >
+                            {labels.excluded}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setEventProductMode(p.id, "normal")}
+                            disabled={saving}
+                            className={`min-h-9 rounded-lg px-1 text-[9px] font-black transition ${mode === "normal" ? "bg-black text-white dark:bg-white dark:text-black" : "bg-neutral-100 text-neutral-500 dark:bg-neutral-800"}`}
+                          >
+                            {labels.normal}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setEventProductMode(p.id, "made_to_order")}
+                            disabled={saving}
+                            className={`min-h-9 rounded-lg px-1 text-[9px] font-black transition ${mode === "made_to_order" ? "bg-violet-600 text-white" : "bg-violet-50 text-violet-700 dark:bg-violet-950/30 dark:text-violet-300"}`}
+                          >
+                            {labels.madeToOrder}
+                          </button>
+                        </div>
                       </div>
-                    </label>
+                    </div>
                   );
                 })}
               </div>
@@ -1606,7 +1711,7 @@ function OrderGroup({
                   className="border border-neutral-200 dark:border-neutral-800 rounded-xl px-3 py-1.5 text-xs bg-white dark:bg-neutral-900 font-bold text-neutral-900 dark:text-white"
                   disabled={eventStatus === "cancelled"}
                 >
-                  {ORDER_STATUS.map((statusOption) => (
+                  {FULFILLMENT_ORDER_STATUS.map((statusOption) => (
                     <option
                       key={statusOption}
                       value={statusOption}

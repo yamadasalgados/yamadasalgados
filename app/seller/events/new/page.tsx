@@ -38,6 +38,8 @@ import type {
 
 type DeliveryChoice = "delivery" | "pickup" | "both";
 type ProductStatus = "active" | "inactive" | "made_to_order";
+type EventProductMode = "normal" | "made_to_order";
+type ProductSelectionMode = "excluded" | EventProductMode;
 
 type UserDoc = {
   role?: "seller" | "admin";
@@ -115,6 +117,10 @@ function pickImageUrl(p: ProductDoc): string {
   return "";
 }
 
+function defaultEventProductMode(product?: ProductDoc): EventProductMode {
+  return product?.status === "made_to_order" ? "made_to_order" : "normal";
+}
+
 export default function CreateNewEventPage() {
   const router = useRouter();
   const { t, lang } = useI18n();
@@ -133,7 +139,7 @@ export default function CreateNewEventPage() {
 
   const [ownProducts, setOwnProducts] = useState<ProductDoc[]>([]);
   const [loadingProducts, setLoadingProducts] = useState(false);
-  const [selectedOwn, setSelectedOwn] = useState<Record<string, boolean>>({});
+  const [selectedOwn, setSelectedOwn] = useState<Record<string, ProductSelectionMode>>({});
   const [ownOffers, setOwnOffers] = useState<OfferDoc[]>([]);
   const [selectedOfferIds, setSelectedOfferIds] = useState<Record<string, boolean>>({});
   const [loadingOffers, setLoadingOffers] = useState(false);
@@ -160,7 +166,7 @@ export default function CreateNewEventPage() {
   );
 
   const pickedCount = useMemo(() => {
-    return Object.values(selectedOwn).filter(Boolean).length;
+    return Object.values(selectedOwn).filter((mode) => mode !== "excluded").length;
   }, [selectedOwn]);
 
   const productById = useMemo(
@@ -359,30 +365,38 @@ export default function CreateNewEventPage() {
       setSelectedOwn((current) => {
         const next = { ...current };
         offer.eligibleProductIds.forEach((productId) => {
-          if (productById.has(productId)) next[productId] = true;
+          const product = productById.get(productId);
+          if (!product) return;
+          if (!next[productId] || next[productId] === "excluded") {
+            next[productId] = defaultEventProductMode(product);
+          }
         });
         return next;
       });
     }
   };
 
-  const toggleOwn = (id: string) => {
-    if (selectedOwn[id] && requiredProductIds.has(id)) return;
-    setSelectedOwn((prev) => ({ ...prev, [id]: !prev[id] }));
+  const setOwnMode = (id: string, mode: ProductSelectionMode) => {
+    if (mode === "excluded" && requiredProductIds.has(id)) return;
+
+    setSelectedOwn((current) => ({
+      ...current,
+      [id]: mode,
+    }));
   };
 
   const selectAllOwn = () => {
-    const next: Record<string, boolean> = {};
-    ownProducts.forEach((p) => {
-      next[p.id] = true;
+    const next: Record<string, ProductSelectionMode> = {};
+    ownProducts.forEach((product) => {
+      next[product.id] = defaultEventProductMode(product);
     });
     setSelectedOwn(next);
   };
 
   const clearOwn = () => {
-    const next: Record<string, boolean> = {};
+    const next: Record<string, ProductSelectionMode> = {};
     requiredProductIds.forEach((productId) => {
-      next[productId] = true;
+      next[productId] = defaultEventProductMode(productById.get(productId));
     });
     setSelectedOwn(next);
   };
@@ -427,8 +441,14 @@ export default function CreateNewEventPage() {
       const allowPickup = deliveryChoice === "pickup" || deliveryChoice === "both";
 
       const pickedOwnIds = Object.entries(selectedOwn)
-        .filter(([, v]) => v)
-        .map(([k]) => k);
+        .filter(([, mode]) => mode !== "excluded")
+        .map(([productId]) => productId);
+      const productAvailabilityModes = Object.fromEntries(
+        pickedOwnIds.map((productId) => [
+          productId,
+          selectedOwn[productId] === "made_to_order" ? "made_to_order" : "normal",
+        ]),
+      ) as Record<string, EventProductMode>;
 
       const eventPayload: any = {
         sellerId,
@@ -442,6 +462,7 @@ export default function CreateNewEventPage() {
         name: titleTrim,
         isActive: true,
         productIds: pickedOwnIds,
+        productAvailabilityModes,
         offerIds: selectedOffers.map((offer) => offer.id),
         currency,
         regionalLocale,
@@ -462,6 +483,7 @@ export default function CreateNewEventPage() {
         const p = ownById.get(pid);
         if (!p) continue;
 
+        const availabilityMode = productAvailabilityModes[pid] ?? defaultEventProductMode(p);
         const base = {
           source: "own",
           productId: pid,
@@ -473,9 +495,11 @@ export default function CreateNewEventPage() {
           imageUrl: pickImageUrl(p),
           extraImageUrls: normalizeStringArray(p.extraImageUrls),
           category: String(p.category || ""),
-          status: p.status,
-          availabilityStatus: p.status === "made_to_order" ? "made_to_order" : "active",
-          productionMode: p.status === "made_to_order" ? "made_to_order" : "stock",
+          status: "active",
+          sourceProductStatus: p.status ?? "active",
+          availabilityMode,
+          availabilityStatus: availabilityMode === "made_to_order" ? "made_to_order" : "active",
+          productionMode: availabilityMode === "made_to_order" ? "made_to_order" : "stock",
           stockQty: toNumberOrUndef(p.stockQty),
           lowStockThreshold: toNumberOrUndef(p.lowStockThreshold),
           createdAt: serverTimestamp(),
@@ -819,30 +843,36 @@ export default function CreateNewEventPage() {
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 max-h-[460px] overflow-y-auto pr-1 scrollbar-none">
               {ownProducts.map((p) => {
                 const img = pickImageUrl(p);
-                const checked = !!selectedOwn[p.id];
+                const mode = selectedOwn[p.id] ?? "excluded";
+                const selected = mode !== "excluded";
+                const required = requiredProductIds.has(p.id);
+                const labels = lang === "ja"
+                  ? { excluded: "含めない", normal: "通常販売", madeToOrder: "予約のみ" }
+                  : lang === "en"
+                    ? { excluded: "Do not include", normal: "Regular sale", madeToOrder: "Made to order" }
+                    : { excluded: "Não incluir", normal: "Venda normal", madeToOrder: "Somente encomenda" };
 
                 return (
-                  <label
+                  <div
                     key={p.id}
-                    className={`group border rounded-2xl p-3 cursor-pointer transition-all flex flex-col justify-between h-[210px] relative ${
-                      checked
-                        ? "border-black bg-white dark:border-white dark:bg-neutral-900 shadow-md ring-2 ring-black dark:ring-white"
+                    className={`group border rounded-2xl p-3 transition-all flex flex-col justify-between min-h-[245px] relative ${
+                      selected
+                        ? mode === "made_to_order"
+                          ? "border-violet-500 bg-white dark:bg-neutral-900 shadow-md ring-2 ring-violet-500/30"
+                          : "border-black bg-white dark:border-white dark:bg-neutral-900 shadow-md ring-2 ring-black dark:ring-white"
                         : "border-neutral-200 bg-white dark:border-neutral-800/40 dark:bg-neutral-900"
                     }`}
                   >
                     <div className="flex items-center justify-between z-10">
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={() => toggleOwn(p.id)}
-                        className="accent-black dark:accent-white h-4 w-4 rounded-md"
-                      />
-
-                      {checked && (
-                        <span className="text-[9px] font-black tracking-wider px-2 py-0.5 rounded-full bg-black text-white dark:bg-white dark:text-black uppercase">
-                          OK
-                        </span>
-                      )}
+                      <span className={`text-[9px] font-black tracking-wider px-2 py-0.5 rounded-full uppercase ${
+                        mode === "made_to_order"
+                          ? "bg-violet-600 text-white"
+                          : selected
+                            ? "bg-black text-white dark:bg-white dark:text-black"
+                            : "bg-neutral-100 text-neutral-400 dark:bg-neutral-800"
+                      }`}>
+                        {mode === "made_to_order" ? labels.madeToOrder : selected ? labels.normal : labels.excluded}
+                      </span>
                     </div>
 
                     <div className="absolute inset-x-3 top-10 h-[100px] rounded-xl overflow-hidden bg-neutral-100 dark:bg-neutral-800 border border-neutral-200/10">
@@ -859,21 +889,45 @@ export default function CreateNewEventPage() {
                       )}
                     </div>
 
-                    <div className="space-y-0.5 pt-2">
-                      <p className="text-xs font-black text-neutral-900 dark:text-white truncate tracking-tight">
-                        {p.name}
-                      </p>
-
-                      <p className="text-[10px] font-bold text-neutral-400 truncate">
-                        {money(p.price)} {p.category ? `• ${p.category}` : ""}
-                      </p>
-                      {requiredProductIds.has(p.id) && (
-                        <p className="text-[9px] font-black uppercase tracking-wider text-orange-500">
-                          {lang === "ja" ? "セット必須" : lang === "en" ? "Required by kit" : "Obrigatório pelo kit"}
+                    <div className="space-y-2 pt-[112px]">
+                      <div>
+                        <p className="text-xs font-black text-neutral-900 dark:text-white truncate tracking-tight">{p.name}</p>
+                        <p className="text-[10px] font-bold text-neutral-400 truncate">
+                          {money(p.price)} {p.category ? `• ${p.category}` : ""}
                         </p>
-                      )}
+                        {required && (
+                          <p className="mt-1 text-[9px] font-black uppercase tracking-wider text-orange-500">
+                            {lang === "ja" ? "セット必須" : lang === "en" ? "Required by kit" : "Obrigatório pelo kit"}
+                          </p>
+                        )}
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-1">
+                        <button
+                          type="button"
+                          onClick={() => setOwnMode(p.id, "excluded")}
+                          disabled={required}
+                          className={`min-h-9 rounded-lg px-1 text-[9px] font-black transition disabled:cursor-not-allowed disabled:opacity-30 ${mode === "excluded" ? "bg-neutral-800 text-white dark:bg-white dark:text-black" : "bg-neutral-100 text-neutral-500 dark:bg-neutral-800"}`}
+                        >
+                          {labels.excluded}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setOwnMode(p.id, "normal")}
+                          className={`min-h-9 rounded-lg px-1 text-[9px] font-black transition ${mode === "normal" ? "bg-black text-white dark:bg-white dark:text-black" : "bg-neutral-100 text-neutral-500 dark:bg-neutral-800"}`}
+                        >
+                          {labels.normal}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setOwnMode(p.id, "made_to_order")}
+                          className={`min-h-9 rounded-lg px-1 text-[9px] font-black transition ${mode === "made_to_order" ? "bg-violet-600 text-white" : "bg-violet-50 text-violet-700 dark:bg-violet-950/30 dark:text-violet-300"}`}
+                        >
+                          {labels.madeToOrder}
+                        </button>
+                      </div>
                     </div>
-                  </label>
+                  </div>
                 );
               })}
             </div>

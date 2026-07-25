@@ -36,10 +36,12 @@ import {
 import useSellerId from "@/app/hooks/useSellerId";
 
 import {
-  STORE_ORDER_STATUS,
   type StoreOrder,
   type StoreOrderStatus,
 } from "@/app/types/store-order";
+import {
+  FULFILLMENT_ORDER_STATUS,
+} from "@/app/lib/order-status";
 
 type FilterKey =
   | "active"
@@ -332,7 +334,7 @@ export default function StoreOrdersClient() {
             ? "Active"
             : "Ativos",
     },
-    ...STORE_ORDER_STATUS.map(
+    ...FULFILLMENT_ORDER_STATUS.map(
       (status) => ({
         key: status,
         label: getStatusLabel(

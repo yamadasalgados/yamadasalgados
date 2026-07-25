@@ -34,7 +34,7 @@ import type {
 // --- 📝 Interfaces de Tipagem Estrita (TypeScript) ---
 
 type EventStatus = "active" | "closed" | "cancelled";
-type OrderStatus = "pending" | "confirmed" | "delivered" | "cancelled";
+type OrderStatus = "pending" | "ready" | "delivered" | "cancelled";
 
 type UserDoc = {
   role?: "seller" | "admin";
@@ -102,7 +102,7 @@ type ChatMessage = {
 
 function normOrderStatus(s: any): OrderStatus {
   const st = String(s || "pending");
-  if (st === "pending" || st === "confirmed" || st === "delivered" || st === "cancelled") return st;
+  if (st === "ready" || st === "delivered" || st === "cancelled") return st;
   return "pending";
 }
 
@@ -451,6 +451,7 @@ export default function OrderDetailClient({ eventId, orderId }: { eventId: strin
       try {
         await updateDoc(doc(eventRef, "orders", safeOrderId), {
           status: next,
+          fulfillmentStatus: next,
           deliveredAt: next === "delivered" ? serverTimestamp() : null,
           updatedAt: serverTimestamp(),
         });
@@ -548,7 +549,7 @@ export default function OrderDetailClient({ eventId, orderId }: { eventId: strin
           </Link>
           <select value={orderStatus} onChange={(e) => handleSetOrderStatus(e.target.value as OrderStatus)} disabled={saving} className="border border-neutral-200 dark:border-neutral-800 rounded-xl px-4 py-3 text-xs font-black bg-white dark:bg-neutral-900 text-neutral-900 dark:text-white focus:outline-none">
             <option value="pending">{t("eventPanel.orderStatus.pending")}</option>
-            <option value="confirmed">{t("eventPanel.orderStatus.confirmed")}</option>
+            <option value="ready">{t("eventPanel.orderStatus.ready")}</option>
             <option value="delivered">{t("eventPanel.orderStatus.delivered")}</option>
             <option value="cancelled">{t("eventPanel.orderStatus.cancelled")}</option>
           </select>

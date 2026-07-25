@@ -83,8 +83,13 @@ type ProductLine = {
   name: string;
   imageUrl: string;
   category: string;
+  availabilityMode: "normal" | "made_to_order";
   availabilityStatus: "active" | "made_to_order";
   productionMode: "stock" | "made_to_order";
+  inventoryTracked: boolean;
+  stockAvailable: number | null;
+  stockShortage: number;
+  stockState: "available" | "insufficient" | "not_tracked" | "made_to_order";
 };
 
 type EventOffer = {
@@ -356,10 +361,20 @@ function normalizeProductLine(params: {
     source,
   } = params;
 
+  const explicitAvailabilityMode = cleanString(
+    raw.availabilityMode,
+    40,
+  );
   const madeToOrder =
-    raw.status === "made_to_order" ||
-    raw.availabilityStatus === "made_to_order" ||
-    raw.productionMode === "made_to_order";
+    explicitAvailabilityMode === "made_to_order" ||
+    (
+      explicitAvailabilityMode !== "normal" &&
+      (
+        raw.status === "made_to_order" ||
+        raw.availabilityStatus === "made_to_order" ||
+        raw.productionMode === "made_to_order"
+      )
+    );
 
   const status = cleanString(raw.status, 40);
   const disabled =
@@ -400,18 +415,21 @@ function normalizeProductLine(params: {
           ? raw.stock
           : null;
 
-  if (
-    !madeToOrder &&
-    inventoryTracked &&
-    stockCandidate !== null &&
-    Number.isFinite(stockCandidate) &&
-    stockCandidate < quantity
-  ) {
-    throw new OrderError(
-      "PRODUCT_UNAVAILABLE",
-      "A quantidade disponível de um dos produtos foi alterada.",
-    );
-  }
+  const normalizedStock =
+    stockCandidate !== null && Number.isFinite(stockCandidate)
+      ? Math.max(0, Math.floor(stockCandidate))
+      : null;
+  const stockShortage =
+    !madeToOrder && inventoryTracked && normalizedStock !== null
+      ? Math.max(0, quantity - normalizedStock)
+      : 0;
+  const stockState: ProductLine["stockState"] = madeToOrder
+    ? "made_to_order"
+    : !inventoryTracked || normalizedStock === null
+      ? "not_tracked"
+      : stockShortage > 0
+        ? "insufficient"
+        : "available";
 
   const fallbackName = source === "event" ? productId : `Produto ${productId}`;
 
@@ -422,8 +440,13 @@ function normalizeProductLine(params: {
     name: resolveLocalizedName(raw, language, defaultLanguage, fallbackName),
     imageUrl: cleanString(raw.imageUrl ?? raw.image, 2000),
     category: cleanString(raw.category ?? raw.categoryName, 160),
+    availabilityMode: madeToOrder ? "made_to_order" : "normal",
     availabilityStatus: madeToOrder ? "made_to_order" : "active",
     productionMode: madeToOrder ? "made_to_order" : "stock",
+    inventoryTracked,
+    stockAvailable: normalizedStock,
+    stockShortage,
+    stockState,
   };
 }
 
@@ -612,6 +635,7 @@ function resultResponse(params: {
   subtotalMinor: number;
   discountMinor: number;
   totalAmountMinor: number;
+  orderStatus: "pending" | "ready";
   replayed: boolean;
 }) {
   return {
@@ -626,6 +650,7 @@ function resultResponse(params: {
     subtotal: minorToMajor(params.subtotalMinor, params.currency),
     discount: minorToMajor(params.discountMinor, params.currency),
     totalAmount: minorToMajor(params.totalAmountMinor, params.currency),
+    orderStatus: params.orderStatus,
     replayed: params.replayed,
   };
 }
@@ -739,6 +764,7 @@ export async function POST(request: NextRequest) {
           subtotalMinor: cleanInteger(markerData.subtotalMinor, 0, 2_000_000_000),
           discountMinor: cleanInteger(markerData.discountMinor, 0, 2_000_000_000),
           totalAmountMinor: cleanInteger(markerData.totalAmountMinor, 0, 2_000_000_000),
+          orderStatus: markerData.orderStatus === "ready" ? "ready" : "pending",
           replayed: true,
         });
       }
@@ -882,6 +908,18 @@ export async function POST(request: NextRequest) {
 
       discountMinor = Math.min(subtotalMinor, Math.max(0, discountMinor));
       const totalAmountMinor = Math.max(0, subtotalMinor - discountMinor);
+      const hasMadeToOrderItems = lines.some(
+        (line) => line.availabilityMode === "made_to_order",
+      );
+      const hasStockShortage = lines.some(
+        (line) => line.stockShortage > 0,
+      );
+      const initialOrderStatus: "pending" | "ready" =
+        hasMadeToOrderItems || hasStockShortage ? "pending" : "ready";
+      const readinessReasonCodes = [
+        ...(hasMadeToOrderItems ? ["made_to_order"] : []),
+        ...(hasStockShortage ? ["stock_shortage"] : []),
+      ];
       const items = lines.map((line) => ({
         productId: line.productId,
         name: line.name,
@@ -893,8 +931,13 @@ export async function POST(request: NextRequest) {
         subtotal: minorToMajor(line.priceMinor * line.quantity, currency),
         imageUrl: line.imageUrl,
         category: line.category,
+        availabilityMode: line.availabilityMode,
         availabilityStatus: line.availabilityStatus,
         productionMode: line.productionMode,
+        inventoryTracked: line.inventoryTracked,
+        stockAvailable: line.stockAvailable,
+        stockShortage: line.stockShortage,
+        stockState: line.stockState,
       }));
       const quantities = Object.fromEntries(
         lines.map((line) => [line.productId, line.quantity]),
@@ -924,7 +967,13 @@ export async function POST(request: NextRequest) {
         totalAmount: minorToMajor(totalAmountMinor, currency),
         offersApplied,
         selectedOfferId: clean.selectedOfferId || null,
-        status: "pending",
+        status: initialOrderStatus,
+        fulfillmentStatus: initialOrderStatus,
+        readiness: {
+          hasMadeToOrderItems,
+          hasStockShortage,
+          reasonCodes: readinessReasonCodes,
+        },
         channel: clean.source === "store" ? "store" : "pwa",
         deliveryMode: clean.delivery.mode,
         deliveryDate: clean.delivery.date || null,
@@ -939,9 +988,13 @@ export async function POST(request: NextRequest) {
         sellerReadAt: null,
         history: [
           {
-            status: "pending",
+            status: initialOrderStatus,
             createdAt: now,
             updatedBy: "public-order-api",
+            note:
+              initialOrderStatus === "pending"
+                ? readinessReasonCodes.join(",")
+                : "stock_available",
           },
         ],
         createdAt: now,
@@ -963,6 +1016,7 @@ export async function POST(request: NextRequest) {
         subtotalMinor,
         discountMinor,
         totalAmountMinor,
+        orderStatus: initialOrderStatus,
         status: "completed",
         createdAt: now,
         expiresAt: admin.firestore.Timestamp.fromMillis(
@@ -978,6 +1032,7 @@ export async function POST(request: NextRequest) {
         subtotalMinor,
         discountMinor,
         totalAmountMinor,
+        orderStatus: initialOrderStatus,
         replayed: false,
       });
     });

@@ -82,6 +82,7 @@ type ProductImageData = {
   stockQty?: number;
   lowStockThreshold?: number;
   status?: ProductStatus;
+  availabilityMode: "normal" | "made_to_order";
   availabilityStatus: "active" | "made_to_order";
   productionMode: "stock" | "made_to_order";
 };
@@ -171,22 +172,28 @@ function mapProductSnapToData(
           ? Math.max(0, Math.floor(docData.lowStockThreshold))
           : undefined;
 
+    const explicitAvailabilityMode =
+      docData.availabilityMode === "made_to_order"
+        ? "made_to_order"
+        : docData.availabilityMode === "normal"
+          ? "normal"
+          : null;
     const madeToOrder =
-      docData.status === "made_to_order" ||
-      docData.availabilityStatus === "made_to_order" ||
-      docData.productionMode === "made_to_order";
+      explicitAvailabilityMode === "made_to_order" ||
+      (
+        explicitAvailabilityMode === null &&
+        (
+          docData.status === "made_to_order" ||
+          docData.availabilityStatus === "made_to_order" ||
+          docData.productionMode === "made_to_order"
+        )
+      );
     const rawStatus: ProductStatus =
-      docData.status === "inactive"
+      docData.status === "inactive" || docData.enabled === false
         ? "inactive"
         : madeToOrder
           ? "made_to_order"
           : "active";
-    const isOutOfStock =
-      !madeToOrder &&
-      tracked &&
-      typeof stockQty === "number"
-        ? stockQty <= 0
-        : false;
     const priceMinor =
       typeof docData.priceMinor === "number" &&
       Number.isFinite(docData.priceMinor)
@@ -223,9 +230,8 @@ function mapProductSnapToData(
       ),
       stockQty,
       lowStockThreshold,
-      status: isOutOfStock
-        ? "inactive"
-        : rawStatus,
+      status: rawStatus,
+      availabilityMode: madeToOrder ? "made_to_order" : "normal",
       availabilityStatus: madeToOrder
         ? "made_to_order"
         : "active",
@@ -293,6 +299,7 @@ async function fetchEventPublishedProducts(
         price: 0,
         priceMinor: 0,
         status: "active",
+        availabilityMode: "normal",
         availabilityStatus: "active",
         productionMode: "stock",
       };
@@ -385,25 +392,41 @@ const uiLocale =
     });
   }, [event, productsData, locale]);
 
+  const normalProductIds = useMemo(
+    () => sortedProductIds.filter((productId) =>
+      productsData[productId]?.status !== "inactive" &&
+      productsData[productId]?.availabilityMode !== "made_to_order"
+    ),
+    [productsData, sortedProductIds],
+  );
+
+  const madeToOrderProductIds = useMemo(
+    () => sortedProductIds.filter((productId) =>
+      productsData[productId]?.status !== "inactive" &&
+      productsData[productId]?.availabilityMode === "made_to_order"
+    ),
+    [productsData, sortedProductIds],
+  );
+
   const dynamicCategories = useMemo(() => {
     const set = new Set<string>();
-    for (const pid of sortedProductIds) {
+    for (const pid of normalProductIds) {
       const c = productsData[pid]?.category;
       if (typeof c === "string" && c.trim()) set.add(c.trim());
     }
-return Array.from(set).sort((a, b) => a.localeCompare(b, locale));
-  }, [sortedProductIds, productsData, locale]);
+    return Array.from(set).sort((a, b) => a.localeCompare(b, locale));
+  }, [normalProductIds, productsData, locale]);
 
   const uncategorized = useMemo(
-    () => sortedProductIds.filter((pid) => !productsData[pid]?.category),
-    [sortedProductIds, productsData]
+    () => normalProductIds.filter((pid) => !productsData[pid]?.category),
+    [normalProductIds, productsData],
   );
 
-  const visibleProductIds = useMemo(() => {
-    if (activeCategory === "__all__") return sortedProductIds;
+  const visibleNormalProductIds = useMemo(() => {
+    if (activeCategory === "__all__") return normalProductIds;
     if (activeCategory === "__other__") return uncategorized;
-    return sortedProductIds.filter((pid) => (productsData[pid]?.category || "") === activeCategory);
-  }, [sortedProductIds, productsData, activeCategory, uncategorized]);
+    return normalProductIds.filter((pid) => (productsData[pid]?.category || "") === activeCategory);
+  }, [normalProductIds, productsData, activeCategory, uncategorized]);
 
   const totalItems = useMemo(() => {
     return orderableIds.reduce((sum, pid) => sum + (quantities[pid] || 0), 0);
@@ -494,21 +517,10 @@ return Array.from(set).sort((a, b) => a.localeCompare(b, locale));
 
         if (next < 0) return prev;
 
-        const product = productsData[productId];
-        const stock = product?.stockQty;
-        if (
-          product?.availabilityStatus !== "made_to_order" &&
-          typeof stock === "number" &&
-          Number.isFinite(stock) &&
-          next > stock
-        ) {
-          return { ...prev, [productId]: stock };
-        }
-
         return { ...prev, [productId]: next };
       });
     },
-    [productsData]
+    []
   );
 
   const handleGetLocation = useCallback(() => {
@@ -988,10 +1000,10 @@ return Array.from(set).sort((a, b) => a.localeCompare(b, locale));
         <div className="flex items-center justify-between border-b border-neutral-100 dark:border-neutral-800/60 pb-2">
           <div>
             <h2 className="text-sm font-black uppercase tracking-widest text-neutral-400">
-              {tr("event.products.title", "1. Escolha os produtos")}
+              {tr("event.products.title", "1. Produtos disponíveis")}
             </h2>
             <p className="text-[11px] font-bold text-neutral-400 mt-1">
-              {tr("event.products.subtitle", "Use + e - para definir a quantidade de cada item.")}
+              {tr("event.products.subtitle", "Escolha os itens de venda normal. Pedidos acima do estoque ficam pendentes.")}
             </p>
           </div>
         </div>
@@ -1014,100 +1026,45 @@ return Array.from(set).sort((a, b) => a.localeCompare(b, locale));
           )}
         </div>
 
-        {visibleProductIds.length === 0 ? (
-          <div className="rounded-3xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-6 text-center">
-            <p className="text-sm font-bold text-neutral-500">
-              {tr("event.products.empty", "Nenhum produto disponível neste evento.")}
+        <EventProductGrid
+          productIds={visibleNormalProductIds}
+          productsData={productsData}
+          quantities={quantities}
+          currency={currency}
+          locale={locale}
+          eventClosed={eventClosed}
+          madeToOrder={false}
+          onAdjust={adjustQuantity}
+          tr={tr}
+          emptyMessage={tr("event.products.empty", "Nenhum produto normal disponível neste evento.")}
+        />
+      </section>
+
+      {madeToOrderProductIds.length > 0 && (
+        <section className="space-y-4 border-t border-violet-200 pt-6 dark:border-violet-900/50">
+          <div>
+            <h2 className="text-sm font-black uppercase tracking-widest text-violet-600 dark:text-violet-300">
+              {tr("event.products.made_to_order_title", "Produtos sob encomenda")}
+            </h2>
+            <p className="mt-1 text-[11px] font-bold text-neutral-400">
+              {tr("event.products.made_to_order_help", "Disponíveis somente para quem reservar antecipadamente.")}
             </p>
           </div>
-        ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-            {visibleProductIds.map((pid) => {
-              const info = productsData[pid];
-              const name = info?.name || pid;
-              const qty = quantities[pid] ?? 0;
-              const stock = typeof info?.stockQty === "number" ? info.stockQty : null;
-              const madeToOrder = info?.availabilityStatus === "made_to_order";
-              const isOutOfStock = !madeToOrder && stock !== null && stock <= 0;
 
-              return (
-                <div
-                  key={pid}
-                  className={cn(
-                    "border border-neutral-200 dark:border-neutral-800 rounded-3xl bg-white dark:bg-neutral-900 p-4 flex flex-col justify-between min-h-[220px] shadow-sm animate-fade-in hover:shadow-md transition",
-                    qty > 0 && "ring-2 ring-black dark:ring-white"
-                  )}
-                >
-                  <div className="space-y-2">
-                    <div className="aspect-[4/3] rounded-2xl bg-neutral-50 dark:bg-neutral-800 border border-neutral-100 dark:border-neutral-700 overflow-hidden flex items-center justify-center">
-                      {info?.imageUrl ? (
-                        <img src={info.imageUrl} alt={name} className="h-full w-full object-cover" />
-                      ) : (
-                        <span className="text-[10px] text-neutral-400 font-black uppercase">
-                          {tr("event.product.no_image", "Sem imagem")}
-                        </span>
-                      )}
-                    </div>
-
-                    <div className="space-y-0.5">
-                      <h4 className="text-sm font-black text-neutral-900 dark:text-white tracking-tight truncate">{name}</h4>
-
-                      <p className="text-xs font-black text-neutral-600 dark:text-neutral-400">
-                        {formatMoneyMinor(info?.priceMinor || 0, currency, locale)}
-                      </p>
-
-                      {madeToOrder && (
-                        <span className="inline-flex rounded-full bg-violet-100 px-2 py-1 text-[9px] font-black uppercase tracking-wider text-violet-700 dark:bg-violet-950/40 dark:text-violet-300">
-                          {tr("event.product.made_to_order", "Sob encomenda")}
-                        </span>
-                      )}
-
-                      {stock !== null && !isOutOfStock && !madeToOrder && (
-                        <p className="text-[10px] font-bold text-neutral-400">
-                          {tr("event.product.stock", "Estoque")}: {stock}
-                        </p>
-                      )}
-
-                      {isOutOfStock && (
-                        <span className="text-[10px] font-black text-red-500 uppercase">
-                          {tr("event.product.sold_out", "Esgotado")}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="flex items-center justify-between gap-2 border-t border-neutral-100 dark:border-neutral-800/40 pt-3 mt-2">
-                    <span className="text-[10px] font-black uppercase text-neutral-400">
-                      {tr("event.product.quantity", "Quantidade")}
-                    </span>
-
-                    <div className="inline-flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => adjustQuantity(pid, -1)}
-                        className="h-8 w-8 rounded-full border border-neutral-300 dark:border-neutral-700 text-sm flex items-center justify-center font-bold bg-white dark:bg-neutral-900 text-app hover:bg-neutral-50 transition"
-                      >
-                        -
-                      </button>
-
-                      <span className="min-w-[1.5rem] text-center font-black text-sm text-neutral-900 dark:text-white">{qty}</span>
-
-                      <button
-                        type="button"
-                        disabled={isOutOfStock || eventClosed}
-                        onClick={() => adjustQuantity(pid, 1)}
-                        className="h-8 w-8 rounded-full border border-neutral-300 dark:border-neutral-700 text-sm flex items-center justify-center font-bold bg-white dark:bg-neutral-900 text-app hover:bg-neutral-50 transition disabled:opacity-30"
-                      >
-                        +
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </section>
+          <EventProductGrid
+            productIds={madeToOrderProductIds}
+            productsData={productsData}
+            quantities={quantities}
+            currency={currency}
+            locale={locale}
+            eventClosed={eventClosed}
+            madeToOrder
+            onAdjust={adjustQuantity}
+            tr={tr}
+            emptyMessage={tr("event.products.made_to_order_empty", "Nenhum produto sob encomenda neste evento.")}
+          />
+        </section>
+      )}
 
       <section className="space-y-4 border-t border-neutral-200 dark:border-neutral-800 pt-6">
         <h2 className="text-sm font-black uppercase tracking-widest text-neutral-400">
@@ -1425,6 +1382,136 @@ return Array.from(set).sort((a, b) => a.localeCompare(b, locale));
         )}
       </section>
     </main>
+  );
+}
+
+function EventProductGrid({
+  productIds,
+  productsData,
+  quantities,
+  currency,
+  locale,
+  eventClosed,
+  madeToOrder,
+  onAdjust,
+  tr,
+  emptyMessage,
+}: {
+  productIds: string[];
+  productsData: Record<string, ProductImageData>;
+  quantities: Record<string, number>;
+  currency: SupportedCurrency;
+  locale: string;
+  eventClosed: boolean;
+  madeToOrder: boolean;
+  onAdjust: (productId: string, delta: number) => void;
+  tr: (key: string, fallback: string) => string;
+  emptyMessage: string;
+}) {
+  if (productIds.length === 0) {
+    return (
+      <div className="rounded-3xl border border-neutral-200 bg-white p-6 text-center dark:border-neutral-800 dark:bg-neutral-900">
+        <p className="text-sm font-bold text-neutral-500">{emptyMessage}</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3">
+      {productIds.map((productId) => {
+        const info = productsData[productId];
+        const name = info?.name || productId;
+        const quantity = quantities[productId] ?? 0;
+        const stock = typeof info?.stockQty === "number" ? info.stockQty : null;
+        const withoutImmediateStock = !madeToOrder && stock !== null && stock <= 0;
+        const exceedsStock = !madeToOrder && stock !== null && quantity > stock;
+
+        return (
+          <div
+            key={productId}
+            className={cn(
+              "rounded-3xl border bg-white p-4 shadow-sm transition hover:shadow-md dark:bg-neutral-900",
+              madeToOrder
+                ? "border-violet-200 dark:border-violet-900/60"
+                : "border-neutral-200 dark:border-neutral-800",
+              quantity > 0 && (madeToOrder ? "ring-2 ring-violet-500" : "ring-2 ring-black dark:ring-white"),
+            )}
+          >
+            <div className="space-y-2">
+              <div className="relative flex aspect-[4/3] items-center justify-center overflow-hidden rounded-2xl border border-neutral-100 bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800">
+                {info?.imageUrl ? (
+                  <img src={info.imageUrl} alt={name} className="h-full w-full object-cover" />
+                ) : (
+                  <span className="text-[10px] font-black uppercase text-neutral-400">
+                    {tr("event.product.no_image", "Sem imagem")}
+                  </span>
+                )}
+
+                {madeToOrder && (
+                  <span className="absolute left-2 top-2 rounded-full bg-violet-600 px-2 py-1 text-[9px] font-black uppercase tracking-wider text-white">
+                    {tr("event.product.made_to_order", "Sob encomenda")}
+                  </span>
+                )}
+              </div>
+
+              <div className="space-y-1">
+                <h4 className="truncate text-sm font-black tracking-tight text-neutral-900 dark:text-white">{name}</h4>
+                <p className="text-xs font-black text-neutral-600 dark:text-neutral-400">
+                  {formatMoneyMinor(info?.priceMinor || 0, currency, locale)}
+                </p>
+
+                {madeToOrder ? (
+                  <p className="rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-[10px] font-bold text-violet-700 dark:border-violet-900/50 dark:bg-violet-950/20 dark:text-violet-300">
+                    {tr("event.product.made_to_order_notice", "Produzido mediante reserva antecipada. O pedido ficará pendente até ficar pronto.")}
+                  </p>
+                ) : stock !== null ? (
+                  <p className="text-[10px] font-bold text-neutral-400">
+                    {tr("event.product.stock", "Estoque")}: {stock}
+                  </p>
+                ) : null}
+
+                {(withoutImmediateStock || exceedsStock) && (
+                  <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[10px] font-bold text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-300">
+                    {tr("event.product.pending_stock", "Sem estoque suficiente para entrega imediata. O pedido ficará pendente.")}
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <div className="mt-3 flex items-center justify-between gap-2 border-t border-neutral-100 pt-3 dark:border-neutral-800/40">
+              <span className="text-[10px] font-black uppercase text-neutral-400">
+                {tr("event.product.quantity", "Quantidade")}
+              </span>
+
+              <div className="inline-flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => onAdjust(productId, -1)}
+                  disabled={eventClosed || quantity <= 0}
+                  className="flex h-8 w-8 items-center justify-center rounded-full border border-neutral-300 bg-white text-sm font-bold transition hover:bg-neutral-50 disabled:opacity-30 dark:border-neutral-700 dark:bg-neutral-900"
+                >
+                  -
+                </button>
+                <span className="min-w-[1.5rem] text-center text-sm font-black text-neutral-900 dark:text-white">{quantity}</span>
+                <button
+                  type="button"
+                  onClick={() => onAdjust(productId, 1)}
+                  disabled={eventClosed}
+                  className={cn(
+                    "flex h-8 w-8 items-center justify-center rounded-full border text-sm font-bold transition disabled:opacity-30",
+                    madeToOrder
+                      ? "border-violet-500 bg-violet-600 text-white hover:bg-violet-700"
+                      : "border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900",
+                  )}
+                >
+                  +
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 

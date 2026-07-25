@@ -300,6 +300,11 @@ export default function useStoreOrder(
               orderReference,
               {
                 status,
+                fulfillmentStatus: status,
+                deliveredAt:
+                  status === "delivered"
+                    ? serverTimestamp()
+                    : null,
                 history:
                   Array.isArray(
                     rawHistory,

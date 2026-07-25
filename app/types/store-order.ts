@@ -56,6 +56,10 @@ export interface StoreOrderItem {
   category?: string;
   imageUrl?: string;
   note?: string;
+  availabilityMode?: "normal" | "made_to_order";
+  stockAvailable?: number | null;
+  stockShortage?: number;
+  stockState?: "available" | "insufficient" | "not_tracked" | "made_to_order";
   options?: StoreOrderOption[];
 }
 

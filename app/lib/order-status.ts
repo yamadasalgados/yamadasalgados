@@ -11,6 +11,19 @@ export const ORDER_STATUS = [
 export type OrderStatus =
   (typeof ORDER_STATUS)[number];
 
+/**
+ * Fluxo operacional atual do seller.
+ *
+ * Os demais valores de ORDER_STATUS continuam aceitos apenas para
+ * compatibilidade com pedidos antigos.
+ */
+export const FULFILLMENT_ORDER_STATUS = [
+  "pending",
+  "ready",
+  "delivered",
+  "cancelled",
+] as const satisfies readonly OrderStatus[];
+
 export type OrderLanguage =
   | "pt"
   | "en"

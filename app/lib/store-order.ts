@@ -212,6 +212,24 @@ export function normalizeStoreOrderItems(
             rawItem.note ??
               rawItem.notes,
           ) || undefined,
+        availabilityMode:
+          rawItem.availabilityMode === "made_to_order" ||
+          rawItem.availabilityStatus === "made_to_order" ||
+          rawItem.productionMode === "made_to_order"
+            ? "made_to_order"
+            : "normal",
+        stockAvailable:
+          rawItem.stockAvailable === null
+            ? null
+            : toOptionalNumber(rawItem.stockAvailable),
+        stockShortage:
+          Math.max(0, toSafeNumber(rawItem.stockShortage)),
+        stockState:
+          rawItem.stockState === "insufficient" ||
+          rawItem.stockState === "not_tracked" ||
+          rawItem.stockState === "made_to_order"
+            ? rawItem.stockState
+            : "available",
         options:
           options.length > 0
             ? options

@@ -164,6 +164,22 @@ export default function ItemsCard({
                             {item.category}
                           </p>
                         )}
+
+                        {item.availabilityMode === "made_to_order" && (
+                          <span className="mt-2 inline-flex rounded-full bg-violet-100 px-2 py-1 text-[10px] font-black uppercase tracking-wider text-violet-700 dark:bg-violet-950/40 dark:text-violet-300">
+                            {locale.startsWith("ja") ? "受注生産" : locale.startsWith("en") ? "Made to order" : "Sob encomenda"}
+                          </span>
+                        )}
+
+                        {(item.stockShortage ?? 0) > 0 && (
+                          <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-[10px] font-bold text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-300">
+                            {locale.startsWith("ja")
+                              ? `在庫不足: ${item.stockShortage}`
+                              : locale.startsWith("en")
+                                ? `Stock shortage: ${item.stockShortage}`
+                                : `Falta no estoque: ${item.stockShortage}`}
+                          </p>
+                        )}
                       </div>
 
                       <p className="shrink-0 font-black">
