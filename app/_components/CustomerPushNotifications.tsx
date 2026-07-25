@@ -1,6 +1,6 @@
 "use client";
 
-import { Bell, BellOff, Loader2, Smartphone } from "lucide-react";
+import { Bell, BellOff, Loader2, Smartphone, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type { CustomerSession } from "@/app/hooks/useCustomerSession";
@@ -9,6 +9,7 @@ type Props = {
   session: CustomerSession;
   language: "pt" | "en" | "ja";
   compact?: boolean;
+  promptOnce?: boolean;
 };
 
 type State =
@@ -20,6 +21,8 @@ type State =
   | "subscribed"
   | "loading"
   | "error";
+
+const PROMPT_DISMISSED_KEY = "yamada:customer-push-prompt-dismissed:v1";
 
 const COPY = {
   pt: {
@@ -102,11 +105,13 @@ export default function CustomerPushNotifications({
   session,
   language,
   compact = false,
+  promptOnce = false,
 }: Props) {
   const text = COPY[language];
   const publicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || "";
   const [state, setState] = useState<State>("checking");
   const [error, setError] = useState("");
+  const [promptDismissed, setPromptDismissed] = useState(false);
 
   const supported = useMemo(() => {
     if (typeof window === "undefined") return false;
@@ -115,6 +120,18 @@ export default function CustomerPushNotifications({
       "serviceWorker" in navigator &&
       "PushManager" in window
     );
+  }, []);
+
+  useEffect(() => {
+    if (!promptOnce || typeof window === "undefined") return;
+    setPromptDismissed(window.localStorage.getItem(PROMPT_DISMISSED_KEY) === "1");
+  }, [promptOnce]);
+
+  const dismissPrompt = useCallback(() => {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(PROMPT_DISMISSED_KEY, "1");
+    }
+    setPromptDismissed(true);
   }, []);
 
   const syncSubscription = useCallback(
@@ -201,11 +218,12 @@ export default function CustomerPushNotifications({
       }
       await syncSubscription(subscription);
       setState("subscribed");
+      if (promptOnce) dismissPrompt();
     } catch (enableError) {
       setError(enableError instanceof Error ? enableError.message : text.error);
       setState("error");
     }
-  }, [publicKey, session.user, supported, syncSubscription, text.error]);
+  }, [dismissPrompt, promptOnce, publicKey, session.user, supported, syncSubscription, text.error]);
 
   const disable = useCallback(async () => {
     if (!session.user || !supported) return;
@@ -233,14 +251,27 @@ export default function CustomerPushNotifications({
   }, [session.user, supported, text.error]);
 
   if (!session.registered || state === "checking") return null;
+  if (promptOnce && (promptDismissed || state === "subscribed" || state === "unsupported")) return null;
 
   const baseClass = compact
-    ? "rounded-2xl border p-3"
-    : "rounded-3xl border p-4 shadow-sm";
+    ? "relative rounded-2xl border p-3"
+    : "relative rounded-3xl border p-4 shadow-sm";
+
+  const closeButton = promptOnce ? (
+    <button
+      type="button"
+      onClick={dismissPrompt}
+      className="absolute right-2 top-2 rounded-lg p-1.5 opacity-60 transition hover:bg-black/5 hover:opacity-100 dark:hover:bg-white/10"
+      aria-label="Close"
+    >
+      <X size={15} />
+    </button>
+  ) : null;
 
   if (state === "unsupported") {
     return (
       <div className={`${baseClass} border-neutral-200 bg-neutral-50 text-neutral-600 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-300`}>
+        {closeButton}
         <div className="flex items-center gap-3 text-xs font-bold"><BellOff size={17} /> {text.unsupported}</div>
       </div>
     );
@@ -249,6 +280,7 @@ export default function CustomerPushNotifications({
   if (state === "install_required") {
     return (
       <div className={`${baseClass} border-blue-200 bg-blue-50 text-blue-900 dark:border-blue-900/60 dark:bg-blue-950/30 dark:text-blue-100`}>
+        {closeButton}
         <div className="flex items-start gap-3">
           <Smartphone className="mt-0.5 shrink-0" size={19} />
           <div><p className="text-sm font-black">{text.installTitle}</p><p className="mt-1 text-xs font-medium opacity-80">{text.installBody}</p></div>
@@ -260,6 +292,7 @@ export default function CustomerPushNotifications({
   if (state === "subscribed") {
     return (
       <div className={`${baseClass} border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-100`}>
+        {closeButton}
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3"><Bell size={18} /><p className="text-xs font-black">{text.enabled}</p></div>
           <button type="button" onClick={() => void disable()} className="rounded-xl border border-emerald-300 px-3 py-2 text-[11px] font-black dark:border-emerald-800">{text.disable}</button>
@@ -270,6 +303,7 @@ export default function CustomerPushNotifications({
 
   return (
     <div className={`${baseClass} border-blue-200 bg-blue-50 text-blue-950 dark:border-blue-900/60 dark:bg-blue-950/30 dark:text-blue-100`}>
+      {closeButton}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-start gap-3">
           <Bell className="mt-0.5 shrink-0" size={19} />

@@ -43,7 +43,6 @@ import {
   db,
 } from "@/app/lib/firebase";
 
-import CustomerAccountBar from "@/app/_components/CustomerAccountBar";
 import RewardsCheckoutPanel from "@/app/_components/RewardsCheckoutPanel";
 import useCustomerSession from "@/app/hooks/useCustomerSession";
 import useCustomerRewards from "@/app/hooks/useCustomerRewards";
@@ -2112,7 +2111,7 @@ const showingProducts =
         <div className="mx-auto max-w-6xl space-y-6 px-4 py-8 sm:px-6">
           <div className="h-36 animate-pulse rounded-3xl bg-neutral-200 dark:bg-neutral-800" />
 
-          <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="grid grid-cols-2 gap-3 sm:gap-5 lg:grid-cols-3">
             {Array.from({
               length: 6,
             }).map(
@@ -2259,106 +2258,13 @@ const showingProducts =
   }
 
   return (
-    <main className="min-h-screen bg-neutral-50 pb-28 text-neutral-950 dark:bg-neutral-950 dark:text-neutral-100 lg:pb-10">
-      <div className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6 lg:px-8">
-        <header className="overflow-hidden rounded-3xl border border-neutral-200 bg-white shadow-sm dark:border-neutral-800 dark:bg-neutral-900">
-          {storeProfile.bannerUrl && (
-            <div className="h-36 sm:h-48">
-              <img
-                src={
-                  storeProfile.bannerUrl
-                }
-                alt=""
-                className="h-full w-full object-cover"
-              />
-            </div>
-          )}
-
-          <div className="p-5 sm:p-7">
-            <div className="flex items-center gap-4">
-              {storeProfile.logoUrl ? (
-                <img
-                  src={
-                    storeProfile.logoUrl
-                  }
-                  alt={
-                    storeProfile.name
-                  }
-                  className="h-16 w-16 rounded-2xl object-cover"
-                />
-              ) : (
-                <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-orange-100 text-orange-700 dark:bg-orange-950/50 dark:text-orange-300">
-                  <Store size={32} />
-                </div>
-              )}
-
-              <div className="min-w-0">
-                <h1 className="break-words text-2xl font-black sm:text-3xl">
-                  {
-                    storeProfile.name
-                  }
-                </h1>
-
-                {storeProfile.description && (
-                  <p className="mt-1 text-sm text-neutral-600 dark:text-neutral-300">
-                    {
-                      storeProfile.description
-                    }
-                  </p>
-                )}
-              </div>
-            </div>
-
-            <div className="mt-6 grid grid-cols-3 gap-2">
-              {[
-                text.productsStep,
-                text.customerStep,
-                text.deliveryStep,
-              ].map(
-                (
-                  label,
-                  index,
-                ) => {
-                  const currentIndex =
-                    step === "products"
-                      ? 0
-                      : step ===
-                          "customer"
-                        ? 1
-                        : 2;
-
-                  const active =
-                    index <=
-                    currentIndex;
-
-                  return (
-                    <div
-                      key={label}
-                      className={[
-                        "rounded-xl border px-2 py-2 text-center text-xs font-bold sm:px-3 sm:text-sm",
-                        active
-                          ? "border-orange-300 bg-orange-50 text-orange-900 dark:border-orange-800 dark:bg-orange-950/40 dark:text-orange-200"
-                          : "border-neutral-200 bg-neutral-50 text-neutral-500 dark:border-neutral-700 dark:bg-neutral-950/50 dark:text-neutral-400",
-                      ].join(" ")}
-                    >
-                      {index + 1}.{" "}
-                      {label}
-                    </div>
-                  );
-                },
-              )}
-            </div>
-          </div>
-        </header>
-
-        <div className="mt-4">
-          <CustomerAccountBar
-            session={customerSession}
-            returnTo={`/store/${sellerId}`}
-            language={language}
-            sellerId={sellerId}
-          />
-        </div>
+    <main
+      className={[
+        "min-h-screen bg-neutral-50 text-neutral-950 dark:bg-neutral-950 dark:text-neutral-100 lg:pb-10",
+        customerSession.registered ? "pb-44" : "pb-28",
+      ].join(" ")}
+    >
+      <div className="mx-auto w-full max-w-6xl px-4 py-3 sm:px-6 sm:py-5 lg:px-8">
 
 {step === "products" && (
   <>
@@ -3118,7 +3024,12 @@ const showingProducts =
       {step === "products" &&
         totalItems > 0 && (
           <>
-            <div className="fixed inset-x-0 bottom-0 z-40 border-t border-neutral-200 bg-white/95 p-3 shadow-2xl backdrop-blur dark:border-neutral-800 dark:bg-neutral-900/95 lg:hidden">
+            <div className={[
+                "fixed inset-x-0 z-40 border-t border-neutral-200 bg-white/95 p-3 shadow-2xl backdrop-blur dark:border-neutral-800 dark:bg-neutral-900/95 lg:hidden",
+                customerSession.registered
+                  ? "bottom-[calc(4.7rem+env(safe-area-inset-bottom))]"
+                  : "bottom-0",
+              ].join(" ")}>
               <button
                 type="button"
                 onClick={() =>
@@ -3408,7 +3319,7 @@ function StoreProductGrid({
         <p className="mt-2 text-sm text-neutral-600 dark:text-neutral-300">{help}</p>
       </div>
 
-      <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="grid grid-cols-2 gap-3 sm:gap-5 lg:grid-cols-3">
         {products.map((product) => {
           const qty = cart[product.id] ?? 0;
           const soldOut =
@@ -3429,7 +3340,7 @@ function StoreProductGrid({
             <article
               key={product.id}
               className={[
-                "overflow-hidden rounded-3xl border bg-white shadow-sm transition dark:bg-neutral-900",
+                "overflow-hidden rounded-2xl border bg-white shadow-sm transition dark:bg-neutral-900 sm:rounded-3xl",
                 madeToOrder
                   ? "border-violet-200 dark:border-violet-900/60"
                   : soldOut
@@ -3482,8 +3393,8 @@ function StoreProductGrid({
                 )}
               </button>
 
-              <div className="p-5">
-                <div className="flex items-start justify-between gap-3">
+              <div className="p-3 sm:p-5">
+                <div className="flex flex-col gap-1.5 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
                   <div className="min-w-0">
                     <p className={[
                       "text-xs font-bold uppercase",
@@ -3491,15 +3402,15 @@ function StoreProductGrid({
                         ? "text-violet-700 dark:text-violet-300"
                         : "text-orange-700 dark:text-orange-300",
                     ].join(" ")}>{product.category}</p>
-                    <h3 className="mt-1 break-words text-lg font-black">{product.name}</h3>
+                    <h3 className="mt-1 break-words text-sm font-black sm:text-lg">{product.name}</h3>
                   </div>
-                  <p className="shrink-0 text-lg font-black">
+                  <p className="shrink-0 text-sm font-black sm:text-lg">
                     {formatMoneyMajor(product.price, currency, locale)}
                   </p>
                 </div>
 
                 {product.description && (
-                  <p className="mt-3 line-clamp-3 text-sm text-neutral-600 dark:text-neutral-300">
+                  <p className="mt-3 hidden text-sm text-neutral-600 dark:text-neutral-300 sm:line-clamp-3">
                     {product.description}
                   </p>
                 )}
@@ -3531,7 +3442,7 @@ function StoreProductGrid({
                     onClick={() => onSetQuantity(product, 1)}
                     disabled={soldOut}
                     className={[
-                      "mt-5 inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl px-4 py-3 font-bold text-white transition disabled:cursor-not-allowed disabled:opacity-40",
+                      "mt-3 inline-flex min-h-10 w-full items-center justify-center gap-1.5 rounded-xl px-3 py-2 text-xs font-bold text-white transition disabled:cursor-not-allowed disabled:opacity-40 sm:mt-5 sm:min-h-12 sm:gap-2 sm:px-4 sm:py-3 sm:text-base",
                       madeToOrder
                         ? "bg-violet-600 hover:bg-violet-700"
                         : "bg-neutral-950 hover:bg-neutral-800 dark:bg-white dark:text-neutral-950 dark:hover:bg-neutral-200",
@@ -3668,7 +3579,7 @@ function StoreOffersSection({
                   : "border-neutral-200 dark:border-neutral-800",
               ].join(" ")}
             >
-              <div className="p-5">
+              <div className="p-3 sm:p-5">
                 <div className="flex items-start justify-between gap-4">
                   <div className="min-w-0">
                     <p className="text-xs font-black uppercase tracking-wider text-orange-700 dark:text-orange-300">
@@ -3888,7 +3799,7 @@ function CartDrawer({
   ) => void;
 }) {
   return (
-    <div className="fixed inset-0 z-50 flex justify-end bg-black/50">
+    <div className="fixed inset-0 z-[70] flex justify-end bg-black/50">
       <button
         type="button"
         onClick={onClose}
@@ -3984,7 +3895,7 @@ function CartDrawer({
           )}
         </div>
 
-        <footer className="border-t border-neutral-200 p-5 dark:border-neutral-800">
+        <footer className="border-t border-neutral-200 p-5 pb-[max(env(safe-area-inset-bottom),1.25rem)] dark:border-neutral-800">
           <div className="space-y-2 text-sm">
             <div className="flex items-center justify-between gap-4">
               <span className="text-neutral-500">{text.subtotal}</span>

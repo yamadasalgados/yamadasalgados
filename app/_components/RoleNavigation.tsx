@@ -134,7 +134,7 @@ function useAppearanceControls() {
   };
 }
 
-function AppearanceButtons() {
+export function AppearanceButtons() {
   const {
     lang,
     setLang,

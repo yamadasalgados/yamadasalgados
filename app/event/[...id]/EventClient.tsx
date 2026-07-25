@@ -9,7 +9,6 @@ import {
   getPublicOrderErrorCode,
 } from "@/app/lib/public-order-client";
 import OpenInBrowserGate from "@/app/_components/OpenInBrowserGate";
-import CustomerAccountBar from "@/app/_components/CustomerAccountBar";
 import RewardsCheckoutPanel from "@/app/_components/RewardsCheckoutPanel";
 import useCustomerSession from "@/app/hooks/useCustomerSession";
 import useCustomerRewards from "@/app/hooks/useCustomerRewards";
@@ -1236,14 +1235,6 @@ const uiLocale =
   return (
     <main className={MAIN_CLASS}>
       <OpenInBrowserGate url={currentUrl} />
-
-      <CustomerAccountBar
-        session={customerSession}
-        returnTo={`/event/${sellerId}/${id}`}
-        language={language}
-        storeHref={`/store/${sellerId}`}
-        sellerId={sellerId}
-      />
 
       {sentToast && (
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 w-[calc(100%-2rem)] max-w-md">

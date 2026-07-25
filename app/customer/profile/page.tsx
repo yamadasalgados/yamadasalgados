@@ -1,11 +1,12 @@
 "use client";
 
-import { Loader2, MapPin, Save, UserRound } from "lucide-react";
+import { Bell, Loader2, MapPin, Save, UserRound } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState, type FormEvent } from "react";
 
 import BackLink from "@/app/_components/BackLink";
+import CustomerPushNotifications from "@/app/_components/CustomerPushNotifications";
 import FeedbackBanner from "@/app/_components/FeedbackBanner";
 import PageHeader from "@/app/_components/PageHeader";
 import useCustomerSession from "@/app/hooks/useCustomerSession";
@@ -44,6 +45,8 @@ const COPY = {
     rewards: "Minhas recompensas",
     rewardsHelp: "Os pontos são separados por loja.",
     help: "Os campos salvos serão usados somente para preencher compras futuras. Você poderá alterá-los no checkout.",
+    notifications: "Notificações",
+    notificationsHelp: "Ative ou desative os avisos de mudança de status dos pedidos neste aparelho.",
   },
   en: {
     title: "My profile",
@@ -74,6 +77,8 @@ const COPY = {
     rewards: "My rewards",
     rewardsHelp: "Points are kept separately for each store.",
     help: "Saved fields are only used to prefill future purchases. You can still change them during checkout.",
+    notifications: "Notifications",
+    notificationsHelp: "Enable or disable order status alerts on this device.",
   },
   ja: {
     title: "マイプロフィール",
@@ -104,6 +109,8 @@ const COPY = {
     rewards: "ポイントを見る",
     rewardsHelp: "ポイントは店舗ごとに管理されます。",
     help: "保存した情報は次回の注文入力に使用されます。注文時に変更することもできます。",
+    notifications: "通知",
+    notificationsHelp: "この端末で注文状況の通知を有効・無効にできます。",
   },
 };
 
@@ -260,6 +267,17 @@ function CustomerProfileContent() {
           <div className="mt-5 space-y-4">
             <Field label={text.deliveryAddress} value={address.deliveryAddress} onChange={(value) => setAddressField("deliveryAddress", value)} />
             <Field label={text.locationLink} value={address.locationLink} onChange={(value) => setAddressField("locationLink", value)} type="url" inputMode="url" />
+          </div>
+        </section>
+
+        <section className="rounded-3xl border border-neutral-200 bg-white p-6 shadow-sm dark:border-neutral-800 dark:bg-neutral-900 sm:p-8">
+          <div className="flex items-center gap-2">
+            <Bell size={20} />
+            <h2 className="text-lg font-black">{text.notifications}</h2>
+          </div>
+          <p className="mt-2 text-sm text-neutral-600 dark:text-neutral-300">{text.notificationsHelp}</p>
+          <div className="mt-5">
+            <CustomerPushNotifications session={session} language={language} />
           </div>
         </section>
 

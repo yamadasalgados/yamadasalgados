@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { auth } from "@/app/lib/firebase";
 import {
@@ -25,6 +26,8 @@ import {
 import {
   hasCompleteSellerOnboarding,
 } from "@/app/lib/seller-regional-profile";
+import { AppearanceButtons } from "@/app/_components/RoleNavigation";
+import { resolveAuthenticatedAccount } from "@/app/lib/auth-role-client";
 import { useI18n } from "@/app/lib/i18n";
 
 type AuthMode = "email" | "google" | "phone";
@@ -76,6 +79,31 @@ export default function LoginPage() {
     },
     [t]
   );
+
+  const portalCopy =
+    lang === "ja"
+      ? {
+          title: "Yamadaログイン",
+          subtitle: "アカウントを確認し、お客様・販売者・管理者の正しい画面へ自動的に移動します。",
+          customer: "お客様としてログイン・登録",
+          sellerHint: "新しい販売者アカウントを作成する場合は、下の「新規登録」を選択してください。",
+          unknown: "このアカウントの種類を確認できませんでした。お客様用または販売者用の登録画面を選択してください。",
+        }
+      : lang === "en"
+        ? {
+            title: "Yamada sign in",
+            subtitle: "We identify the account and send customers, sellers and admins to the correct area automatically.",
+            customer: "Customer sign in or registration",
+            sellerHint: "To create a new seller account, choose Create account below.",
+            unknown: "We could not identify this account type. Choose the customer or seller registration flow.",
+          }
+        : {
+            title: "Acesso Yamada",
+            subtitle: "Identificamos a conta e direcionamos cliente, seller ou admin automaticamente para a área correta.",
+            customer: "Entrar ou cadastrar como cliente",
+            sellerHint: "Para criar uma nova conta de seller, selecione Criar conta abaixo.",
+            unknown: "Não foi possível identificar o tipo desta conta. Escolha o cadastro de cliente ou seller.",
+          };
 
   const [checkingAuth, setCheckingAuth] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -144,17 +172,26 @@ export default function LoginPage() {
   );
 
   const goAfterLogin = useCallback(
-    async (user: User) => {
+    async (user: User, createSellerIfUnknown = false) => {
       if (didRedirectRef.current) return;
       didRedirectRef.current = true;
 
       try {
-        const result =
-          await ensureUserProfile(
-            user,
-            lang,
-          );
+        const resolved = await resolveAuthenticatedAccount(user);
 
+        if (resolved.role !== "unknown") {
+          router.replace(resolved.destination || "/");
+          return;
+        }
+
+        if (!createSellerIfUnknown) {
+          didRedirectRef.current = false;
+          setCheckingAuth(false);
+          setError(portalCopy.unknown);
+          return;
+        }
+
+        const result = await ensureUserProfile(user, lang);
         await resolveAfterLogin(result);
       } catch (e: any) {
         didRedirectRef.current = false;
@@ -163,12 +200,12 @@ export default function LoginPage() {
           e?.message ||
             tt(
               "auth.err.validateProfile",
-              "Falha ao validar perfil/plano no Firestore.",
+              "Falha ao validar o tipo de conta no Firestore.",
             ),
         );
       }
     },
-    [lang, resolveAfterLogin, tt],
+    [lang, portalCopy.unknown, resolveAfterLogin, router, tt],
   );
 
   useEffect(() => {
@@ -221,7 +258,7 @@ export default function LoginPage() {
 
     try {
       const cred = await signInWithEmailAndPassword(auth, email.trim(), password);
-      await goAfterLogin(cred.user);
+      await goAfterLogin(cred.user, true);
     } catch (err: any) {
       console.error(err);
       setError(friendlyAuthError(err, tt));
@@ -266,7 +303,7 @@ export default function LoginPage() {
       } catch {
         // se falhar, não bloqueia o cadastro
       }
-      await goAfterLogin(cred.user);
+      await goAfterLogin(cred.user, true);
     } catch (err: any) {
       console.error(err);
       setError(friendlyAuthError(err, tt));
@@ -285,7 +322,7 @@ export default function LoginPage() {
     try {
       const provider = new GoogleAuthProvider();
       const cred = await signInWithPopup(auth, provider);
-      await goAfterLogin(cred.user);
+      await goAfterLogin(cred.user, true);
     } catch (err: any) {
       console.error(err);
       setError(friendlyAuthError(err, tt));
@@ -348,7 +385,7 @@ export default function LoginPage() {
 
     try {
       const cred = await confirmationResultRef.current.confirm(smsCode.trim());
-      await goAfterLogin(cred.user);
+      await goAfterLogin(cred.user, true);
     } catch (err: any) {
       console.error(err);
       setError(friendlyAuthError(err, tt));
@@ -370,39 +407,35 @@ export default function LoginPage() {
 
   if (checkingAuth) {
     return (
-      <main className="flex min-h-[70vh] items-center justify-center">
-        <p className="text-sm text-neutral-600">{t("common.loading")}</p>
+      <main className="flex min-h-screen items-center justify-center bg-neutral-50 text-neutral-950 dark:bg-neutral-950 dark:text-white">
+        <p className="text-sm font-bold text-neutral-600 dark:text-neutral-300">{t("common.loading")}</p>
       </main>
     );
   }
 
   return (
-    <main className="flex min-h-[70vh] items-center justify-center px-4 bg-neutral-50">
-      <div className="w-full max-w-sm bg-white rounded-2xl shadow-md border border-neutral-200 px-6 py-8 space-y-6">
-        <div className="flex items-center justify-between">
-          <div className="text-xs text-neutral-500"></div>
-        </div>
+    <main className="relative flex min-h-screen items-center justify-center bg-neutral-50 px-4 py-8 text-neutral-950 dark:bg-neutral-950 dark:text-white">
+      <div className="absolute right-4 top-4 flex items-center gap-2 sm:right-6 sm:top-6">
+        <AppearanceButtons />
+      </div>
+      <div className="w-full max-w-sm space-y-6 rounded-3xl border border-neutral-200 bg-white px-6 py-8 shadow-xl dark:border-neutral-800 dark:bg-neutral-900 sm:px-8">
 
         <div className="flex flex-col items-center gap-2">
-          <div className="h-20 w-20 rounded-full overflow-hidden bg-neutral-100 flex items-center justify-center">
+          <div className="h-20 w-20 rounded-full overflow-hidden bg-neutral-100 dark:bg-neutral-800 flex items-center justify-center">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src="/logo-yamada.png" alt="Logo Yamada" className="h-full w-full object-cover" />
           </div>
 
-          <h1 className="text-lg font-semibold">
-            {mode === "email"
-              ? isRegister
-                ? tt("login.register.title", "Criar conta")
-                : t("login.title")
-              : t("login.title")}
+          <h1 className="text-xl font-black text-neutral-950 dark:text-white">
+            {mode === "email" && isRegister
+              ? tt("login.register.title", "Criar conta de seller")
+              : portalCopy.title}
           </h1>
 
-          <p className="text-xs text-neutral-600 text-center">
-            {mode === "email"
-              ? isRegister
-                ? tt("login.register.subtitle", "Crie sua conta para acessar o painel.")
-                : t("login.subtitle")
-              : t("login.subtitle")}
+          <p className="text-center text-xs font-medium text-neutral-600 dark:text-neutral-300">
+            {mode === "email" && isRegister
+              ? tt("login.register.subtitle", "Crie sua conta para acessar o painel de vendas.")
+              : portalCopy.subtitle}
           </p>
         </div>
 
@@ -413,7 +446,7 @@ export default function LoginPage() {
             className={`rounded-full px-3 py-2 text-xs font-semibold border transition ${
               mode === "email"
                 ? "bg-black text-white border-black"
-                : "bg-white text-neutral-800 border-neutral-300 hover:bg-neutral-50"
+                : "bg-white text-neutral-800 border-neutral-300 hover:bg-neutral-50 dark:bg-neutral-900 dark:text-neutral-200 dark:border-neutral-700 dark:hover:bg-neutral-800"
             }`}
           >
             {t("login.mode.email")}
@@ -425,7 +458,7 @@ export default function LoginPage() {
             className={`rounded-full px-3 py-2 text-xs font-semibold border transition ${
               mode === "google"
                 ? "bg-black text-white border-black"
-                : "bg-white text-neutral-800 border-neutral-300 hover:bg-neutral-50"
+                : "bg-white text-neutral-800 border-neutral-300 hover:bg-neutral-50 dark:bg-neutral-900 dark:text-neutral-200 dark:border-neutral-700 dark:hover:bg-neutral-800"
             }`}
           >
             {t("login.mode.google")}
@@ -437,7 +470,7 @@ export default function LoginPage() {
             className={`rounded-full px-3 py-2 text-xs font-semibold border transition ${
               mode === "phone"
                 ? "bg-black text-white border-black"
-                : "bg-white text-neutral-800 border-neutral-300 hover:bg-neutral-50"
+                : "bg-white text-neutral-800 border-neutral-300 hover:bg-neutral-50 dark:bg-neutral-900 dark:text-neutral-200 dark:border-neutral-700 dark:hover:bg-neutral-800"
             }`}
           >
             {t("login.mode.sms")}
@@ -450,10 +483,10 @@ export default function LoginPage() {
             {!isRegister ? (
               <form onSubmit={handleEmailLogin} className="space-y-4">
                 <div className="space-y-1">
-                  <label className="text-xs font-medium text-neutral-700">{t("login.email")}</label>
+                  <label className="text-xs font-medium text-neutral-700 dark:text-neutral-200">{t("login.email")}</label>
                   <input
                     type="email"
-                    className="w-full border border-neutral-300 rounded-md px-3 py-2 text-sm text-neutral-900 bg-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                    className="w-full border border-neutral-300 rounded-xl px-3 py-3 text-sm text-neutral-900 bg-white focus:outline-none focus:ring-2 focus:ring-orange-500 dark:border-neutral-700 dark:bg-neutral-950 dark:text-white"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     placeholder={tt("login.email.placeholder", "vendedor@exemplo.com")}
@@ -463,10 +496,10 @@ export default function LoginPage() {
                 </div>
 
                 <div className="space-y-1">
-                  <label className="text-xs font-medium text-neutral-700">{t("login.password")}</label>
+                  <label className="text-xs font-medium text-neutral-700 dark:text-neutral-200">{t("login.password")}</label>
                   <input
                     type="password"
-                    className="w-full border border-neutral-300 rounded-md px-3 py-2 text-sm text-neutral-900 bg-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                    className="w-full border border-neutral-300 rounded-xl px-3 py-3 text-sm text-neutral-900 bg-white focus:outline-none focus:ring-2 focus:ring-orange-500 dark:border-neutral-700 dark:bg-neutral-950 dark:text-white"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder={tt("login.password.placeholder", "••••••••")}
@@ -486,12 +519,12 @@ export default function LoginPage() {
             ) : (
               <form onSubmit={handleEmailRegister} className="space-y-4">
                 <div className="space-y-1">
-                  <label className="text-xs font-medium text-neutral-700">
+                  <label className="text-xs font-medium text-neutral-700 dark:text-neutral-200">
                     {tt("login.register.name", "Nome")}
                   </label>
                   <input
                     type="text"
-                    className="w-full border border-neutral-300 rounded-md px-3 py-2 text-sm text-neutral-900 bg-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                    className="w-full border border-neutral-300 rounded-xl px-3 py-3 text-sm text-neutral-900 bg-white focus:outline-none focus:ring-2 focus:ring-orange-500 dark:border-neutral-700 dark:bg-neutral-950 dark:text-white"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     placeholder={tt("login.register.name.placeholder", "Seu nome")}
@@ -501,10 +534,10 @@ export default function LoginPage() {
                 </div>
 
                 <div className="space-y-1">
-                  <label className="text-xs font-medium text-neutral-700">{t("login.email")}</label>
+                  <label className="text-xs font-medium text-neutral-700 dark:text-neutral-200">{t("login.email")}</label>
                   <input
                     type="email"
-                    className="w-full border border-neutral-300 rounded-md px-3 py-2 text-sm text-neutral-900 bg-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                    className="w-full border border-neutral-300 rounded-xl px-3 py-3 text-sm text-neutral-900 bg-white focus:outline-none focus:ring-2 focus:ring-orange-500 dark:border-neutral-700 dark:bg-neutral-950 dark:text-white"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     placeholder={tt("login.email.placeholder", "vendedor@exemplo.com")}
@@ -514,12 +547,12 @@ export default function LoginPage() {
                 </div>
 
                 <div className="space-y-1">
-                  <label className="text-xs font-medium text-neutral-700">
+                  <label className="text-xs font-medium text-neutral-700 dark:text-neutral-200">
                     {tt("login.register.password", "Senha")}
                   </label>
                   <input
                     type="password"
-                    className="w-full border border-neutral-300 rounded-md px-3 py-2 text-sm text-neutral-900 bg-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                    className="w-full border border-neutral-300 rounded-xl px-3 py-3 text-sm text-neutral-900 bg-white focus:outline-none focus:ring-2 focus:ring-orange-500 dark:border-neutral-700 dark:bg-neutral-950 dark:text-white"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder={tt("login.register.password.placeholder", "mínimo 6 caracteres")}
@@ -529,12 +562,12 @@ export default function LoginPage() {
                 </div>
 
                 <div className="space-y-1">
-                  <label className="text-xs font-medium text-neutral-700">
+                  <label className="text-xs font-medium text-neutral-700 dark:text-neutral-200">
                     {tt("login.register.confirmPassword", "Confirmar senha")}
                   </label>
                   <input
                     type="password"
-                    className="w-full border border-neutral-300 rounded-md px-3 py-2 text-sm text-neutral-900 bg-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                    className="w-full border border-neutral-300 rounded-xl px-3 py-3 text-sm text-neutral-900 bg-white focus:outline-none focus:ring-2 focus:ring-orange-500 dark:border-neutral-700 dark:bg-neutral-950 dark:text-white"
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
                     placeholder={tt("login.register.confirmPassword.placeholder", "repita a senha")}
@@ -553,7 +586,7 @@ export default function LoginPage() {
                     : tt("login.register.createBtn", "Criar conta")}
                 </button>
 
-                <p className="text-[11px] text-neutral-500 text-center"></p>
+                <p className="text-[11px] text-neutral-500 dark:text-neutral-400 text-center"></p>
               </form>
             )}
 
@@ -573,7 +606,7 @@ export default function LoginPage() {
             </div>
 
             <div className="flex items-center justify-center pt-1">
-              <span className="text-[11px] text-neutral-500">
+              <span className="text-[11px] text-neutral-500 dark:text-neutral-400">
                 {tt("login.sessionHint", "Sua sessão será mantida neste dispositivo.")}
               </span>
             </div>
@@ -592,14 +625,14 @@ export default function LoginPage() {
               {busy === "google" ? t("login.entering") : t("login.googleBtn")}
             </button>
 
-            <p className="text-[11px] text-neutral-500">
+            <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
               {tt(
                 "login.google.domainHint",
                 "Se aparecer “domínio não autorizado”, adicione seu domínio em Firebase Auth → Authorized domains."
               )}
             </p>
 
-            <p className="text-[11px] text-neutral-500">
+            <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
               {tt(
                 "login.google.firstAccessHint",
                 "Se for seu primeiro acesso com Google, a conta será criada automaticamente."
@@ -612,16 +645,16 @@ export default function LoginPage() {
         {mode === "phone" && (
           <div className="space-y-3">
             {!canUsePhone ? (
-              <div className="rounded-xl border bg-neutral-50 p-3 text-xs text-neutral-700">
+              <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-3 text-xs text-neutral-700 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-300">
                 {t("login.phone.unsupported")}
               </div>
             ) : (
-              <div className="space-y-2 border rounded-md p-3 bg-neutral-50">
+              <div className="space-y-2 rounded-xl border border-neutral-200 p-3 bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-950">
                 <div className="space-y-1">
-                  <label className="text-[11px] font-medium text-neutral-700">{t("login.phone.label")}</label>
+                  <label className="text-[11px] font-medium text-neutral-700 dark:text-neutral-200">{t("login.phone.label")}</label>
                   <input
                     type="tel"
-                    className="w-full border text-black rounded-md px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-orange-500/70 focus:border-orange-500"
+                    className="w-full rounded-xl border border-neutral-300 bg-white px-3 py-3 text-xs text-neutral-950 focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/70 dark:border-neutral-700 dark:bg-neutral-900 dark:text-white"
                     value={phone}
                     onChange={(e) => setPhone(e.target.value)}
                     placeholder={t("login.phone.placeholder")}
@@ -633,16 +666,16 @@ export default function LoginPage() {
                   type="button"
                   onClick={handleSendCode}
                   disabled={busy === "sendCode" || !phone.trim()}
-                  className="w-full inline-flex text-black justify-center items-center px-3 py-1.5 rounded-full border border-neutral-300 text-[11px] font-medium hover:bg-neutral-100 disabled:opacity-60 disabled:cursor-not-allowed transition"
+                  className="inline-flex min-h-10 w-full items-center justify-center rounded-xl border border-neutral-300 px-3 py-2 text-[11px] font-black text-neutral-800 transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-neutral-700 dark:text-neutral-100 dark:hover:bg-neutral-800"
                 >
                   {busy === "sendCode" ? t("login.sms.sending") : t("login.sms.send")}
                 </button>
 
                 <div className="space-y-1 pt-1">
-                  <label className="text-[11px] font-medium text-neutral-700">{t("login.sms.code")}</label>
+                  <label className="text-[11px] font-medium text-neutral-700 dark:text-neutral-200">{t("login.sms.code")}</label>
                   <input
                     type="text"
-                    className="w-full border text-black rounded-md px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-orange-500/70 focus:border-orange-500"
+                    className="w-full rounded-xl border border-neutral-300 bg-white px-3 py-3 text-xs text-neutral-950 focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/70 dark:border-neutral-700 dark:bg-neutral-900 dark:text-white"
                     value={smsCode}
                     onChange={(e) => setSmsCode(e.target.value)}
                     placeholder={tt("login.sms.code.placeholder", "123456")}
@@ -654,12 +687,12 @@ export default function LoginPage() {
                   type="button"
                   onClick={handleVerifyCode}
                   disabled={busy === "verifyCode" || !smsCode.trim()}
-                  className="w-full inline-flex justify-center items-center px-3 py-1.5 rounded-full bg-green-600 text-white text-[11px] font-medium hover:bg-green-700 disabled:opacity-60 disabled:cursor-not-allowed transition"
+                  className="inline-flex min-h-10 w-full items-center justify-center rounded-xl bg-green-600 px-3 py-2 text-[11px] font-black text-white transition hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {busy === "verifyCode" ? t("login.sms.verifying") : t("login.sms.confirm")}
                 </button>
 
-                <p className="text-[10px] text-neutral-500">
+                <p className="text-[10px] text-neutral-500 dark:text-neutral-400">
                   {tt(
                     "login.phone.firstAccessHint",
                     "Se for seu primeiro acesso por telefone, a conta será criada automaticamente."
@@ -670,8 +703,18 @@ export default function LoginPage() {
           </div>
         )}
 
+        <div className="rounded-2xl border border-neutral-200 bg-neutral-50 p-4 text-center dark:border-neutral-700 dark:bg-neutral-950/70">
+          <p className="text-xs font-medium text-neutral-600 dark:text-neutral-300">{portalCopy.sellerHint}</p>
+          <Link
+            href="/customer/login?next=/customer/orders"
+            className="mt-3 inline-flex min-h-10 w-full items-center justify-center rounded-xl border border-neutral-300 bg-white px-4 py-2 text-xs font-black transition hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800"
+          >
+            {portalCopy.customer}
+          </Link>
+        </div>
+
         {error && (
-          <p className="text-xs text-red-600 bg-red-50 border border-red-100 rounded-md px-3 py-2">{error}</p>
+          <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-3 text-xs font-bold text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300">{error}</p>
         )}
 
         <div id="recaptcha-container" />

@@ -16,7 +16,8 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
-import CustomerAppReadiness from "@/app/_components/CustomerAppReadiness";
+import { AppearanceButtons } from "@/app/_components/RoleNavigation";
+import { resolveAuthenticatedAccount } from "@/app/lib/auth-role-client";
 import { auth } from "@/app/lib/firebase";
 import { readStoredCustomerProfile } from "@/app/lib/customer-storage";
 import { useI18n } from "@/app/lib/i18n";
@@ -47,6 +48,8 @@ const COPY = {
     loading: "Validando conta...",
     or: "ou",
     visitStore: "Visitar a loja",
+    sellerAccess: "Entrar como seller ou administrador",
+    automaticRoute: "As credenciais são identificadas automaticamente e cada conta segue para sua área correta.",
   },
   en: {
     title: "Customer account",
@@ -71,6 +74,8 @@ const COPY = {
     loading: "Checking account...",
     or: "or",
     visitStore: "Visit store",
+    sellerAccess: "Seller or admin sign in",
+    automaticRoute: "Credentials are identified automatically and each account is sent to the correct area.",
   },
   ja: {
     title: "お客様アカウント",
@@ -95,6 +100,8 @@ const COPY = {
     loading: "アカウントを確認中...",
     or: "または",
     visitStore: "ショップを見る",
+    sellerAccess: "販売者・管理者としてログイン",
+    automaticRoute: "アカウント種類を自動判定し、正しい画面へ移動します。",
   },
 };
 
@@ -181,6 +188,13 @@ function CustomerLoginContent() {
       completingRef.current = true;
 
       try {
+        const resolved = await resolveAuthenticatedAccount(user, next);
+
+        if (resolved.role === "admin" || resolved.role === "seller") {
+          router.replace(resolved.destination);
+          return;
+        }
+
         await ensureCustomerProfile(user, language, explicitName);
         router.replace(next);
       } catch (finishError) {
@@ -292,8 +306,11 @@ function CustomerLoginContent() {
   }
 
   return (
-    <main className="min-h-screen bg-neutral-50 px-4 py-8 text-neutral-950 dark:bg-neutral-950 dark:text-white sm:py-14">
-      <section className="mx-auto w-full max-w-md rounded-3xl border border-neutral-200 bg-white p-6 shadow-xl dark:border-neutral-800 dark:bg-neutral-900 sm:p-8">
+    <main className="relative flex min-h-screen items-center justify-center bg-neutral-50 px-4 py-8 text-neutral-950 dark:bg-neutral-950 dark:text-white">
+      <div className="absolute right-4 top-4 flex items-center gap-2 sm:right-6 sm:top-6">
+        <AppearanceButtons />
+      </div>
+      <section className="w-full max-w-md rounded-3xl border border-neutral-200 bg-white p-6 shadow-xl dark:border-neutral-800 dark:bg-neutral-900 sm:p-8">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <Link href={next} className="inline-flex items-center gap-2 text-xs font-black text-neutral-500 hover:text-neutral-900 dark:hover:text-white">
             <ArrowLeft size={16} />
@@ -305,10 +322,6 @@ function CustomerLoginContent() {
               {text.visitStore}
             </Link>
           )}
-        </div>
-
-        <div className="mt-5">
-          <CustomerAppReadiness language={language} compact />
         </div>
 
         <div className="mt-6 rounded-2xl bg-amber-50 p-4 dark:bg-amber-950/30">
@@ -425,6 +438,16 @@ function CustomerLoginContent() {
             {mode === "register" ? text.submitRegister : text.submitLogin}
           </button>
         </form>
+
+        <div className="mt-6 rounded-2xl border border-neutral-200 bg-neutral-50 p-4 text-center dark:border-neutral-700 dark:bg-neutral-950/70">
+          <p className="text-xs font-medium text-neutral-600 dark:text-neutral-300">{text.automaticRoute}</p>
+          <Link
+            href="/login"
+            className="mt-3 inline-flex min-h-10 w-full items-center justify-center rounded-xl border border-neutral-300 bg-white px-4 py-2 text-xs font-black transition hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800"
+          >
+            {text.sellerAccess}
+          </Link>
+        </div>
       </section>
     </main>
   );

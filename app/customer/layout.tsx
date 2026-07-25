@@ -1,11 +1,18 @@
 "use client";
 
+import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 
 import { CustomerNav } from "@/app/_components/RoleNavigation";
 import CustomerShellStatus from "@/app/_components/CustomerShellStatus";
 
 export default function CustomerLayout({ children }: { children: ReactNode }) {
+  const pathname = usePathname();
+
+  if (pathname.startsWith("/customer/login")) {
+    return <>{children}</>;
+  }
+
   return (
     <div className="min-h-screen bg-neutral-50 text-neutral-950 dark:bg-neutral-950 dark:text-neutral-100">
       <CustomerNav />

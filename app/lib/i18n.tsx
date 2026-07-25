@@ -20,16 +20,28 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     try {
       const saved = localStorage.getItem("yamada_lang") as Lang | null;
-      const validLangs: Lang[] = ["pt", "en", "ja"]; // ✅ Corrigido de 'jp' para 'ja'
-      
-      if (saved && validLangs.includes(saved)) {
-        setLangState(saved);
-        document.documentElement.lang = languageToHtmlLang(saved);
-      } else {
-        document.documentElement.lang = languageToHtmlLang("pt");
-      }
+      const validLangs: Lang[] = ["pt", "en", "ja"];
+
+      const browserLanguages = [
+        ...(navigator.languages || []),
+        navigator.language,
+      ]
+        .filter(Boolean)
+        .map((value) => String(value).toLowerCase());
+
+      const detected: Lang = browserLanguages.some((value) => value.startsWith("ja"))
+        ? "ja"
+        : browserLanguages.some((value) => value.startsWith("en"))
+          ? "en"
+          : "pt";
+
+      const initialLanguage = saved && validLangs.includes(saved) ? saved : detected;
+      setLangState(initialLanguage);
+      document.documentElement.lang = languageToHtmlLang(initialLanguage);
     } catch (e) {
-      console.warn("[i18n] Falha ao acessar localStorage:", e);
+      console.warn("[i18n] Falha ao detectar idioma:", e);
+      setLangState("pt");
+      document.documentElement.lang = languageToHtmlLang("pt");
     } finally {
       setIsReady(true);
     }

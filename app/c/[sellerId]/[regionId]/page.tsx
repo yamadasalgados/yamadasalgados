@@ -18,9 +18,7 @@ import {
 
 import PushSubscribeBanner from "@/app/_components/PushSubscribeBanner";
 import OpenInBrowserGate from "@/app/_components/OpenInBrowserGate";
-import CustomerAccountBar from "@/app/_components/CustomerAccountBar";
 import { PublicStoreNav } from "@/app/_components/RoleNavigation";
-import useCustomerSession from "@/app/hooks/useCustomerSession";
 import { useI18n } from "@/app/lib/i18n";
 import {
   normalizeSellerRegionalProfile,
@@ -119,7 +117,6 @@ function uniqByEventId(list: Array<{ id: string; data: FireEvent }>) {
 export default function ClientRegionPage() {
   const { t, lang } = useI18n();
   const language = lang === "en" || lang === "ja" ? lang : "pt";
-  const customerSession = useCustomerSession();
 
   const tr = (key: string, fallback: string) => {
     try {
@@ -335,14 +332,6 @@ export default function ClientRegionPage() {
       <OpenInBrowserGate url={gateUrl} />
 
       <main className="max-w-2xl mx-auto p-4 md:p-6 space-y-8 animate-fade-in">
-        <CustomerAccountBar
-          session={customerSession}
-          returnTo={gateUrl}
-          language={language}
-          sellerId={sellerId}
-          storeHref={`/store/${encodeURIComponent(sellerId)}`}
-        />
-
         <header className="text-center md:text-left space-y-4">
           <div className="space-y-2">
             <h1 className="text-3xl font-black uppercase tracking-tighter dark:text-white">
