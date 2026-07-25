@@ -970,6 +970,23 @@ export async function POST(request: NextRequest) {
         );
       }
 
+      const unavailableStockLines = lines.filter(
+        (line) =>
+          line.availabilityMode !== "made_to_order" &&
+          line.inventoryTracked &&
+          line.stockShortage > 0,
+      );
+
+      if (unavailableStockLines.length > 0) {
+        throw new OrderError(
+          "PRODUCT_UNAVAILABLE",
+          unavailableStockLines.length === 1
+            ? `${unavailableStockLines[0].name} não possui estoque suficiente para esta quantidade.`
+            : "Um ou mais produtos não possuem estoque suficiente. Atualize a página e ajuste o carrinho.",
+          409,
+        );
+      }
+
       const subtotalMinor = lines.reduce(
         (sum, line) => sum + line.priceMinor * line.quantity,
         0,

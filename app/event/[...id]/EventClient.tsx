@@ -530,16 +530,26 @@ const uiLocale =
 
   const adjustQuantity = useCallback(
     (productId: string, delta: number) => {
+      const product = productsData[productId];
+      const madeToOrder = product?.availabilityMode === "made_to_order";
+      const availableStock =
+        typeof product?.stockQty === "number"
+          ? Math.max(0, Math.floor(product.stockQty))
+          : null;
+
       setQuantities((prev) => {
         const current = prev[productId] || 0;
-        const next = current + delta;
+        const requested = Math.max(0, current + delta);
+        const next =
+          madeToOrder || availableStock === null
+            ? requested
+            : Math.min(requested, availableStock);
 
-        if (next < 0) return prev;
-
+        if (next === current) return prev;
         return { ...prev, [productId]: next };
       });
     },
-    []
+    [productsData],
   );
 
   const handleGetLocation = useCallback(() => {
@@ -1442,8 +1452,16 @@ function EventProductGrid({
         const name = info?.name || productId;
         const quantity = quantities[productId] ?? 0;
         const stock = typeof info?.stockQty === "number" ? info.stockQty : null;
-        const withoutImmediateStock = !madeToOrder && stock !== null && stock <= 0;
-        const exceedsStock = !madeToOrder && stock !== null && quantity > stock;
+        const soldOut = !madeToOrder && stock !== null && stock <= 0;
+        const lastUnits =
+          !madeToOrder &&
+          stock !== null &&
+          stock > 0 &&
+          stock <= 10;
+        const reachedQuantityLimit =
+          !madeToOrder &&
+          stock !== null &&
+          quantity >= stock;
 
         return (
           <div
@@ -1452,7 +1470,11 @@ function EventProductGrid({
               "rounded-3xl border bg-white p-4 shadow-sm transition hover:shadow-md dark:bg-neutral-900",
               madeToOrder
                 ? "border-violet-200 dark:border-violet-900/60"
-                : "border-neutral-200 dark:border-neutral-800",
+                : soldOut
+                  ? "border-red-300 bg-red-50/40 opacity-80 dark:border-red-900/70 dark:bg-red-950/10"
+                  : lastUnits
+                    ? "border-amber-400 bg-amber-50/50 dark:border-amber-700 dark:bg-amber-950/10"
+                    : "border-neutral-200 dark:border-neutral-800",
               quantity > 0 && (madeToOrder ? "ring-2 ring-violet-500" : "ring-2 ring-black dark:ring-white"),
             )}
           >
@@ -1471,6 +1493,21 @@ function EventProductGrid({
                     {tr("event.product.made_to_order", "Sob encomenda")}
                   </span>
                 )}
+
+                {!madeToOrder && lastUnits && (
+                  <span className="absolute left-2 top-2 rounded-full bg-amber-500 px-2 py-1 text-[9px] font-black uppercase tracking-wider text-white shadow-lg">
+                    {tr("event.product.last_units", "Últimas unidades").replace(
+                      "{count}",
+                      String(stock),
+                    )}
+                  </span>
+                )}
+
+                {!madeToOrder && soldOut && (
+                  <span className="absolute left-2 top-2 rounded-full bg-red-600 px-2 py-1 text-[9px] font-black uppercase tracking-wider text-white shadow-lg">
+                    {tr("event.product.sold_out", "Esgotado")}
+                  </span>
+                )}
               </div>
 
               <div className="space-y-1">
@@ -1483,17 +1520,21 @@ function EventProductGrid({
                   <p className="rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-[10px] font-bold text-violet-700 dark:border-violet-900/50 dark:bg-violet-950/20 dark:text-violet-300">
                     {tr("event.product.made_to_order_notice", "Produzido mediante reserva antecipada. O pedido ficará pendente até ficar pronto.")}
                   </p>
-                ) : stock !== null ? (
-                  <p className="text-[10px] font-bold text-neutral-400">
-                    {tr("event.product.stock", "Estoque")}: {stock}
+                ) : lastUnits ? (
+                  <p className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-[10px] font-black text-amber-900 dark:border-amber-800 dark:bg-amber-950/20 dark:text-amber-200">
+                    {tr(
+                      "event.product.last_units_notice",
+                      "Últimas {count} unidades — garanta a sua.",
+                    ).replace("{count}", String(stock))}
+                  </p>
+                ) : soldOut ? (
+                  <p className="rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-[10px] font-black text-red-800 dark:border-red-900/60 dark:bg-red-950/20 dark:text-red-300">
+                    {tr(
+                      "event.product.sold_out_notice",
+                      "Esgotado — novas vendas estão bloqueadas.",
+                    )}
                   </p>
                 ) : null}
-
-                {(withoutImmediateStock || exceedsStock) && (
-                  <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[10px] font-bold text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-300">
-                    {tr("event.product.pending_stock", "Sem estoque suficiente para entrega imediata. O pedido ficará pendente.")}
-                  </p>
-                )}
               </div>
             </div>
 
@@ -1515,7 +1556,7 @@ function EventProductGrid({
                 <button
                   type="button"
                   onClick={() => onAdjust(productId, 1)}
-                  disabled={eventClosed}
+                  disabled={eventClosed || soldOut || reachedQuantityLimit}
                   className={cn(
                     "flex h-8 w-8 items-center justify-center rounded-full border text-sm font-bold transition disabled:opacity-30",
                     madeToOrder

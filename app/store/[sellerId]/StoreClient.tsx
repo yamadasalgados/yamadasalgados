@@ -178,7 +178,8 @@ const TEXT = {
       "Nenhum produto disponível.",
     emptySearch:
       "Nenhum produto corresponde à busca.",
-    outOfStock: "Sem estoque imediato — o pedido ficará pendente.",
+    outOfStock: "Esgotado — novas vendas estão bloqueadas.",
+    lastUnits: "Últimas {count} unidades — garanta a sua.",
     stock: "Estoque",
     add: "Adicionar",
     cart: "Carrinho",
@@ -310,7 +311,8 @@ const TEXT = {
       "No products are available.",
     emptySearch:
       "No products match your search.",
-    outOfStock: "No immediate stock — the order will remain pending.",
+    outOfStock: "Sold out — new purchases are blocked.",
+    lastUnits: "Only {count} left — get yours now.",
     stock: "Stock",
     add: "Add",
     cart: "Cart",
@@ -438,7 +440,8 @@ const TEXT = {
       "販売中の商品はありません。",
     emptySearch:
       "検索条件に一致する商品はありません。",
-    outOfStock: "即納在庫なし — 注文は保留になります。",
+    outOfStock: "売り切れ — 新しい注文は受け付けていません。",
+    lastUnits: "残り{count}点 — お早めにご注文ください。",
     stock: "在庫",
     add: "追加",
     cart: "カート",
@@ -1546,7 +1549,12 @@ const showingProducts =
         product: Product,
         requestedQty: number,
       ) => {
-        const safeQty = Math.max(0, requestedQty);
+        const requestedSafeQty = Math.max(0, Math.floor(requestedQty));
+        const safeQty =
+          product.availabilityStatus === "made_to_order" ||
+          typeof product.stock !== "number"
+            ? requestedSafeQty
+            : Math.min(requestedSafeQty, Math.max(0, Math.floor(product.stock)));
 
         setCart(
           (current) => {
@@ -2865,10 +2873,12 @@ function QuantitySelector({
   qty,
   onDecrease,
   onIncrease,
+  disableIncrease = false,
 }: {
   qty: number;
   onDecrease: () => void;
   onIncrease: () => void;
+  disableIncrease?: boolean;
 }) {
   return (
     <div className="mt-5 flex items-center justify-between rounded-xl border border-neutral-200 p-2 dark:border-neutral-700">
@@ -2887,7 +2897,8 @@ function QuantitySelector({
       <button
         type="button"
         onClick={onIncrease}
-        className="flex h-10 w-10 items-center justify-center rounded-lg bg-neutral-950 text-white transition hover:bg-neutral-800 dark:bg-white dark:text-neutral-950 dark:hover:bg-neutral-200"
+        disabled={disableIncrease}
+        className="flex h-10 w-10 items-center justify-center rounded-lg bg-neutral-950 text-white transition hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-30 dark:bg-white dark:text-neutral-950 dark:hover:bg-neutral-200"
       >
         <Plus size={18} />
       </button>
@@ -3026,19 +3037,32 @@ function StoreProductGrid({
       <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
         {products.map((product) => {
           const qty = cart[product.id] ?? 0;
-          const withoutImmediateStock =
+          const soldOut =
             !madeToOrder &&
             typeof product.stock === "number" &&
             product.stock <= 0;
+          const lastUnits =
+            !madeToOrder &&
+            typeof product.stock === "number" &&
+            product.stock > 0 &&
+            product.stock <= 10;
+          const reachedCartLimit =
+            !madeToOrder &&
+            typeof product.stock === "number" &&
+            qty >= product.stock;
 
           return (
             <article
               key={product.id}
               className={[
-                "overflow-hidden rounded-3xl border bg-white shadow-sm dark:bg-neutral-900",
+                "overflow-hidden rounded-3xl border bg-white shadow-sm transition dark:bg-neutral-900",
                 madeToOrder
                   ? "border-violet-200 dark:border-violet-900/60"
-                  : "border-neutral-200 dark:border-neutral-800",
+                  : soldOut
+                    ? "border-red-300 bg-red-50/40 opacity-80 dark:border-red-900/70 dark:bg-red-950/10"
+                    : lastUnits
+                      ? "border-amber-400 bg-amber-50/50 shadow-amber-100 dark:border-amber-700 dark:bg-amber-950/10"
+                      : "border-neutral-200 dark:border-neutral-800",
               ].join(" ")}
             >
               <button
@@ -3062,6 +3086,18 @@ function StoreProductGrid({
                 {madeToOrder && (
                   <span className="absolute left-3 top-3 rounded-full bg-violet-600 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-white shadow-lg">
                     {text.madeToOrderBadge}
+                  </span>
+                )}
+
+                {!madeToOrder && lastUnits && (
+                  <span className="absolute left-3 top-3 rounded-full bg-amber-500 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-white shadow-lg">
+                    {text.lastUnits.replace("{count}", String(product.stock))}
+                  </span>
+                )}
+
+                {!madeToOrder && soldOut && (
+                  <span className="absolute left-3 top-3 rounded-full bg-red-600 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-white shadow-lg">
+                    {text.outOfStock}
                   </span>
                 )}
 
@@ -3098,30 +3134,30 @@ function StoreProductGrid({
                   <p className="mt-3 rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-xs font-bold text-violet-700 dark:border-violet-900/50 dark:bg-violet-950/20 dark:text-violet-300">
                     {text.madeToOrderNotice}
                   </p>
-                ) : typeof product.stock === "number" ? (
-                  <p className="mt-3 text-xs font-semibold text-neutral-500 dark:text-neutral-400">
-                    {text.stock}: {product.stock}
+                ) : lastUnits ? (
+                  <p className="mt-3 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-black text-amber-900 dark:border-amber-800 dark:bg-amber-950/20 dark:text-amber-200">
+                    {text.lastUnits.replace("{count}", String(product.stock))}
                   </p>
-                ) : null}
-
-                {withoutImmediateStock && (
-                  <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-300">
+                ) : soldOut ? (
+                  <p className="mt-3 rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-xs font-black text-red-800 dark:border-red-900/60 dark:bg-red-950/20 dark:text-red-300">
                     {text.outOfStock}
                   </p>
-                )}
+                ) : null}
 
                 {qty > 0 ? (
                   <QuantitySelector
                     qty={qty}
                     onDecrease={() => onSetQuantity(product, qty - 1)}
                     onIncrease={() => onSetQuantity(product, qty + 1)}
+                    disableIncrease={reachedCartLimit}
                   />
                 ) : (
                   <button
                     type="button"
                     onClick={() => onSetQuantity(product, 1)}
+                    disabled={soldOut}
                     className={[
-                      "mt-5 inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl px-4 py-3 font-bold text-white transition",
+                      "mt-5 inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl px-4 py-3 font-bold text-white transition disabled:cursor-not-allowed disabled:opacity-40",
                       madeToOrder
                         ? "bg-violet-600 hover:bg-violet-700"
                         : "bg-neutral-950 hover:bg-neutral-800 dark:bg-white dark:text-neutral-950 dark:hover:bg-neutral-200",
