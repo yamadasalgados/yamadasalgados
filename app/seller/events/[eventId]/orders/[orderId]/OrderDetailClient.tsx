@@ -2,9 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
-import { useRouter } from "next/navigation";
-import { auth, db } from "@/app/lib/firebase";
-import { onAuthStateChanged, type User } from "firebase/auth";
+import { db } from "@/app/lib/firebase";
 import {
   addDoc,
   collection,
@@ -21,9 +19,9 @@ import {
   limit,
 } from "firebase/firestore";
 import { useI18n } from "@/app/lib/i18n";
-import { ensureUserProfile } from "@/app/lib/ensureUserProfile";
 import { formatMoneyMajor } from "@/app/lib/money";
 import { updateSellerOrderStatus } from "@/app/lib/order-status-client";
+import { useSellerSession } from "@/app/_components/SellerSessionContext";
 import type {
   RegionalLocale,
   SupportedCurrency,
@@ -154,24 +152,17 @@ async function loadSellerProductsOnly(sellerUid: string): Promise<ProductDoc[]> 
 
 export default function OrderDetailClient({ eventId, orderId }: { eventId: string; orderId: string }) {
   const { t, lang } = useI18n();
-  const router = useRouter();
 
   const safeEventId = String(eventId || "").trim();
   const safeOrderId = String(orderId || "").trim();
 
-  const [checkingAuth, setCheckingAuth] = useState(true);
-  const [authUser, setAuthUser] = useState<User | null>(null);
-  const [profile, setProfile] = useState<UserDoc | null>(null);
-  const [profileMissing, setProfileMissing] = useState(false);
-  const [inactive, setInactive] = useState(false);
+  const sellerSession = useSellerSession();
+  const authUser = sellerSession.user;
+  const profile = sellerSession.profile as UserDoc;
+  const inactive = profile.active === false || profile.suspended === true;
 
-  const role = profile?.role ?? null;
-  const sellerUid =
-    String(
-      profile?.sellerId ??
-      authUser?.uid ??
-      "",
-    ).trim();
+  const role = profile.role ?? "seller";
+  const sellerUid = sellerSession.sellerId;
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -229,117 +220,9 @@ export default function OrderDetailClient({ eventId, orderId }: { eventId: strin
   ]);
 
   const canEnter = useMemo(() => {
-    if (
-      !authUser ||
-      !sellerUid ||
-      inactive ||
-      (role !== "seller" && role !== "admin")
-    ) return false;
-    return true;
-  }, [authUser, sellerUid, inactive, role]);
-
-  useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (u) => {
-      setAuthUser(u || null);
-      setCheckingAuth(false);
-      if (!u) router.replace("/login");
-    });
-    return () => unsub();
-  }, [router]);
-
-  const loadProfile = useCallback(
-    async (u: User) => {
-      setProfileMissing(false);
-      setInactive(false);
-
-      const result =
-        await ensureUserProfile(
-          u,
-          lang,
-        );
-
-      const userData =
-        result.userDoc as UserDoc;
-      const sellerData =
-        result.sellerDoc ?? {};
-
-      setProfile({
-        role:
-          userData.role === "admin"
-            ? "admin"
-            : "seller",
-        sellerId:
-          String(
-            userData.sellerId ??
-            u.uid,
-          ).trim(),
-        active:
-          userData.active !== false,
-        regionId:
-          String(
-            sellerData.regionId ??
-            userData.regionId ??
-            "",
-          ),
-        displayName:
-          String(
-            sellerData.storeName ??
-            userData.displayName ??
-            "",
-          ),
-        whatsapp:
-          String(
-            sellerData.whatsapp ??
-            "",
-          ),
-        messengerId:
-          String(
-            sellerData.messengerId ??
-            "",
-          ),
-        pickupLink:
-          String(
-            sellerData.pickupLink ??
-            "",
-          ),
-        pickupNote:
-          String(
-            sellerData.pickupNote ??
-            "",
-          ),
-        regionName:
-          String(
-            sellerData.regionName ??
-            "",
-          ),
-        currency:
-          sellerData?.regional?.currency ??
-          userData.currency ??
-          "JPY",
-        regionalLocale:
-          sellerData?.regional?.locale ??
-          userData.regionalLocale ??
-          "ja-JP",
-        timeZone:
-          String(
-            sellerData?.regional?.timeZone ??
-            userData.timeZone ??
-            "Asia/Tokyo",
-          ),
-      });
-
-      setInactive(
-        userData.active === false ||
-        userData.suspended === true,
-      );
-    },
-    [lang],
-  );
-
-  useEffect(() => {
-    if (!authUser) return;
-    loadProfile(authUser).catch(() => setError(t("eventPanel.err.profileLoad")));
-  }, [authUser, loadProfile, t]);
+    if (!sellerUid || inactive) return false;
+    return role === "seller" || role === "admin";
+  }, [sellerUid, inactive, role]);
 
   useEffect(() => {
     if (!canEnter || !safeEventId) return;
@@ -560,32 +443,12 @@ export default function OrderDetailClient({ eventId, orderId }: { eventId: strin
     }
   }, [chatText, eventRef, safeOrderId, sellerUid]);
 
-  if (checkingAuth || (authUser && !profile && !profileMissing)) {
-    return (
-      <div className="flex min-h-[75vh] items-center justify-center bg-white dark:bg-neutral-950 transition-colors">
-        <div className="h-9 w-9 animate-spin rounded-full border-4 border-neutral-200 border-t-black dark:border-neutral-800 dark:border-t-white" />
-      </div>
-    );
-  }
-
   if (!safeEventId || !safeOrderId || loading) {
     return (
       <div className="flex min-h-[60vh] flex-col items-center justify-center gap-2 text-neutral-400 dark:text-neutral-500 animate-pulse">
         <div className="h-7 w-7 animate-spin rounded-full border-2 border-neutral-300 border-t-neutral-800 dark:border-neutral-700 dark:border-t-white" />
         <span className="text-xs font-bold uppercase tracking-wider">{t("eventPanel.loadingEvent")}</span>
       </div>
-    );
-  }
-
-  if (profileMissing) {
-    return (
-      <main className="max-w-md mx-auto p-4 mt-12 text-center animate-fade-in">
-        <h1 className="text-2xl font-black text-neutral-900 dark:text-white tracking-tight">{t("eventPanel.guard.profileMissing.title")}</h1>
-        <div className="rounded-3xl border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-900 p-6 space-y-4 mt-4 shadow-xl">
-          <p className="text-sm text-neutral-500 dark:text-neutral-400 font-medium leading-relaxed">{t("eventPanel.guard.profileMissing.desc").replace("{uid}", sellerUid)}</p>
-          <Link href="/seller" className="w-full block py-3.5 rounded-2xl bg-black text-white dark:bg-white dark:text-black text-xs font-black uppercase tracking-wider">{t("eventPanel.btn.back")}</Link>
-        </div>
-      </main>
     );
   }
 

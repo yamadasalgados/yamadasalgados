@@ -7,17 +7,11 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { useRouter } from "next/navigation";
-
-import {
-  onAuthStateChanged,
-  type User,
-} from "firebase/auth";
+import type { User } from "firebase/auth";
 import {
   collection,
   deleteDoc,
   doc,
-  getDoc,
   onSnapshot,
   serverTimestamp,
   updateDoc,
@@ -32,7 +26,6 @@ import {
 } from "lucide-react";
 
 import {
-  auth,
   db,
 } from "@/app/lib/firebase";
 import {
@@ -53,6 +46,9 @@ import {
 import {
   useI18n,
 } from "@/app/lib/i18n";
+import {
+  useSellerSession,
+} from "@/app/_components/SellerSessionContext";
 import type {
   RegionalLocale,
   SupportedCurrency,
@@ -151,7 +147,6 @@ function formatDate(
 }
 
 export default function SellerOffersPage() {
-  const router = useRouter();
   const { lang } = useI18n();
   const language: OfferLanguage =
     lang === "en" || lang === "ja"
@@ -255,10 +250,10 @@ export default function SellerOffersPage() {
     [language],
   );
 
-  const [authUser, setAuthUser] =
-    useState<User | null>(null);
-  const [sellerId, setSellerId] =
-    useState("");
+  const sellerSession = useSellerSession();
+  const authUser = sellerSession.user as User;
+  const sellerId = sellerSession.sellerId;
+
   const [profile, setProfile] =
     useState<SellerProfile>(() =>
       normalizeSellerProfile({}),
@@ -283,46 +278,6 @@ export default function SellerOffersPage() {
     useState(false);
   const [selectedOffer, setSelectedOffer] =
     useState<OfferDoc | null>(null);
-
-  useEffect(() => {
-    const unsubscribe =
-      onAuthStateChanged(
-        auth,
-        async (user) => {
-          if (!user) {
-            router.replace("/login");
-            return;
-          }
-
-          setAuthUser(user);
-
-          try {
-            const userSnapshot =
-              await getDoc(
-                doc(db, "users", user.uid),
-              );
-            const userData =
-              userSnapshot.data() ?? {};
-            const resolvedSellerId =
-              asText(userData.sellerId) ||
-              user.uid;
-
-            setSellerId(
-              resolvedSellerId,
-            );
-          } catch (loadError) {
-            console.error(
-              "[SellerOffers] user:",
-              loadError,
-            );
-            setError(copy.error);
-            setLoading(false);
-          }
-        },
-      );
-
-    return () => unsubscribe();
-  }, [copy.error, router]);
 
   useEffect(() => {
     if (!sellerId) return;
@@ -669,7 +624,6 @@ export default function SellerOffersPage() {
 
   if (
     loading ||
-    !authUser ||
     !sellerId
   ) {
     return (

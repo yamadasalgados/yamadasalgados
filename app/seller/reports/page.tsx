@@ -2,9 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState, useCallback } from "react";
-import { useRouter } from "next/navigation";
-import { auth, db } from "@/app/lib/firebase";
-import { onAuthStateChanged, signOut, type User } from "firebase/auth";
+import { db } from "@/app/lib/firebase";
 import {
   collection,
   doc,
@@ -16,7 +14,6 @@ import {
   Timestamp,
   type DocumentData,
 } from "firebase/firestore";
-import { ensureUserProfile } from "@/app/lib/ensureUserProfile";
 import { firestoreDateToDate } from "@/app/lib/access-control";
 import { formatMoneyMajor } from "@/app/lib/money";
 import type {
@@ -24,6 +21,7 @@ import type {
   SupportedCurrency,
 } from "@/app/types/regional";
 import { useI18n } from "@/app/lib/i18n";
+import { useSellerSession } from "@/app/_components/SellerSessionContext";
 
 // --- 📝 Interfaces de Tipagem Estrita (TypeScript) ---
 
@@ -169,20 +167,18 @@ async function loadClosedEventsForSeller(
 
 export default function SellerReportsPage() {
   const { t, lang } = useI18n();
-  const router = useRouter();
 
-  const [checkingAuth, setCheckingAuth] = useState(true);
-  const [authUser, setAuthUser] = useState<User | null>(null);
-  const [profile, setProfile] = useState<UserDoc | null>(null);
-  const [profileMissing, setProfileMissing] = useState(false);
-  const [loadingProfile, setLoadingProfile] = useState(false);
+  const sellerSession = useSellerSession();
+  const authUser = sellerSession.user;
+  const profile = sellerSession.profile as UserDoc;
+
   const [loadingReports, setLoadingReports] = useState(false);
   const [errMsg, setErrMsg] = useState<string>("");
   const [rows, setRows] = useState<Row[]>([]);
 
-  const role = profile?.role ?? null;
-  const sellerId = typeof profile?.sellerId === "string" ? profile.sellerId : "";
-  const regionId = typeof profile?.regionId === "string" ? profile.regionId : "";
+  const role = profile?.role ?? "seller";
+  const sellerId = sellerSession.sellerId;
+  const regionId = sellerSession.regionId;
   const inactive = profile?.active === false;
 
   const money = useCallback(
@@ -205,93 +201,9 @@ export default function SellerReportsPage() {
   );
 
   const canLoad = useMemo(() => {
-    if (!authUser || inactive) return false;
-    if (role !== "seller" && role !== "admin") return false;
-    if (role === "seller" && (!sellerId || !regionId)) return false;
-    if (role === "admin" && !sellerId) return false;
-    return true;
-  }, [authUser, inactive, role, sellerId, regionId]);
-
-  useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (u) => {
-      setAuthUser(u || null);
-      setCheckingAuth(false);
-      if (!u) router.replace("/login");
-    });
-    return () => unsub();
-  }, [router]);
-
-  const loadProfile = useCallback(async (u: User) => {
-    setErrMsg("");
-    setProfileMissing(false);
-    setLoadingProfile(true);
-
-    try {
-      const result = await ensureUserProfile(
-        u,
-        lang,
-      );
-      const data = result.userDoc;
-      const sellerData = result.sellerDoc;
-
-      setProfile({
-        role:
-          data.role === "admin"
-            ? "admin"
-            : "seller",
-        sellerId: String(
-          data.sellerId ?? u.uid,
-        ),
-        regionId: String(
-          sellerData?.regionId ??
-            data.regionId ??
-            "default",
-        ),
-        active:
-          data.active !== false &&
-          data.suspended !== true,
-        currency:
-          data.currency ?? "JPY",
-        regionalLocale:
-          data.regionalLocale ??
-          "ja-JP",
-        timeZone:
-          String(
-            data.timeZone ??
-            "Asia/Tokyo",
-          ),
-      });
-    } catch {
-      setProfileMissing(true);
-      setErrMsg(t("reports.err.profileLoad"));
-    } finally {
-      setLoadingProfile(false);
-    }
-  }, [lang, t]);
-
-  useEffect(() => {
-    if (!authUser) return;
-    loadProfile(authUser);
-  }, [authUser, loadProfile]);
-
-  const handleLogout = async () => {
-    await signOut(auth);
-    router.replace("/login");
-  };
-
-  const handleCreateProfileNow = useCallback(async () => {
-    if (!authUser) return;
-    setErrMsg("");
-    setLoadingProfile(true);
-    try {
-      await ensureUserProfile(authUser, "pt");
-      await loadProfile(authUser);
-    } catch {
-      setErrMsg(t("reports.err.profileCreate"));
-    } finally {
-      setLoadingProfile(false);
-    }
-  }, [authUser, loadProfile, t]);
+    if (inactive) return false;
+    return Boolean(sellerId && regionId);
+  }, [inactive, sellerId, regionId]);
 
   useEffect(() => {
     const run = async () => {
@@ -505,28 +417,6 @@ const downloadCsv = useCallback(() => {
   URL.revokeObjectURL(url);
 }, [rows, sellerId]);
 
-  if (checkingAuth || (authUser && !profile && !profileMissing)) {
-    return (
-      <div className="flex min-h-[75vh] items-center justify-center bg-white dark:bg-neutral-950 transition-colors">
-        <div className="h-9 w-9 animate-spin rounded-full border-4 border-neutral-200 border-t-black dark:border-neutral-800 dark:border-t-white" />
-      </div>
-    );
-  }
-
-  if (profileMissing) {
-    return (
-      <main className="max-w-md mx-auto p-4 mt-12 text-center animate-fade-in">
-        <h1 className="text-2xl font-black text-neutral-900 dark:text-white tracking-tight">{t("reports.profileMissing.title")}</h1>
-        <div className="rounded-3xl border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-900 p-6 space-y-4 mt-4 shadow-xl">
-          <p className="text-sm text-neutral-500 dark:text-neutral-400 font-medium leading-relaxed">{t("reports.profileMissing.hint")}</p>
-          <button onClick={handleCreateProfileNow} disabled={loadingProfile} className="w-full rounded-2xl bg-black text-white dark:bg-white dark:text-black font-black py-4 shadow-xl text-sm transition-all">
-            {loadingProfile ? t("common.saving") : t("reports.profileMissing.create")}
-          </button>
-        </div>
-      </main>
-    );
-  }
-
   if (inactive) {
     return (
       <main className="max-w-md mx-auto p-4 mt-16 text-center animate-fade-in">
@@ -546,7 +436,7 @@ const downloadCsv = useCallback(() => {
           <p className="text-xs font-bold text-red-500 bg-red-50/50 dark:bg-red-950/20 p-3 rounded-xl border border-red-200/40">
             {role === "seller" ? t("reports.notConfigured.descSellerMissing") : t("reports.notConfigured.descRoleMissing")}
           </p>
-          <button onClick={handleLogout} className="w-full py-3 rounded-xl bg-black text-white text-xs font-black uppercase tracking-wider">{t("common.logout")}</button>
+          <Link href="/seller/settings" className="w-full py-3 block rounded-xl bg-black text-white text-xs font-black uppercase tracking-wider">{t("common.settings")}</Link>
         </div>
       </main>
     );

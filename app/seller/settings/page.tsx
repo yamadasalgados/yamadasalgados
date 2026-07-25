@@ -8,7 +8,6 @@ import {
   type ReactNode,
 } from "react";
 import { useRouter } from "next/navigation";
-import { onAuthStateChanged, type User } from "firebase/auth";
 import {
   doc,
   getDoc,
@@ -27,9 +26,7 @@ import {
   Truck,
 } from "lucide-react";
 
-import { auth, db } from "@/app/lib/firebase";
-import { getEffectiveSellerAccess } from "@/app/lib/access-control";
-import { ensureUserProfile } from "@/app/lib/ensureUserProfile";
+import { db } from "@/app/lib/firebase";
 import { majorToMinor, minorToMajor } from "@/app/lib/money";
 import {
   COUNTRY_DEFINITIONS,
@@ -38,13 +35,13 @@ import {
   getTimeZoneLabel,
   isAllowedTimeZone,
 } from "@/app/lib/regional";
-import { normalizeSellerRegionalProfile } from "@/app/lib/seller-regional-profile";
 import {
   DEFAULT_SELLER_SHIPPING_SETTINGS,
   normalizeSellerShippingSettings,
   type PostalPricingMode,
 } from "@/app/lib/shipping-schema";
 import { useI18n } from "@/app/lib/i18n";
+import { useSellerSession } from "@/app/_components/SellerSessionContext";
 import type {
   OperatingCountry,
   SupportedLanguage,
@@ -72,8 +69,11 @@ export default function SellerSettingsPage() {
   const router = useRouter();
   const { lang, setLang } = useI18n();
 
-  const [user, setUser] = useState<User | null>(null);
-  const [sellerId, setSellerId] = useState("");
+  const sellerSession = useSellerSession();
+  const user = sellerSession.user;
+  const sellerId = sellerSession.sellerId;
+  const profile = sellerSession.profile;
+
   const [storeName, setStoreName] = useState("");
   const [country, setCountry] = useState<OperatingCountry>("JP");
   const [timeZone, setTimeZone] = useState("Asia/Tokyo");
@@ -205,49 +205,41 @@ export default function SellerSettingsPage() {
             duplicateBand: "Não repita o mesmo peso máximo em duas faixas.",
           };
 
-  const load = useCallback(
-    async (currentUser: User) => {
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadSettings() {
       setLoading(true);
       setError("");
 
       try {
-        const result = await ensureUserProfile(currentUser, lang);
-        const resolvedSellerId = String(
-          result.userDoc.sellerId ?? currentUser.uid,
-        ).trim();
-        const regional = normalizeSellerRegionalProfile(result.sellerDoc, {
-          fallbackSellerId: resolvedSellerId,
-          fallbackLanguage: lang,
-        });
-
-        if (!regional.onboardingComplete) {
-          router.replace("/seller/onboarding");
-          return;
-        }
-
-        const access = getEffectiveSellerAccess(result.sellerDoc);
         const shippingSnapshot = await getDoc(
-          doc(db, "sellers", resolvedSellerId, "settings", "shipping"),
+          doc(db, "sellers", sellerId, "settings", "shipping"),
         );
+
+        if (cancelled) return;
+
         const shipping = normalizeSellerShippingSettings(
           shippingSnapshot.exists()
             ? shippingSnapshot.data()
             : DEFAULT_SELLER_SHIPPING_SETTINGS,
         );
-        const currency = regional.currency ?? "JPY";
+        const currency = profile.currency ?? "JPY";
+        const planId = profile.plan ?? "starter";
+        const accessMode = profile.accessMode ?? "subscription";
+        const billingInterval = profile.billingInterval ?? "monthly";
+        const accessStatus = profile.subscriptionStatus ?? "none";
 
-        setUser(currentUser);
-        setSellerId(resolvedSellerId);
-        setStoreName(regional.storeName);
-        setCountry(regional.operatingCountry ?? "JP");
-        setTimeZone(regional.timeZone || "Asia/Tokyo");
-        setLanguage(regional.defaultLanguage);
+        setStoreName(profile.storeName || "");
+        setCountry(profile.operatingCountry ?? "JP");
+        setTimeZone(profile.timeZone || "Asia/Tokyo");
+        setLanguage(profile.defaultLanguage ?? lang);
         setAccessLabel(
-          `${access.planId.toUpperCase()} · ${
-            access.mode === "lifetime"
+          `${String(planId).toUpperCase()} · ${
+            accessMode === "lifetime"
               ? "LIFETIME"
-              : (access.billingInterval ?? "monthly").toUpperCase()
-          } · ${access.status}`,
+              : String(billingInterval).toUpperCase()
+          } · ${String(accessStatus)}`,
         );
         setPostalEnabled(shipping.postalEnabled);
         setPostalPricingMode(shipping.pricingMode);
@@ -263,28 +255,24 @@ export default function SellerSettingsPage() {
         );
       } catch (loadError: unknown) {
         console.error("[SellerSettings] load:", loadError);
-        setError(
-          loadError instanceof Error
-            ? loadError.message
-            : "SETTINGS_LOAD_FAILED",
-        );
+        if (!cancelled) {
+          setError(
+            loadError instanceof Error
+              ? loadError.message
+              : "SETTINGS_LOAD_FAILED",
+          );
+        }
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
-    },
-    [lang, router],
-  );
+    }
 
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-      if (!currentUser) {
-        router.replace("/login");
-        return;
-      }
-      void load(currentUser);
-    });
-    return () => unsubscribe();
-  }, [load, router]);
+    void loadSettings();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [lang, profile, sellerId]);
 
   useEffect(() => {
     if (isAllowedTimeZone(country, timeZone)) return;
@@ -401,6 +389,7 @@ export default function SellerSettingsPage() {
       );
 
       await batch.commit();
+      await sellerSession.reloadProfile();
       setLang(language);
       setMessage(copy.saved);
     } catch (saveError: unknown) {
@@ -426,6 +415,7 @@ export default function SellerSettingsPage() {
     postalPricingMode,
     selectedCurrency,
     sellerId,
+    sellerSession,
     setLang,
     storeName,
     timeZone,

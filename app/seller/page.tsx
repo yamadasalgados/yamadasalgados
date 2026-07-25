@@ -2,19 +2,15 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState, useCallback } from "react";
-import { useRouter } from "next/navigation";
-import { auth, db } from "@/app/lib/firebase";
-import { onAuthStateChanged, type User } from "firebase/auth";
+import { db } from "@/app/lib/firebase";
 import {
   collection,
-  doc,
   getDocs,
   limit,
   orderBy,
   query,
   Timestamp,
 } from "firebase/firestore";
-import { ensureUserProfile } from "@/app/lib/ensureUserProfile";
 import { formatMoneyMajor } from "@/app/lib/money";
 import type {
   RegionalLocale,
@@ -26,6 +22,7 @@ import EventOrdersAlerts from "@/app/seller/events/EventOrdersAlerts";
 import PageHeader from "@/app/_components/PageHeader";
 import MetricStrip from "@/app/_components/MetricStrip";
 import FeedbackBanner from "@/app/_components/FeedbackBanner";
+import { useSellerSession } from "@/app/_components/SellerSessionContext";
 import { CalendarDays, ChartNoAxesCombined, CircleDollarSign, Plus } from "lucide-react";
 
 type EventStatus = "active" | "closed" | "cancelled";
@@ -65,7 +62,6 @@ type Stats = {
 };
 
 export default function SellerDashboardPage() {
-  const router = useRouter();
   const { t, lang } = useI18n();
 
 
@@ -169,23 +165,16 @@ const dashboardText =
             "Gerencie produção, estoque reservado e pedidos prontos.",
         };
 
-  const [checkingAuth, setCheckingAuth] = useState(true);
-  const [authUser, setAuthUser] = useState<User | null>(null);
-  const [profile, setProfile] = useState<UserDoc | null>(null);
-  const [profileMissing, setProfileMissing] = useState(false);
+  const sellerSession = useSellerSession();
+  const profile = sellerSession.profile as UserDoc;
 
   const [loading, setLoading] = useState(false);
   const [errMsg, setErrMsg] = useState<string>("");
   const [stats, setStats] = useState<Stats | null>(null);
 
-  const [autoFixedIds, setAutoFixedIds] = useState(false);
 
-  const sellerId =
-    (typeof profile?.sellerId === "string" && profile.sellerId.trim()) ||
-    (authUser?.uid ?? "");
-
-  const regionId =
-    (typeof profile?.regionId === "string" && profile.regionId.trim()) || "default";
+  const sellerId = sellerSession.sellerId;
+  const regionId = sellerSession.regionId;
 
   const inactive = profile?.active === false;
   const suspended = profile?.suspended === true;
@@ -216,79 +205,9 @@ const dashboardText =
   );
 
   const canLoad = useMemo(() => {
-    if (!authUser || inactive || suspended) return false;
+    if (inactive || suspended) return false;
     return true;
-  }, [authUser, inactive, suspended]);
-
-  useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (u) => {
-      setAuthUser(u || null);
-      setCheckingAuth(false);
-      if (!u) router.replace("/login");
-    });
-    return () => unsub();
-  }, [router]);
-
-  const loadProfile = useCallback(
-    async (u: User) => {
-      setErrMsg("");
-      setProfileMissing(false);
-
-      const result =
-        await ensureUserProfile(
-          u,
-          lang,
-        );
-
-      const data =
-        result.userDoc as UserDoc;
-
-      setProfile({
-        ...data,
-        role:
-          data.role === "admin"
-            ? "admin"
-            : "seller",
-        sellerId:
-          String(
-            data.sellerId ??
-            u.uid,
-          ).trim(),
-        regionId:
-          String(
-            data.regionId ??
-            "default",
-          ).trim() ||
-          "default",
-      });
-
-      setAutoFixedIds(false);
-    },
-    [lang],
-  );
-
-  useEffect(() => {
-    if (!authUser) return;
-    loadProfile(authUser).catch((e: any) =>
-      setErrMsg(e?.message || t("guard.err.loadProfile"))
-    );
-  }, [authUser, loadProfile, t]);
-
-
-
-  const handleCreateProfileNow = useCallback(async () => {
-    if (!authUser) return;
-    setLoading(true);
-    setErrMsg("");
-    try {
-      await ensureUserProfile(authUser, "pt");
-      await loadProfile(authUser);
-    } catch (e: any) {
-      setErrMsg(e?.message || t("guard.err.createProfile"));
-    } finally {
-      setLoading(false);
-    }
-  }, [authUser, loadProfile, t]);
+  }, [inactive, suspended]);
 
   const planDaysLeft = useMemo(() => {
   const end = profile?.currentPeriodEnd?.toDate?.();
@@ -350,36 +269,6 @@ const showPlanWarning =
     fetchDashboardStats();
   }, [canLoad, sellerId, regionId, t]);
 
-  if (checkingAuth) {
-    return (
-      <main className="flex min-h-[75vh] items-center justify-center bg-white dark:bg-neutral-950 transition-colors">
-        <div className="h-9 w-9 animate-spin rounded-full border-4 border-neutral-200 border-t-black dark:border-neutral-800 dark:border-t-white" />
-      </main>
-    );
-  }
-
-  if (!authUser) return null;
-
-  if (profileMissing) {
-    return (
-      <main className="p-4 sm:p-6 space-y-4 dark:bg-neutral-950 min-h-[80vh] flex flex-col justify-center max-w-md mx-auto text-center">
-        <h1 className="text-2xl font-black tracking-tight dark:text-white">{t("guard.profileMissing.title")}</h1>
-        <div className="rounded-3xl border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-900 p-6 space-y-4">
-          <p className="text-sm text-neutral-500 dark:text-neutral-400 font-medium leading-relaxed">
-            {t("guard.profileMissing.hint")}
-          </p>
-          <button
-            onClick={handleCreateProfileNow}
-            disabled={loading}
-            className="w-full rounded-2xl bg-black dark:bg-white dark:text-black text-white text-sm font-black py-4 hover:opacity-90 disabled:opacity-60 shadow-xl transition-all"
-          >
-            {loading ? t("common.saving") : t("guard.profileMissing.ctaCreate")}
-          </button>
-        </div>
-      </main>
-    );
-  }
-
   return (
     <main className="mx-auto min-h-screen w-full max-w-7xl space-y-8 bg-white p-4 transition-colors animate-fade-in dark:bg-neutral-950 sm:p-6">
       <PageHeader
@@ -395,9 +284,6 @@ const showPlanWarning =
             {t("dashboard.create_event")}
           </Link>
         }
-        meta={autoFixedIds ? (
-          <p className="text-xs font-black text-emerald-700 dark:text-emerald-300">✨ {dashboardText.identitySynced}</p>
-        ) : undefined}
       />
 
 {typeof planDaysLeft === "number" && (

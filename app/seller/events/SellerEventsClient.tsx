@@ -3,12 +3,11 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { auth, db } from "@/app/lib/firebase";
-import { onAuthStateChanged, type User } from "firebase/auth";
+import { db } from "@/app/lib/firebase";
 import { collection, getDocs, limit, orderBy, query, Timestamp } from "firebase/firestore";
 import { useI18n } from "@/app/lib/i18n";
-import { ensureUserProfile } from "@/app/lib/ensureUserProfile";
 import { formatMoneyMajor } from "@/app/lib/money";
+import { useSellerSession } from "@/app/_components/SellerSessionContext";
 import type {
   RegionalLocale,
   SupportedCurrency,
@@ -53,10 +52,8 @@ export default function SellerEventsPage() {
   const router = useRouter();
   const search = useSearchParams();
 
-  const [checkingAuth, setCheckingAuth] = useState(true);
-  const [authUser, setAuthUser] = useState<User | null>(null);
-  const [profile, setProfile] = useState<UserDoc | null>(null);
-  const [profileMissing, setProfileMissing] = useState(false);
+  const sellerSession = useSellerSession();
+  const profile = sellerSession.profile as UserDoc;
 
   const [loading, setLoading] = useState(true);
   const [errMsg, setErrMsg] = useState("");
@@ -65,17 +62,10 @@ export default function SellerEventsPage() {
 
   const statusFilter = (search.get("status") as any) || "active";
 
-  const sellerId =
-    (typeof profile?.sellerId === "string" && profile.sellerId.trim()) ||
-    (authUser?.uid ?? "");
-
-  const role = profile?.role ?? null;
+  const sellerId = sellerSession.sellerId;
   const inactive = profile?.active === false;
 
-  const canQueryEvents = useMemo(() => {
-    if (!authUser || inactive) return false;
-    return true;
-  }, [authUser, inactive]);
+  const canQueryEvents = useMemo(() => !inactive, [inactive]);
 
   const money = useCallback(
     (amount: number) =>
@@ -113,70 +103,6 @@ export default function SellerEventsPage() {
     profile?.regionalLocale,
     profile?.timeZone,
   ]);
-
-  // 1) Monitor de Sessão
-  useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (u) => {
-      setAuthUser(u || null);
-      setCheckingAuth(false);
-      if (!u) router.replace("/login");
-    });
-    return () => unsub();
-  }, [router]);
-
-  // 2) Carregamento canônico do perfil e vínculo comercial
-  useEffect(() => {
-    if (!authUser) return;
-
-    async function loadProfile() {
-      setProfileMissing(false);
-
-      try {
-        const result = await ensureUserProfile(
-          authUser!,
-          lang,
-        );
-        const userData = result.userDoc;
-        const sellerData = result.sellerDoc;
-
-        setProfile({
-          role:
-            userData.role === "admin"
-              ? "admin"
-              : "seller",
-          sellerId: String(
-            userData.sellerId ?? authUser!.uid,
-          ),
-          regionId: String(
-            sellerData?.regionId ??
-              userData.regionId ??
-              "default",
-          ),
-          active:
-            userData.active !== false &&
-            userData.suspended !== true,
-          currency:
-            userData.currency ?? "JPY",
-          regionalLocale:
-            userData.regionalLocale ??
-            "ja-JP",
-          timeZone:
-            String(
-              userData.timeZone ??
-              "Asia/Tokyo",
-            ),
-        });
-      } catch (error) {
-        console.error(
-          "Erro ao carregar perfil:",
-          error,
-        );
-        setProfileMissing(true);
-      }
-    }
-
-    void loadProfile();
-  }, [authUser, lang]);
 
   // 3) Carregamento de Eventos
   useEffect(() => {
@@ -261,25 +187,6 @@ export default function SellerEventsPage() {
       setErrMsg(t("common.copyError"));
     }
   };
-
-  if (checkingAuth) {
-    return (
-      <div className="flex min-h-[75vh] items-center justify-center bg-white dark:bg-neutral-950 transition-colors">
-        <div className="h-9 w-9 animate-spin rounded-full border-4 border-neutral-200 border-t-black dark:border-neutral-800 dark:border-t-white" />
-      </div>
-    );
-  }
-
-  if (profileMissing || inactive) {
-    return (
-      <div className="max-w-md mx-auto p-4 mt-16 text-center animate-fade-in">
-        <div className="rounded-3xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-8 shadow-sm space-y-4">
-          <p className="text-sm font-medium text-neutral-500 dark:text-neutral-400">{t("events.guard")}</p>
-          <Link href="/seller" className="w-full py-3 block rounded-xl bg-black text-white dark:bg-white dark:text-black text-xs font-black uppercase tracking-wider">{t("common.back")}</Link>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <main className="p-4 sm:p-6 space-y-8 bg-white dark:bg-neutral-950 min-h-screen transition-colors animate-fade-in max-w-5xl mx-auto">

@@ -40,6 +40,9 @@ import {
 import type {
   PlanId,
 } from "@/app/lib/plan-catalog";
+import {
+  SellerSessionProvider,
+} from "@/app/_components/SellerSessionContext";
 import type {
   OperatingCountry,
   RegionalLocale,
@@ -71,6 +74,11 @@ export type UserDoc = {
   billingInterval?: "monthly" | "annual" | null;
 
   storeName?: string;
+  whatsapp?: string;
+  messengerId?: string;
+  pickupLink?: string;
+  pickupNote?: string;
+  regionName?: string;
   onboardingComplete?: boolean;
   operatingCountry?: OperatingCountry | null;
   currency?: SupportedCurrency | null;
@@ -202,6 +210,11 @@ function buildProfile(
       access.billingInterval,
 
     storeName: regional.storeName,
+    whatsapp: String(seller?.whatsapp ?? "").trim(),
+    messengerId: String(seller?.messengerId ?? "").trim(),
+    pickupLink: String(seller?.pickupLink ?? "").trim(),
+    pickupNote: String(seller?.pickupNote ?? "").trim(),
+    regionName: String(seller?.regionName ?? "").trim(),
     onboardingComplete:
       regional.onboardingComplete,
     operatingCountry:
@@ -400,6 +413,11 @@ export default function SellerGuard({
     router,
   ]);
 
+  const reloadProfile = useCallback(async () => {
+    if (!authUser) return;
+    await loadProfile(authUser);
+  }, [authUser, loadProfile]);
+
   const handleLogout =
     useCallback(async () => {
       await signOut(auth);
@@ -559,13 +577,17 @@ export default function SellerGuard({
   }
 
   return (
-    <>
+    <SellerSessionProvider
+      user={authUser}
+      profile={profile}
+      reloadProfile={reloadProfile}
+    >
       {typeof children === "function"
         ? children({
             user: authUser,
             profile,
           })
         : children}
-    </>
+    </SellerSessionProvider>
   );
 }

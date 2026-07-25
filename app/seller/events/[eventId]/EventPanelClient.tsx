@@ -4,8 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState, useCallback } from "react";
 import type { ReactNode } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { auth, db } from "@/app/lib/firebase";
-import { onAuthStateChanged, type User } from "firebase/auth";
+import { db } from "@/app/lib/firebase";
 import {
   doc,
   getDoc,
@@ -21,7 +20,6 @@ import {
   type DocumentReference,
 } from "firebase/firestore";
 import { useI18n } from "@/app/lib/i18n";
-import { ensureUserProfile } from "@/app/lib/ensureUserProfile";
 import {
   formatMoneyMajor,
   formatMoneyMinor,
@@ -46,6 +44,7 @@ import {
   type OrderStatus,
 } from "@/app/lib/order-status";
 import { updateSellerOrderStatus } from "@/app/lib/order-status-client";
+import { useSellerSession } from "@/app/_components/SellerSessionContext";
 
 // --- 📝 Interfaces de Tipagem Estrita ---
 
@@ -304,19 +303,13 @@ const [messageSummaries, setMessageSummaries] = useState<Record<string, MessageS
   const safeId = String(props.eventId || props.id || "").trim();
   const [tab, setTab] = useState<TabKey>("orders");
 
-  const [checkingAuth, setCheckingAuth] = useState(true);
-  const [authUser, setAuthUser] = useState<User | null>(null);
-  const [profile, setProfile] = useState<UserDoc | null>(null);
-  const [profileMissing, setProfileMissing] = useState(false);
-  const [inactive, setInactive] = useState(false);
+  const sellerSession = useSellerSession();
+  const authUser = sellerSession.user;
+  const profile = sellerSession.profile as UserDoc;
+  const inactive = profile.active === false || profile.suspended === true;
 
-  const role = profile?.role ?? null;
-  const sellerUid =
-    String(
-      profile?.sellerId ??
-      authUser?.uid ??
-      "",
-    ).trim();
+  const role = profile.role ?? "seller";
+  const sellerUid = sellerSession.sellerId;
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -407,129 +400,10 @@ const [messageSummaries, setMessageSummaries] = useState<Record<string, MessageS
     [router, safeId]
   );
 
-  useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (u) => {
-      setAuthUser(u || null);
-      setCheckingAuth(false);
-      if (!u) router.replace("/login");
-    });
-    return () => unsub();
-  }, [router]);
-
-  const loadProfile = useCallback(
-    async (u: User) => {
-      setProfileMissing(false);
-      setInactive(false);
-
-      const result =
-        await ensureUserProfile(
-          u,
-          lang,
-        );
-
-      const userData =
-        result.userDoc as UserDoc;
-      const sellerData =
-        result.sellerDoc ?? {};
-
-      if (
-        !result.userDoc ||
-        (
-          userData.role !== "seller" &&
-          userData.role !== "admin"
-        )
-      ) {
-        setProfileMissing(true);
-        return;
-      }
-
-      setProfile({
-        role:
-          userData.role === "admin"
-            ? "admin"
-            : "seller",
-        sellerId:
-          String(
-            userData.sellerId ??
-            u.uid,
-          ).trim(),
-        regionId:
-          String(
-            sellerData.regionId ??
-            userData.regionId ??
-            "",
-          ),
-        active:
-          userData.active !== false,
-        displayName:
-          String(
-            sellerData.storeName ??
-            userData.displayName ??
-            "",
-          ),
-        whatsapp:
-          String(
-            sellerData.whatsapp ??
-            "",
-          ),
-        messengerId:
-          String(
-            sellerData.messengerId ??
-            "",
-          ),
-        pickupLink:
-          String(
-            sellerData.pickupLink ??
-            "",
-          ),
-        pickupNote:
-          String(
-            sellerData.pickupNote ??
-            "",
-          ),
-        regionName:
-          String(
-            sellerData.regionName ??
-            "",
-          ),
-        currency:
-          sellerData?.regional?.currency ??
-          userData.currency ??
-          "JPY",
-        regionalLocale:
-          sellerData?.regional?.locale ??
-          userData.regionalLocale ??
-          "ja-JP",
-        timeZone:
-          String(
-            sellerData?.regional?.timeZone ??
-            userData.timeZone ??
-            "Asia/Tokyo",
-          ),
-      });
-
-      setInactive(
-        userData.active === false ||
-        userData.suspended === true,
-      );
-    },
-    [lang],
-  );
-
-  useEffect(() => {
-    if (!authUser) return;
-    loadProfile(authUser).catch(() => setError(t("eventPanel.err.profileLoad")));
-  }, [authUser, loadProfile, t]);
-
   const canEnter = useMemo(() => {
-    if (
-      !authUser ||
-      !sellerUid ||
-      inactive ||
-      (role !== "seller" && role !== "admin")
-    ) return false;
-    return true;
-  }, [authUser, sellerUid, inactive, role]);
+    if (!sellerUid || inactive) return false;
+    return role === "seller" || role === "admin";
+  }, [sellerUid, inactive, role]);
 
   useEffect(() => {
     const loadEvent = async () => {
@@ -1087,38 +961,6 @@ const markOrderMessagesAsRead = useCallback(
   },
   [eventRef]
 );
-
-  if (checkingAuth || (authUser && !profile && !profileMissing)) {
-    return (
-      <div className="flex min-h-[75vh] items-center justify-center bg-white dark:bg-neutral-950 transition-colors">
-        <div className="h-9 w-9 animate-spin rounded-full border-4 border-neutral-200 border-t-black dark:border-neutral-800 dark:border-t-white" />
-      </div>
-    );
-  }
-
-  if (profileMissing) {
-    return (
-      <main className="max-w-md mx-auto p-4 mt-12 text-center animate-fade-in">
-        <h1 className="text-2xl font-black text-neutral-900 dark:text-white tracking-tight">{t("eventPanel.guard.profileMissing.title")}</h1>
-        <div className="rounded-3xl border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-900 p-6 space-y-4 mt-4 shadow-xl">
-          <p className="text-sm text-neutral-500 dark:text-neutral-400 font-medium leading-relaxed">{t("eventPanel.guard.profileMissing.desc").replace("{uid}", sellerUid)}</p>
-          <Link href="/seller" className="w-full block py-3.5 rounded-2xl bg-black text-white dark:bg-white dark:text-black text-xs font-black uppercase tracking-wider">{t("eventPanel.btn.back")}</Link>
-        </div>
-      </main>
-    );
-  }
-
-  if (inactive || !canEnter) {
-    return (
-      <main className="max-w-md mx-auto p-4 mt-16 text-center animate-fade-in">
-        <div className="rounded-3xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-8 shadow-sm space-y-4">
-          <h1 className="text-xl font-black text-neutral-900 dark:text-white">{t("eventPanel.guard.inactive.title")}</h1>
-          <p className="text-sm text-neutral-500">{t("eventPanel.guard.inactive.desc")}</p>
-          <Link href="/login" className="w-full py-3.5 block rounded-xl bg-black text-white text-xs font-black uppercase tracking-wider">{t("eventPanel.guard.goLogin")}</Link>
-        </div>
-      </main>
-    );
-  }
 
   if (!safeId) return null;
 

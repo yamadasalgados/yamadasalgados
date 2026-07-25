@@ -1,8 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
-import { onAuthStateChanged, type User } from "firebase/auth";
+import type { User } from "firebase/auth";
 import {
   collection,
   deleteDoc,
@@ -21,10 +20,10 @@ import { AlertTriangle, Clock3, Package, Plus, Tags } from "lucide-react";
 import FeedbackBanner from "@/app/_components/FeedbackBanner";
 import MetricStrip from "@/app/_components/MetricStrip";
 import PageHeader from "@/app/_components/PageHeader";
-import { auth, db } from "@/app/lib/firebase";
+import { useSellerSession } from "@/app/_components/SellerSessionContext";
+import { db } from "@/app/lib/firebase";
 import { normalizeInventory, normalizeProductContent, normalizeProductPriceMajor } from "@/app/lib/product-schema";
 import { normalizeProductShipping } from "@/app/lib/shipping-schema";
-import { ensureUserProfile } from "@/app/lib/ensureUserProfile";
 import { useI18n } from "@/app/lib/i18n";
 import { formatMoneyMajor } from "@/app/lib/money";
 import type {
@@ -96,7 +95,6 @@ interface ProductCardProps {
 // --- 🚀 Componente Principal da Página ---
 
 export default function ProductsCatalogPage() {
-  const router = useRouter();
   const { t, lang } = useI18n();
 
   const catalogText = useMemo(
@@ -196,10 +194,10 @@ export default function ProductsCatalogPage() {
     [lang]
   );
 
-  const [checkingAuth, setCheckingAuth] = useState(true);
-  const [authUser, setAuthUser] = useState<User | null>(null);
-  const [profile, setProfile] = useState<UserDoc | null>(null);
-  const [profileMissing, setProfileMissing] = useState(false);
+  const sellerSession = useSellerSession();
+  const authUser = sellerSession.user as User;
+  const profile = sellerSession.profile as UserDoc;
+
   const [loading, setLoading] = useState(false);
   const [listening, setListening] = useState(false);
 
@@ -223,10 +221,7 @@ export default function ProductsCatalogPage() {
   const inactive = profile?.active === false;
   const maxProducts = Number.isFinite(profile?.maxProducts as any) ? Number(profile?.maxProducts) : 0;
   const plan: PlanId = (profile?.plan as PlanId) || "starter";
-  const sellerId = useMemo(() => {
-    const fromProfile = typeof profile?.sellerId === "string" ? profile.sellerId.trim() : "";
-    return fromProfile || authUser?.uid || "";
-  }, [profile?.sellerId, authUser?.uid]);
+  const sellerId = sellerSession.sellerId;
 
   const currency =
     profile?.currency ?? "JPY";
@@ -248,99 +243,9 @@ export default function ProductsCatalogPage() {
     [currency, locale],
   );
 
-  useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (u) => {
-      setAuthUser(u || null);
-      setCheckingAuth(false);
-      if (!u) router.replace("/login");
-    });
-    return () => unsub();
-  }, [router]);
-
-  const loadProfile = useCallback(
-    async (u: User) => {
-      setErrMsg("");
-      setSuccessMsg("");
-      setProfileMissing(false);
-
-      const result =
-        await ensureUserProfile(
-          u,
-          lang,
-        );
-
-      const data =
-        result.userDoc as UserDoc;
-
-      if (
-        data.role !== "seller" &&
-        data.role !== "admin"
-      ) {
-        router.replace("/");
-        return;
-      }
-
-      setProfile({
-        role:
-          data.role === "admin"
-            ? "admin"
-            : "seller",
-        sellerId:
-          typeof data.sellerId ===
-          "string"
-            ? data.sellerId
-            : u.uid,
-        active:
-          data.active !== false,
-        plan:
-          data.plan === "pro" ||
-          data.plan === "business"
-            ? data.plan
-            : "starter",
-        subscriptionStatus:
-          data.subscriptionStatus ??
-          "none",
-        maxProducts:
-          Number.isFinite(
-            data.maxProducts,
-          )
-            ? Number(
-                data.maxProducts,
-              )
-            : undefined,
-        suspended:
-          data.suspended === true,
-        currency:
-          data.currency ?? "JPY",
-        regionalLocale:
-          data.regionalLocale ??
-          "ja-JP",
-      });
-    },
-    [lang, router],
-  );
-
-  useEffect(() => {
-    if (!authUser) return;
-    loadProfile(authUser).catch((e: any) => setErrMsg(e?.message || t("guard.err.loadProfile")));
-  }, [authUser, loadProfile, t]);
-
-  const handleCreateProfileNow = useCallback(async () => {
-    if (!authUser) return;
-    setLoading(true);
-    try {
-      await ensureUserProfile(authUser, "pt");
-      await loadProfile(authUser);
-    } catch (e: any) {
-      setErrMsg(e?.message || t("guard.err.createProfile"));
-    } finally {
-      setLoading(false);
-    }
-  }, [authUser, loadProfile, t]);
-
   const ownCount = ownProducts.length;
   const remaining = useMemo(() => Math.max(0, maxProducts - ownCount), [maxProducts, ownCount]);
-  const profileReady = !!profile && !profileMissing;
+  const profileReady = true;
   const canCreateProduct =
     maxProducts <= 0 || ownCount < maxProducts;
 
@@ -820,39 +725,6 @@ export default function ProductsCatalogPage() {
     statusFilter !== "all" ||
     stockFilter !== "all";
 
-
-  if (checkingAuth || (authUser && !profile && !profileMissing)) {
-    return (
-      <div className="flex min-h-[75vh] items-center justify-center bg-white dark:bg-neutral-950 transition-colors">
-        <div className="h-9 w-9 animate-spin rounded-full border-4 border-neutral-200 border-t-black dark:border-neutral-800 dark:border-t-white" />
-      </div>
-    );
-  }
-
-  if (profileMissing) {
-    return (
-      <main className="max-w-md mx-auto p-4 mt-12 text-center animate-fade-in">
-        <h1 className="text-2xl font-black text-neutral-900 dark:text-white tracking-tight">{t("guard.profileMissing.title")}</h1>
-        <div className="rounded-3xl border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-900 p-6 space-y-4 mt-4">
-          <p className="text-sm text-neutral-500 dark:text-neutral-400 font-medium leading-relaxed">{t("guard.profileMissing.hint")}</p>
-          <button onClick={handleCreateProfileNow} className="w-full rounded-2xl bg-black text-white dark:bg-white dark:text-black font-black py-4 shadow-xl text-sm transition-all">
-            {loading ? t("common.saving") : t("guard.profileMissing.ctaCreate")}
-          </button>
-        </div>
-      </main>
-    );
-  }
-
-  if (inactive) {
-    return (
-      <main className="max-w-md mx-auto p-4 mt-16 text-center animate-fade-in">
-        <div className="rounded-3xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-8 shadow-sm">
-          <h1 className="text-xl font-black text-neutral-900 dark:text-white">{t("guard.inactive.title")}</h1>
-          <p className="text-sm text-neutral-500 mt-2">{t("guard.inactive.desc")}</p>
-        </div>
-      </main>
-    );
-  }
 
   return (
     <main className="min-h-screen bg-neutral-50 text-neutral-950 transition-colors dark:bg-neutral-950 dark:text-neutral-100">
