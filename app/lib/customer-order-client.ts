@@ -20,6 +20,10 @@ export type CustomerOrderSummary = {
   deliveryDate: string;
   deliveryTimeSlot: string;
   readinessReasonCodes: string[];
+  pointsRedeemed: number;
+  pointsToEarn: number;
+  rewardMode: string;
+  rewardStatus: string;
   createdAt: string;
   updatedAt: string;
   storeHref: string;
@@ -50,6 +54,14 @@ export type CustomerOrderDetail = CustomerOrderSummary & {
   customerEmail: string;
   subtotalMinor: number;
   discountMinor: number;
+  offerDiscountMinor: number;
+  rewardsDiscountMinor: number;
+  pointsRedeemed: number;
+  pointsToEarn: number;
+  rewardMode: string;
+  rewardStatus: string;
+  rewardRedemptionStatus: string;
+  rewardProductName: string;
   shippingFeeMinor: number;
   address: string;
   locationLink: string;

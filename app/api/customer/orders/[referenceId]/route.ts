@@ -221,6 +221,7 @@ export async function GET(
         ? cleanString(index.eventTitle, 200) || cleanString(event.title ?? event.name, 200)
         : "";
 
+    const rewards = record(order.rewards);
     const summaryUpdate = {
       status,
       fulfillmentStatus: status,
@@ -232,6 +233,11 @@ export async function GET(
       deliveryDate: cleanString(order.deliveryDate, 80) || null,
       deliveryTimeSlot: cleanString(order.deliveryTimeSlot, 80) || null,
       readinessReasonCodes: stringList(readiness.reasonCodes),
+      pointsRedeemed: nonNegativeInteger(rewards.pointsRedeemed),
+      pointsToEarn: nonNegativeInteger(rewards.pointsToEarn),
+      rewardMode: cleanString(rewards.mode, 40) || "none",
+      rewardStatus: cleanString(rewards.earnStatus, 40) || "not_eligible",
+      rewardRedemptionStatus: cleanString(rewards.redemptionStatus, 40) || "none",
       updatedAt: order.updatedAt ?? admin.firestore.Timestamp.now(),
     };
 
@@ -268,6 +274,14 @@ export async function GET(
           customerEmail: cleanString(order.customerEmail, 200),
           subtotalMinor: nonNegativeInteger(order.subtotalMinor),
           discountMinor: nonNegativeInteger(order.discountMinor),
+          offerDiscountMinor: nonNegativeInteger(order.offerDiscountMinor),
+          rewardsDiscountMinor: nonNegativeInteger(order.rewardsDiscountMinor ?? rewards.discountMinor),
+          pointsRedeemed: nonNegativeInteger(rewards.pointsRedeemed),
+          pointsToEarn: nonNegativeInteger(rewards.pointsToEarn),
+          rewardMode: cleanString(rewards.mode, 40) || "none",
+          rewardStatus: cleanString(rewards.earnStatus, 40) || "not_eligible",
+          rewardRedemptionStatus: cleanString(rewards.redemptionStatus, 40) || "none",
+          rewardProductName: cleanString(rewards.rewardProductName, 240),
           shippingFeeMinor: nonNegativeInteger(order.shippingFeeMinor),
           address: cleanString(order.address, 1000),
           locationLink: cleanString(order.locationLink, 2000),

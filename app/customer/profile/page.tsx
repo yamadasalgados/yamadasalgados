@@ -1,10 +1,11 @@
 "use client";
 
-import { ArrowLeft, CheckCircle2, Loader2, MapPin, Save, ShoppingBag, Store, UserRound } from "lucide-react";
+import { ArrowLeft, CheckCircle2, Loader2, MapPin, Save, ShoppingBag, Sparkles, Store, UserRound } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState, type FormEvent } from "react";
 
+import CustomerAppReadiness from "@/app/_components/CustomerAppReadiness";
 import useCustomerSession from "@/app/hooks/useCustomerSession";
 import { EMPTY_CUSTOMER_ADDRESS, type CustomerAddressProfile } from "@/app/lib/customer-profile";
 import { writeStoredCustomerProfile } from "@/app/lib/customer-storage";
@@ -38,6 +39,8 @@ const COPY = {
     visitStore: "Visitar a loja",
     orders: "Meus pedidos",
     points: "pontos",
+    rewards: "Minhas recompensas",
+    rewardsHelp: "Os pontos são separados por loja.",
     help: "Os campos salvos serão usados somente para preencher compras futuras. Você poderá alterá-los no checkout.",
   },
   en: {
@@ -66,6 +69,8 @@ const COPY = {
     visitStore: "Visit store",
     orders: "My orders",
     points: "points",
+    rewards: "My rewards",
+    rewardsHelp: "Points are kept separately for each store.",
     help: "Saved fields are only used to prefill future purchases. You can still change them during checkout.",
   },
   ja: {
@@ -94,6 +99,8 @@ const COPY = {
     visitStore: "ショップを見る",
     orders: "注文履歴",
     points: "ポイント",
+    rewards: "ポイントを見る",
+    rewardsHelp: "ポイントは店舗ごとに管理されます。",
     help: "保存した情報は次回の注文入力に使用されます。注文時に変更することもできます。",
   },
 };
@@ -144,6 +151,10 @@ function CustomerProfileContent() {
   const params = useSearchParams();
   const next = useMemo(() => safePath(params.get("next")), [params]);
   const storeHref = useMemo(() => storeHrefFromPath(next), [next]);
+  const rewardSellerId = useMemo(
+    () => storeHref.match(/^\/store\/([^/]+)/)?.[1] || "",
+    [storeHref],
+  );
   const { lang } = useI18n();
   const language = lang === "en" || lang === "ja" ? lang : "pt";
   const text = COPY[language];
@@ -253,6 +264,8 @@ function CustomerProfileContent() {
           </div>
         </div>
 
+        <CustomerAppReadiness language={language} />
+
         <section className="rounded-3xl border border-neutral-200 bg-white p-6 shadow-sm dark:border-neutral-800 dark:bg-neutral-900 sm:p-8">
           <div className="flex items-start gap-3">
             <div className="rounded-2xl bg-emerald-100 p-3 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
@@ -261,9 +274,16 @@ function CustomerProfileContent() {
             <div>
               <h1 className="text-2xl font-black">{text.title}</h1>
               <p className="mt-1 text-sm text-neutral-600 dark:text-neutral-300">{text.subtitle}</p>
-              <p className="mt-2 text-xs font-black text-emerald-700 dark:text-emerald-300">
-                {session.profile?.pointsBalance ?? 0} {text.points}
-              </p>
+              {rewardSellerId && (
+                <Link
+                  href={`/customer/rewards?sellerId=${encodeURIComponent(rewardSellerId)}&next=${encodeURIComponent(next)}`}
+                  className="mt-2 inline-flex items-center gap-2 text-xs font-black text-violet-700 underline dark:text-violet-300"
+                >
+                  <Sparkles size={14} />
+                  {text.rewards}
+                </Link>
+              )}
+              <p className="mt-1 text-[11px] font-bold text-neutral-400">{text.rewardsHelp}</p>
             </div>
           </div>
           <p className="mt-5 rounded-2xl bg-neutral-100 px-4 py-3 text-xs font-bold text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300">{text.help}</p>

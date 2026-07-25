@@ -7,6 +7,7 @@ import {
   CheckCircle2,
   Clock3,
   ExternalLink,
+  Gift,
   Loader2,
   MapPin,
   PackageCheck,
@@ -19,6 +20,7 @@ import {
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import CustomerAppReadiness from "@/app/_components/CustomerAppReadiness";
 import useCustomerSession from "@/app/hooks/useCustomerSession";
 import {
   loadCustomerOrder,
@@ -56,7 +58,14 @@ const COPY = {
     items: "Itens do pedido",
     quantity: "Quantidade",
     subtotal: "Subtotal",
-    discount: "Desconto",
+    discount: "Desconto da oferta",
+    pointsDiscount: "Desconto em pontos",
+    pointsUsed: "Pontos utilizados",
+    pointsPending: "Pontos após a entrega",
+    pointsCredited: "Pontos creditados",
+    pointsVoided: "Pontos não concedidos",
+    pointsRefunded: "Pontos devolvidos",
+    rewardProduct: "Produto trocado",
     shipping: "Frete / entrega",
     total: "Total",
     delivery: "Entrega",
@@ -105,7 +114,14 @@ const COPY = {
     items: "Order items",
     quantity: "Quantity",
     subtotal: "Subtotal",
-    discount: "Discount",
+    discount: "Offer discount",
+    pointsDiscount: "Points discount",
+    pointsUsed: "Points used",
+    pointsPending: "Points after delivery",
+    pointsCredited: "Points credited",
+    pointsVoided: "Points not awarded",
+    pointsRefunded: "Points refunded",
+    rewardProduct: "Redeemed product",
     shipping: "Shipping / delivery",
     total: "Total",
     delivery: "Fulfilment",
@@ -154,7 +170,14 @@ const COPY = {
     items: "注文商品",
     quantity: "数量",
     subtotal: "小計",
-    discount: "割引",
+    discount: "キャンペーン割引",
+    pointsDiscount: "ポイント割引",
+    pointsUsed: "使用ポイント",
+    pointsPending: "受け渡し後の獲得ポイント",
+    pointsCredited: "獲得済みポイント",
+    pointsVoided: "付与対象外ポイント",
+    pointsRefunded: "返還ポイント",
+    rewardProduct: "交換商品",
     shipping: "送料・配達料",
     total: "合計",
     delivery: "受け取り情報",
@@ -329,6 +352,8 @@ export default function CustomerOrderDetailClient({ referenceId }: Props) {
           </div>
         </header>
 
+        <CustomerAppReadiness language={language} />
+
         {loading ? (
           <div className="flex items-center justify-center rounded-3xl border border-neutral-200 bg-white p-12 dark:border-neutral-800 dark:bg-neutral-900">
             <Loader2 className="animate-spin" size={28} />
@@ -426,11 +451,34 @@ export default function CustomerOrderDetailClient({ referenceId }: Props) {
 
               <div className="mt-5 space-y-2 border-t border-neutral-100 pt-4 text-sm dark:border-neutral-800">
                 <div className="flex justify-between text-neutral-500"><span>{text.subtotal}</span><span>{formatMoneyMinor(order.subtotalMinor, order.currency, locale)}</span></div>
-                {order.discountMinor > 0 && <div className="flex justify-between text-emerald-600"><span>{text.discount}</span><span>- {formatMoneyMinor(order.discountMinor, order.currency, locale)}</span></div>}
+                {order.offerDiscountMinor > 0 && <div className="flex justify-between text-emerald-600"><span>{text.discount}</span><span>- {formatMoneyMinor(order.offerDiscountMinor, order.currency, locale)}</span></div>}
+                {order.rewardsDiscountMinor > 0 && <div className="flex justify-between text-violet-600"><span>{text.pointsDiscount}</span><span>- {formatMoneyMinor(order.rewardsDiscountMinor, order.currency, locale)}</span></div>}
                 {order.shippingFeeMinor > 0 && <div className="flex justify-between text-neutral-500"><span>{text.shipping}</span><span>{formatMoneyMinor(order.shippingFeeMinor, order.currency, locale)}</span></div>}
                 <div className="flex justify-between border-t border-neutral-100 pt-3 text-xl font-black dark:border-neutral-800"><span>{text.total}</span><span>{formatMoneyMinor(order.totalAmountMinor, order.currency, locale)}</span></div>
               </div>
             </section>
+
+            {(order.pointsRedeemed > 0 || order.pointsToEarn > 0) && (
+              <section className="rounded-3xl border border-violet-200 bg-violet-50 p-5 shadow-sm dark:border-violet-900/60 dark:bg-violet-950/25">
+                <h2 className="flex items-center gap-2 text-lg font-black text-violet-950 dark:text-violet-100"><Gift size={20} /> {language === "ja" ? "ポイント" : language === "en" ? "Rewards" : "Recompensas"}</h2>
+                <div className="mt-4 space-y-2 text-sm font-bold text-violet-800 dark:text-violet-200">
+                  {order.pointsRedeemed > 0 && <div className="flex justify-between"><span>{order.rewardRedemptionStatus === "refunded" ? text.pointsRefunded : text.pointsUsed}</span><span>{order.pointsRedeemed}</span></div>}
+                  {order.rewardProductName && <div className="flex justify-between gap-4"><span>{text.rewardProduct}</span><span className="text-right">{order.rewardProductName}</span></div>}
+                  {order.pointsToEarn > 0 && (
+                    <div className="flex justify-between">
+                      <span>
+                        {order.rewardStatus === "credited"
+                          ? text.pointsCredited
+                          : order.rewardStatus === "void"
+                            ? text.pointsVoided
+                            : text.pointsPending}
+                      </span>
+                      <span>{order.pointsToEarn}</span>
+                    </div>
+                  )}
+                </div>
+              </section>
+            )}
 
             <div className="grid gap-5 md:grid-cols-2">
               <section className="rounded-3xl border border-neutral-200 bg-white p-5 shadow-sm dark:border-neutral-800 dark:bg-neutral-900">

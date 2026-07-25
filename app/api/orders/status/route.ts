@@ -304,6 +304,194 @@ function movementSnapshot(inventory: {
   };
 }
 
+
+type RewardTransitionContext = {
+  rewards: Record<string, unknown>;
+  customerUid: string;
+  walletRef: admin.firestore.DocumentReference | null;
+  movementRef: admin.firestore.DocumentReference | null;
+  walletSnapshot: admin.firestore.DocumentSnapshot | null;
+  movementSnapshot: admin.firestore.DocumentSnapshot | null;
+};
+
+function rewardTransitionRefs(params: {
+  db: admin.firestore.Firestore;
+  orderData: Record<string, unknown>;
+  sellerId: string;
+  orderId: string;
+  requestedStatus: FulfillmentStatus;
+}) {
+  const rewards = record(params.orderData.rewards);
+  const customerUid = cleanString(params.orderData.customerUid, 160);
+  const rewardSellerId = cleanString(rewards.sellerId ?? params.sellerId, 160);
+  if (
+    !customerUid ||
+    customerUid.includes("/") ||
+    !rewardSellerId ||
+    rewardSellerId.includes("/") ||
+    (params.requestedStatus !== "delivered" && params.requestedStatus !== "cancelled")
+  ) {
+    return { rewards, customerUid, walletRef: null, movementRef: null };
+  }
+
+  const walletRef = params.db
+    .collection("customers")
+    .doc(customerUid)
+    .collection("rewardWallets")
+    .doc(rewardSellerId);
+  const movementId = params.requestedStatus === "delivered"
+    ? `earn_${params.orderId}`
+    : `refund_${params.orderId}`;
+
+  return {
+    rewards,
+    customerUid,
+    walletRef,
+    movementRef: walletRef.collection("transactions").doc(movementId),
+  };
+}
+
+function applyRewardTransition(params: {
+  transaction: admin.firestore.Transaction;
+  context: RewardTransitionContext;
+  requestedStatus: FulfillmentStatus;
+  orderData: Record<string, unknown>;
+  sellerId: string;
+  orderId: string;
+  orderPath: string;
+  orderSource: OrderSource;
+  eventId: string;
+  now: admin.firestore.Timestamp;
+}): Record<string, unknown> {
+  const {
+    transaction,
+    context,
+    requestedStatus,
+    orderData,
+    sellerId,
+    orderId,
+    orderPath,
+    orderSource,
+    eventId,
+    now,
+  } = params;
+  const rewards = { ...context.rewards };
+  if (!context.walletRef || !context.movementRef || !context.customerUid) {
+    if (requestedStatus === "cancelled" && rewards.earnStatus === "pending") {
+      rewards.earnStatus = "void";
+    }
+    return rewards;
+  }
+
+  const walletData = context.walletSnapshot?.data() ?? {};
+  const currentBalance = nonNegativeInteger(walletData.pointsBalance);
+  const storeName = cleanString(walletData.storeName, 160) || "Loja";
+  const currency = orderData.currency === "BRL" || orderData.currency === "USD"
+    ? orderData.currency
+    : "JPY";
+
+  if (requestedStatus === "delivered") {
+    const pointsToEarn = nonNegativeInteger(rewards.pointsToEarn);
+    if (pointsToEarn <= 0) {
+      rewards.earnStatus = "not_eligible";
+      return rewards;
+    }
+
+    if (!context.movementSnapshot?.exists && rewards.earnStatus !== "credited") {
+      const nextBalance = currentBalance + pointsToEarn;
+      transaction.set(
+        context.walletRef,
+        {
+          schemaVersion: 1,
+          customerUid: context.customerUid,
+          sellerId,
+          storeName,
+          currency,
+          pointsBalance: nextBalance,
+          lifetimeEarned:
+            nonNegativeInteger(walletData.lifetimeEarned) + pointsToEarn,
+          lifetimeRedeemed: nonNegativeInteger(walletData.lifetimeRedeemed),
+          lifetimeRefunded: nonNegativeInteger(walletData.lifetimeRefunded),
+          updatedAt: now,
+          ...(context.walletSnapshot?.exists ? {} : { createdAt: now }),
+        },
+        { merge: true },
+      );
+      transaction.create(context.movementRef, {
+        schemaVersion: 1,
+        type: "earn",
+        points: pointsToEarn,
+        balanceBefore: currentBalance,
+        balanceAfter: nextBalance,
+        sellerId,
+        customerUid: context.customerUid,
+        orderId,
+        orderPath,
+        orderSource,
+        eventId: eventId || null,
+        label: "Pontos da compra entregue",
+        createdAt: now,
+      });
+    }
+
+    rewards.earnStatus = "credited";
+    rewards.creditedAt = now;
+    return rewards;
+  }
+
+  if (requestedStatus === "cancelled") {
+    const pointsRedeemed = nonNegativeInteger(rewards.pointsRedeemed);
+    if (
+      pointsRedeemed > 0 &&
+      rewards.redemptionStatus !== "refunded" &&
+      !context.movementSnapshot?.exists
+    ) {
+      const nextBalance = currentBalance + pointsRedeemed;
+      transaction.set(
+        context.walletRef,
+        {
+          schemaVersion: 1,
+          customerUid: context.customerUid,
+          sellerId,
+          storeName,
+          currency,
+          pointsBalance: nextBalance,
+          lifetimeEarned: nonNegativeInteger(walletData.lifetimeEarned),
+          lifetimeRedeemed: nonNegativeInteger(walletData.lifetimeRedeemed),
+          lifetimeRefunded:
+            nonNegativeInteger(walletData.lifetimeRefunded) + pointsRedeemed,
+          updatedAt: now,
+          ...(context.walletSnapshot?.exists ? {} : { createdAt: now }),
+        },
+        { merge: true },
+      );
+      transaction.create(context.movementRef, {
+        schemaVersion: 1,
+        type: "refund",
+        points: pointsRedeemed,
+        balanceBefore: currentBalance,
+        balanceAfter: nextBalance,
+        sellerId,
+        customerUid: context.customerUid,
+        orderId,
+        orderPath,
+        orderSource,
+        eventId: eventId || null,
+        label: "Estorno de pedido cancelado",
+        createdAt: now,
+      });
+    }
+
+    if (pointsRedeemed > 0) {
+      rewards.redemptionStatus = "refunded";
+      rewards.refundedAt = now;
+    }
+    if (rewards.earnStatus === "pending") rewards.earnStatus = "void";
+  }
+
+  return rewards;
+}
+
 function customerOrderIndexRef(
   db: admin.firestore.Firestore,
   orderData: Record<string, unknown>,
@@ -321,6 +509,7 @@ function customerOrderIndexRef(
 function customerOrderIndexPayload(params: {
   status: FulfillmentStatus;
   readinessReasonCodes?: string[];
+  rewards?: Record<string, unknown>;
   now: admin.firestore.Timestamp;
 }) {
   return {
@@ -330,6 +519,16 @@ function customerOrderIndexPayload(params: {
     readyAt: params.status === "ready" ? params.now : null,
     deliveredAt: params.status === "delivered" ? params.now : null,
     cancelledAt: params.status === "cancelled" ? params.now : null,
+    ...(params.rewards
+      ? {
+          pointsRedeemed: nonNegativeInteger(params.rewards.pointsRedeemed),
+          pointsToEarn: nonNegativeInteger(params.rewards.pointsToEarn),
+          rewardMode: cleanString(params.rewards.mode, 40) || "none",
+          rewardStatus: cleanString(params.rewards.earnStatus, 40) || "not_eligible",
+          rewardRedemptionStatus:
+            cleanString(params.rewards.redemptionStatus, 40) || "none",
+        }
+      : {}),
     updatedAt: params.now,
   };
 }
@@ -370,6 +569,7 @@ export async function POST(request: NextRequest) {
             customerOrderRef,
             customerOrderIndexPayload({
               status: currentStatus,
+              rewards: record(orderData.rewards),
               readinessReasonCodes: Array.isArray(record(orderData.readiness).reasonCodes)
                 ? (record(orderData.readiness).reasonCodes as unknown[])
                     .map((value) => cleanString(value, 80))
@@ -405,6 +605,29 @@ export async function POST(request: NextRequest) {
         );
       }
 
+      const rewardRefs = rewardTransitionRefs({
+        db,
+        orderData,
+        sellerId: clean.sellerId,
+        orderId: clean.orderId,
+        requestedStatus: clean.status,
+      });
+      let rewardWalletSnapshot: admin.firestore.DocumentSnapshot | null = null;
+      let rewardMovementSnapshot: admin.firestore.DocumentSnapshot | null = null;
+      if (rewardRefs.walletRef && rewardRefs.movementRef) {
+        const rewardSnapshots = await transaction.getAll(
+          rewardRefs.walletRef,
+          rewardRefs.movementRef,
+        );
+        rewardWalletSnapshot = rewardSnapshots[0];
+        rewardMovementSnapshot = rewardSnapshots[1];
+      }
+      const rewardContext: RewardTransitionContext = {
+        ...rewardRefs,
+        walletSnapshot: rewardWalletSnapshot,
+        movementSnapshot: rewardMovementSnapshot,
+      };
+
       const rawItems = Array.isArray(orderData.items) ? orderData.items : [];
       const items = rawItems
         .map(parseManagedItem)
@@ -413,7 +636,20 @@ export async function POST(request: NextRequest) {
 
       // Pedidos anteriores ao 03B.3 continuam operáveis sem movimentar estoque.
       if (!inventoryManaged || items.length === 0) {
+        const nextRewards = applyRewardTransition({
+          transaction,
+          context: rewardContext,
+          requestedStatus: clean.status,
+          orderData,
+          sellerId: clean.sellerId,
+          orderId: clean.orderId,
+          orderPath: orderRef.path,
+          orderSource: clean.source,
+          eventId: clean.eventId,
+          now,
+        });
         transaction.update(orderRef, {
+          rewards: nextRewards,
           status: clean.status,
           fulfillmentStatus: clean.status,
           deliveredAt: clean.status === "delivered" ? now : null,
@@ -433,7 +669,7 @@ export async function POST(request: NextRequest) {
         if (customerOrderRef) {
           transaction.set(
             customerOrderRef,
-            customerOrderIndexPayload({ status: clean.status, now }),
+            customerOrderIndexPayload({ status: clean.status, rewards: nextRewards, now }),
             { merge: true },
           );
         }
@@ -699,6 +935,18 @@ export async function POST(request: NextRequest) {
         clean.status === "ready" && shortages.length > 0
           ? "pending"
           : clean.status;
+      const nextRewards = applyRewardTransition({
+        transaction,
+        context: rewardContext,
+        requestedStatus: nextStatus,
+        orderData,
+        sellerId: clean.sellerId,
+        orderId: clean.orderId,
+        orderPath: orderRef.path,
+        orderSource: clean.source,
+        eventId: clean.eventId,
+        now,
+      });
       const serializedItems = items.map(serializeItem);
       const inventoryState = aggregateInventory(items);
       const hasMadeToOrderItems = items.some((item) => item.madeToOrder);
@@ -708,6 +956,7 @@ export async function POST(request: NextRequest) {
       const hasStockShortage = items.some((item) => item.shortageQuantity > 0);
 
       transaction.update(orderRef, {
+        rewards: nextRewards,
         items: serializedItems,
         status: nextStatus,
         fulfillmentStatus: nextStatus,
@@ -750,6 +999,7 @@ export async function POST(request: NextRequest) {
           customerOrderRef,
           customerOrderIndexPayload({
             status: nextStatus,
+            rewards: nextRewards,
             readinessReasonCodes: [
               ...(hasMadeToOrderItems && hasPendingProduction && nextStatus === "pending"
                 ? ["made_to_order"]

@@ -17,6 +17,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import useCustomerSession from "@/app/hooks/useCustomerSession";
 import CustomerPushNotifications from "@/app/_components/CustomerPushNotifications";
+import CustomerAppReadiness from "@/app/_components/CustomerAppReadiness";
 import {
   loadCustomerOrders,
   type CustomerOrderSummary,
@@ -275,6 +276,8 @@ export default function CustomerOrdersClient() {
             </Link>
           </div>
         </header>
+
+        <CustomerAppReadiness language={language} />
 
         <CustomerPushNotifications session={session} language={language} />
 

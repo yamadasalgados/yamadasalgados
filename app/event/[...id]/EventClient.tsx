@@ -10,7 +10,9 @@ import {
 } from "@/app/lib/public-order-client";
 import OpenInBrowserGate from "@/app/_components/OpenInBrowserGate";
 import CustomerAccountBar from "@/app/_components/CustomerAccountBar";
+import RewardsCheckoutPanel from "@/app/_components/RewardsCheckoutPanel";
 import useCustomerSession from "@/app/hooks/useCustomerSession";
+import useCustomerRewards from "@/app/hooks/useCustomerRewards";
 import {
   eventDraftKey,
   readLocalDraft,
@@ -42,6 +44,11 @@ import {
   type OfferDoc,
   type OfferEvaluation,
 } from "@/app/lib/offer-schema";
+import {
+  EMPTY_REWARD_SELECTION,
+  evaluateRewardSelection,
+  type RewardRedemptionSelection,
+} from "@/app/lib/reward-schema";
 import {
   formatMoneyMinor,
   legacyMajorValueToMinor,
@@ -363,6 +370,7 @@ const uiLocale =
   const currency = event?.currency ?? "JPY";
   const language = lang === "en" || lang === "ja" ? lang : "pt";
   const customerSession = useCustomerSession();
+  const customerRewards = useCustomerRewards(sellerId, customerSession.registered);
   const customerId = customerSession.clientId;
   const customerDraftReadyRef = useRef(false);
   const customerDraftKey = useMemo(
@@ -396,9 +404,21 @@ const uiLocale =
 
   const [submitting, setSubmitting] = useState(false);
   const [sentToast, setSentToast] = useState(false);
+  const [formError, setFormError] = useState("");
+  const formErrorRef = useRef<HTMLDivElement | null>(null);
+
+  const showFormError = useCallback((message: string) => {
+    setFormError(message);
+    window.requestAnimationFrame(() => {
+      formErrorRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  }, []);
 
   const [lastOrderId, setLastOrderId] = useState("");
   const [lastCustomerOrderRefId, setLastCustomerOrderRefId] = useState("");
+  const [rewardSelection, setRewardSelection] = useState<RewardRedemptionSelection>({ ...EMPTY_REWARD_SELECTION });
+  const [lastPointsToEarn, setLastPointsToEarn] = useState(0);
+  const [lastPointsRedeemed, setLastPointsRedeemed] = useState(0);
   const [chatOpen, setChatOpen] = useState(false);
   const [chatText, setChatText] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
@@ -495,7 +515,38 @@ const uiLocale =
   const discountMinor = offerEvaluation?.applicable
     ? offerEvaluation.discountAmountMinor
     : 0;
-  const totalAmountMinor = Math.max(0, subtotalMinor - discountMinor);
+  const merchandisePayableBeforeRewardsMinor = Math.max(0, subtotalMinor - discountMinor);
+  const rewardEvaluation = useMemo(
+    () => evaluateRewardSelection({
+      selection: rewardSelection,
+      walletBalance: customerRewards.wallet?.pointsBalance ?? 0,
+      merchandisePayableMinor: merchandisePayableBeforeRewardsMinor,
+      currency,
+      cartLines: orderableIds
+        .map((productId) => ({
+          productId,
+          name: productsData[productId]?.name || productId,
+          quantity: quantities[productId] || 0,
+          unitPriceMinor: productsData[productId]?.priceMinor || 0,
+        }))
+        .filter((line) => line.quantity > 0),
+      offerApplied: Boolean(offerEvaluation?.applicable),
+    }),
+    [
+      currency,
+      customerRewards.wallet?.pointsBalance,
+      merchandisePayableBeforeRewardsMinor,
+      offerEvaluation?.applicable,
+      orderableIds,
+      productsData,
+      quantities,
+      rewardSelection,
+    ],
+  );
+  const totalAmountMinor = Math.max(
+    0,
+    merchandisePayableBeforeRewardsMinor - rewardEvaluation.discountMinor,
+  );
   const subtotalAmount = minorToMajor(subtotalMinor, currency);
   const totalAmount = minorToMajor(totalAmountMinor, currency);
 
@@ -511,12 +562,14 @@ const uiLocale =
 }, [locale]);
 
   const resetOrderForm = useCallback(() => {
+    setFormError("");
     setQuantities({});
     setNote("");
     setLocationLink("");
     setTimeOption("no-preference");
     setSelectedHour(null);
     setSelectedMinute(null);
+    setRewardSelection({ ...EMPTY_REWARD_SELECTION });
 
     if (event?.deliveryDates?.length) {
       setDateOption("event-date");
@@ -944,7 +997,7 @@ const uiLocale =
     if (String(event.status || "active") !== "active") return false;
     if (!customerName.trim()) return false;
     if (!customerPhone.trim()) return false;
-    if (totalItems <= 0 || totalAmount <= 0) return false;
+    if (totalItems <= 0 || totalAmount < 0) return false;
     if (!deliveryMode) return false;
     if (event.deliveryDates.length > 0 && dateOption === "event-date" && !selectedDate) return false;
     if (timeOption === "custom" && (selectedHour == null || selectedMinute == null)) return false;
@@ -990,6 +1043,11 @@ const uiLocale =
         selectedOfferId || undefined,
       customerClientId: customerId,
       quantities: quantitiesClean,
+      rewards: {
+        mode: rewardEvaluation.mode,
+        points: rewardEvaluation.pointsRedeemed,
+        productId: rewardEvaluation.rewardProductId || undefined,
+      },
       customer: {
         name: customerName,
         phone: customerPhone,
@@ -1008,6 +1066,9 @@ const uiLocale =
 
     setLastOrderId(result.orderId);
     setLastCustomerOrderRefId(result.customerOrderRefId || "");
+    setLastPointsToEarn(result.pointsToEarn || 0);
+    setLastPointsRedeemed(result.pointsRedeemed || 0);
+    if (customerSession.registered) void customerRewards.refresh();
     setChatOpen(true);
 
     return result.orderId;
@@ -1027,15 +1088,30 @@ const uiLocale =
     getChosenDate,
     getChosenTimeLabel,
     language,
+    rewardEvaluation,
+    customerRewards,
+    customerSession.registered,
   ]);
 
   const handleFinalize = useCallback(async () => {
+    if (typeof navigator !== "undefined" && !navigator.onLine) {
+      showFormError(
+        language === "ja"
+          ? "オフラインです。接続が戻ってから注文を確定してください。"
+          : language === "en"
+            ? "You are offline. Wait for the connection to return before placing the order."
+            : "Você está sem internet. Aguarde a conexão voltar antes de finalizar o pedido.",
+      );
+      return;
+    }
+
     if (!canSubmit) {
-      alert(tr("event.error.fill_required", "Escolha produtos, informe nome e telefone e selecione entrega/data/hora antes de finalizar."));
+      showFormError(tr("event.error.fill_required", "Escolha produtos, informe nome e telefone e selecione entrega/data/hora antes de finalizar."));
       return;
     }
 
     try {
+      setFormError("");
       setSubmitting(true);
       await registerOrderInFirestore();
       writeStoredCustomerProfile({
@@ -1055,7 +1131,17 @@ const uiLocale =
         getPublicOrderErrorCode(err);
 
       const message =
-        errorCode === "AUTH_REQUIRED"
+        errorCode === "INSUFFICIENT_POINTS"
+          ? language === "ja"
+            ? "ポイント残高が不足しています。"
+            : language === "en"
+              ? "Your points balance is insufficient."
+              : "Seu saldo de pontos é insuficiente."
+          : errorCode === "REWARDS_UNAVAILABLE"
+            ? err instanceof Error
+              ? err.message
+              : tr("event.error.register_order", "Não foi possível usar os pontos.")
+          : errorCode === "AUTH_REQUIRED"
           ? tr(
               "event.error.session_expired",
               language === "ja"
@@ -1085,7 +1171,7 @@ const uiLocale =
                   "Não foi possível registrar o pedido.",
                 );
 
-      alert(message);
+      showFormError(message);
     } finally {
       setSubmitting(false);
     }
@@ -1098,6 +1184,7 @@ const uiLocale =
     language,
     registerOrderInFirestore,
     resetOrderForm,
+    showFormError,
     showSentToast,
     tr,
   ]);
@@ -1155,6 +1242,7 @@ const uiLocale =
         returnTo={`/event/${sellerId}/${id}`}
         language={language}
         storeHref={`/store/${sellerId}`}
+        sellerId={sellerId}
       />
 
       {sentToast && (
@@ -1476,6 +1564,33 @@ const uiLocale =
           </div>
 
           {subtotalAmount > 0 && (
+            <RewardsCheckoutPanel
+              language={language}
+              sellerId={sellerId}
+              returnTo={`/event/${sellerId}/${id}`}
+              registered={customerSession.registered}
+              loading={customerRewards.loading}
+              wallet={customerRewards.wallet}
+              currency={currency}
+              locale={locale}
+              cartLines={orderableIds
+                .map((productId) => ({
+                  productId,
+                  name: productsData[productId]?.name || productId,
+                  quantity: quantities[productId] || 0,
+                  unitPriceMinor: productsData[productId]?.priceMinor || 0,
+                }))
+                .filter((line) => line.quantity > 0)}
+              merchandisePayableMinor={merchandisePayableBeforeRewardsMinor}
+              offerApplied={Boolean(offerEvaluation?.applicable)}
+              selection={rewardSelection}
+              maximumDiscountPoints={rewardEvaluation.maximumDiscountPoints}
+              pointsToEarn={rewardEvaluation.pointsToEarn}
+              onChange={setRewardSelection}
+            />
+          )}
+
+          {subtotalAmount > 0 && (
             <div className="space-y-1 rounded-2xl bg-neutral-50 p-4 text-sm font-bold dark:bg-neutral-950/60">
               <div className="flex items-center justify-between text-neutral-500">
                 <span>{tr("event.order.subtotal", "Subtotal")}</span>
@@ -1487,12 +1602,29 @@ const uiLocale =
                   <span>- {formatMoneyMinor(discountMinor, currency, locale)}</span>
                 </div>
               )}
+              {rewardEvaluation.discountMinor > 0 && (
+                <div className="flex items-center justify-between text-violet-600 dark:text-violet-400">
+                  <span>{language === "ja" ? "ポイント割引" : language === "en" ? "Points discount" : "Desconto em pontos"}</span>
+                  <span>- {formatMoneyMinor(rewardEvaluation.discountMinor, currency, locale)}</span>
+                </div>
+              )}
               <div className="flex items-center justify-between border-t border-neutral-200 pt-2 text-base font-black text-neutral-900 dark:border-neutral-800 dark:text-white">
                 <span>{tr("event.order.total", "Total")}</span>
                 <span className="text-xl text-emerald-600 dark:text-emerald-400">
                   {formatMoneyMinor(totalAmountMinor, currency, locale)}
                 </span>
               </div>
+            </div>
+          )}
+
+          {formError && (
+            <div
+              ref={formErrorRef}
+              role="alert"
+              aria-live="assertive"
+              className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-black text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300"
+            >
+              {formError}
             </div>
           )}
 
@@ -1527,6 +1659,16 @@ const uiLocale =
                     ? tr("event.order.saved_account", "O pedido foi salvo na sua conta e poderá ser acompanhado em Meus pedidos.")
                     : tr("event.order.guest_saved", "Guarde o número do pedido para falar com o vendedor.")}
                 </p>
+                {(lastPointsRedeemed > 0 || lastPointsToEarn > 0) && (
+                  <div className="mt-3 rounded-xl bg-violet-100/80 p-3 text-xs font-bold text-violet-800 dark:bg-violet-950/50 dark:text-violet-200">
+                    {lastPointsRedeemed > 0 && (
+                      <p>{language === "ja" ? `${lastPointsRedeemed}ポイント使用しました。` : language === "en" ? `${lastPointsRedeemed} points used.` : `${lastPointsRedeemed} pontos utilizados.`}</p>
+                    )}
+                    {lastPointsToEarn > 0 && (
+                      <p className={lastPointsRedeemed > 0 ? "mt-1" : ""}>{language === "ja" ? `受け渡し完了後に${lastPointsToEarn}ポイント獲得します。` : language === "en" ? `You will earn ${lastPointsToEarn} points after delivery.` : `Você ganhará ${lastPointsToEarn} pontos após a entrega.`}</p>
+                    )}
+                  </div>
+                )}
               </div>
 
               <div className="flex flex-wrap gap-2">

@@ -7,6 +7,11 @@ import { getAdminAuth, getAdminDb } from "@/app/lib/firebaseAdmin";
 import { normalizeCustomerAddress } from "@/app/lib/customer-profile";
 import { normalizeProductInventory } from "@/app/lib/inventory-schema";
 import {
+  evaluateRewardSelection,
+  rewardProductPointCost,
+  type RewardRedemptionMode,
+} from "@/app/lib/reward-schema";
+import {
   evaluatePostalShipping,
   normalizeProductShipping,
   normalizeSellerShippingSettings,
@@ -33,6 +38,7 @@ type PublicOrderRequest = {
   selectedOfferId?: unknown;
   customerClientId?: unknown;
   quantities?: unknown;
+  rewards?: unknown;
   customer?: unknown;
   delivery?: unknown;
 };
@@ -47,6 +53,11 @@ type CleanOrderRequest = {
   customerClientId: string;
   quantities: Record<string, number>;
   totalItems: number;
+  rewards: {
+    mode: RewardRedemptionMode;
+    points: number;
+    productId: string;
+  };
   customer: {
     name: string;
     phone: string;
@@ -79,7 +90,9 @@ type OrderErrorCode =
   | "SHIPPING_UNAVAILABLE"
   | "IDEMPOTENCY_CONFLICT"
   | "TOO_MANY_REQUESTS"
-  | "AUTH_REQUIRED";
+  | "AUTH_REQUIRED"
+  | "REWARDS_UNAVAILABLE"
+  | "INSUFFICIENT_POINTS";
 
 class OrderError extends Error {
   readonly code: OrderErrorCode;
@@ -159,6 +172,10 @@ function cleanDeliveryMode(value: unknown): DeliveryMode {
 
 function cleanCurrency(value: unknown): Currency {
   return value === "BRL" || value === "USD" ? value : "JPY";
+}
+
+function cleanRewardMode(value: unknown): RewardRedemptionMode {
+  return value === "discount" || value === "product" ? value : "none";
 }
 
 type CustomerIdentity = {
@@ -251,6 +268,7 @@ function cleanRequest(value: unknown): CleanOrderRequest {
   const customer = record(raw.customer);
   const delivery = record(raw.delivery);
   const shipping = record(delivery.shipping);
+  const rewards = record(raw.rewards);
   const { quantities, totalItems } = cleanQuantities(raw.quantities);
 
   if (!sellerId || sellerId.includes("/")) {
@@ -317,6 +335,11 @@ function cleanRequest(value: unknown): CleanOrderRequest {
     customerClientId: cleanString(raw.customerClientId, 200),
     quantities,
     totalItems,
+    rewards: {
+      mode: cleanRewardMode(rewards.mode),
+      points: cleanInteger(rewards.points, 0, 2_000_000_000),
+      productId: cleanString(rewards.productId, 160),
+    },
     customer: {
       name: customerName,
       phone: customerPhone,
@@ -752,6 +775,10 @@ function resultResponse(params: {
   orderStatus: "pending" | "ready";
   customerOrderRefId: string;
   customerRegistered: boolean;
+  rewardsDiscountMinor: number;
+  pointsRedeemed: number;
+  pointsToEarn: number;
+  rewardMode: RewardRedemptionMode;
   replayed: boolean;
 }) {
   return {
@@ -771,6 +798,10 @@ function resultResponse(params: {
     orderStatus: params.orderStatus,
     customerOrderRefId: params.customerOrderRefId || null,
     customerRegistered: params.customerRegistered,
+    rewardsDiscountMinor: params.rewardsDiscountMinor,
+    pointsRedeemed: params.pointsRedeemed,
+    pointsToEarn: params.pointsToEarn,
+    rewardMode: params.rewardMode,
     replayed: params.replayed,
   };
 }
@@ -799,12 +830,22 @@ export async function POST(request: NextRequest) {
 
     const clean = cleanRequest(requestBody);
     const customerIdentity = await resolveCustomerIdentity(request);
+    if (clean.rewards.mode !== "none" && !customerIdentity) {
+      throw new OrderError(
+        "AUTH_REQUIRED",
+        "Entre na sua conta para usar pontos.",
+        401,
+      );
+    }
     const db = getAdminDb();
     const now = admin.firestore.Timestamp.now();
     const nowMillis = now.toMillis();
     const sellerRef = db.collection("sellers").doc(clean.sellerId);
     const customerRef = customerIdentity
       ? db.collection("customers").doc(customerIdentity.uid)
+      : null;
+    const rewardWalletRef = customerRef
+      ? customerRef.collection("rewardWallets").doc(clean.sellerId)
       : null;
     const eventRef = clean.eventId
       ? sellerRef.collection("events").doc(clean.eventId)
@@ -837,6 +878,7 @@ export async function POST(request: NextRequest) {
       customerClientId: clean.customerClientId,
       customerUid: customerIdentity?.uid || "",
       quantities: clean.quantities,
+      rewards: clean.rewards,
       customer: clean.customer,
       delivery: clean.delivery,
     };
@@ -859,6 +901,7 @@ export async function POST(request: NextRequest) {
     const transactionResult = await db.runTransaction(async (transaction) => {
       const refs: admin.firestore.DocumentReference[] = [markerRef, sellerRef];
       if (customerRef) refs.push(customerRef);
+      if (rewardWalletRef) refs.push(rewardWalletRef);
       if (eventRef) refs.push(eventRef);
       refs.push(...orderItemRefs);
       if (clean.source === "event") refs.push(...catalogProductRefs);
@@ -870,6 +913,7 @@ export async function POST(request: NextRequest) {
       const markerSnapshot = snapshots[cursor++];
       const sellerSnapshot = snapshots[cursor++];
       const customerSnapshot = customerRef ? snapshots[cursor++] : null;
+      const rewardWalletSnapshot = rewardWalletRef ? snapshots[cursor++] : null;
       const eventSnapshot = eventRef ? snapshots[cursor++] : null;
       const orderItemSnapshots = orderItemRefs.map(() => snapshots[cursor++]);
       const catalogProductSnapshots = clean.source === "event"
@@ -912,6 +956,10 @@ export async function POST(request: NextRequest) {
           orderStatus: markerData.orderStatus === "ready" ? "ready" : "pending",
           customerOrderRefId: cleanString(markerData.customerOrderRefId, 160),
           customerRegistered: Boolean(markerData.customerRegistered),
+          rewardsDiscountMinor: cleanInteger(markerData.rewardsDiscountMinor, 0, 2_000_000_000),
+          pointsRedeemed: cleanInteger(markerData.pointsRedeemed, 0, 2_000_000_000),
+          pointsToEarn: cleanInteger(markerData.pointsToEarn, 0, 2_000_000_000),
+          rewardMode: cleanRewardMode(markerData.rewardMode),
           replayed: true,
         });
       }
@@ -1073,6 +1121,107 @@ export async function POST(request: NextRequest) {
       }
 
       discountMinor = Math.min(subtotalMinor, Math.max(0, discountMinor));
+      const offerDiscountMinor = discountMinor;
+      const merchandisePayableBeforeRewardsMinor = Math.max(
+        0,
+        subtotalMinor - offerDiscountMinor,
+      );
+      const rewardWalletData = rewardWalletSnapshot?.data() ?? {};
+      const rewardWalletBalance = cleanInteger(
+        rewardWalletData.pointsBalance,
+        0,
+        2_000_000_000,
+      );
+      const rewardEvaluation = evaluateRewardSelection({
+        selection: clean.rewards,
+        walletBalance: rewardWalletBalance,
+        merchandisePayableMinor: merchandisePayableBeforeRewardsMinor,
+        currency,
+        cartLines: lines.map((line) => ({
+          productId: line.productId,
+          name: line.name,
+          quantity: line.quantity,
+          unitPriceMinor: line.priceMinor,
+        })),
+        offerApplied: Boolean(clean.selectedOfferId && offerDiscountMinor > 0),
+      });
+
+      if (clean.rewards.mode === "discount") {
+        if (clean.rewards.points <= 0) {
+          throw new OrderError(
+            "REWARDS_UNAVAILABLE",
+            "Informe quantos pontos deseja usar.",
+          );
+        }
+        if (rewardWalletBalance < clean.rewards.points) {
+          throw new OrderError(
+            "INSUFFICIENT_POINTS",
+            "Seu saldo de pontos não é suficiente.",
+            409,
+          );
+        }
+        if (rewardEvaluation.pointsRedeemed !== clean.rewards.points) {
+          throw new OrderError(
+            "REWARDS_UNAVAILABLE",
+            "A quantidade de pontos excede o valor dos produtos desta compra.",
+            409,
+          );
+        }
+      }
+
+      if (clean.rewards.mode === "product") {
+        if (clean.selectedOfferId && offerDiscountMinor > 0) {
+          throw new OrderError(
+            "REWARDS_UNAVAILABLE",
+            "A troca por produto não pode ser combinada com uma oferta ou kit.",
+            409,
+          );
+        }
+        const selectedLine = lines.find(
+          (line) => line.productId === clean.rewards.productId && line.quantity > 0,
+        );
+        if (!selectedLine) {
+          throw new OrderError(
+            "REWARDS_UNAVAILABLE",
+            "Selecione um produto válido do carrinho para a troca.",
+            409,
+          );
+        }
+        const selectedProductPointCost = rewardProductPointCost(
+          selectedLine.priceMinor,
+          currency,
+        );
+        if (selectedProductPointCost <= 0) {
+          throw new OrderError(
+            "REWARDS_UNAVAILABLE",
+            "Este produto não está disponível para troca por pontos.",
+            409,
+          );
+        }
+        if (rewardWalletBalance < selectedProductPointCost) {
+          throw new OrderError(
+            "INSUFFICIENT_POINTS",
+            "Seu saldo de pontos não é suficiente.",
+            409,
+          );
+        }
+        if (rewardEvaluation.mode !== "product") {
+          throw new OrderError(
+            "REWARDS_UNAVAILABLE",
+            "Este produto não pode ser trocado com o saldo atual.",
+            409,
+          );
+        }
+      }
+
+      const rewardsDiscountMinor = rewardEvaluation.discountMinor;
+      discountMinor = Math.min(
+        subtotalMinor,
+        offerDiscountMinor + rewardsDiscountMinor,
+      );
+      const merchandisePaidMinor = Math.max(0, subtotalMinor - discountMinor);
+      const pointsRedeemed = rewardEvaluation.pointsRedeemed;
+      const pointsToEarn = rewardEvaluation.pointsToEarn;
 
       let shippingFeeMinor = 0;
       let shippingSnapshot: Record<string, unknown> | null = null;
@@ -1230,6 +1379,8 @@ export async function POST(request: NextRequest) {
         totalItems: clean.totalItems,
         subtotalMinor,
         discountMinor,
+        offerDiscountMinor,
+        rewardsDiscountMinor,
         shippingFeeMinor,
         totalAmountMinor,
         subtotal: minorToMajor(subtotalMinor, currency),
@@ -1239,6 +1390,22 @@ export async function POST(request: NextRequest) {
         totalAmount: minorToMajor(totalAmountMinor, currency),
         offersApplied,
         selectedOfferId: clean.selectedOfferId || null,
+        rewards: {
+          schemaVersion: 1,
+          sellerId: clean.sellerId,
+          mode: rewardEvaluation.mode,
+          pointsRedeemed,
+          discountMinor: rewardsDiscountMinor,
+          rewardProductId: rewardEvaluation.rewardProductId || null,
+          rewardProductName: rewardEvaluation.rewardProductName || null,
+          rewardProductPoints: rewardEvaluation.rewardProductPoints,
+          redemptionStatus: pointsRedeemed > 0 ? "committed" : "none",
+          pointsToEarn,
+          earnStatus: pointsToEarn > 0 ? "pending" : "not_eligible",
+          merchandisePaidMinor,
+          creditedAt: null,
+          refundedAt: null,
+        },
         status: initialOrderStatus,
         fulfillmentStatus: initialOrderStatus,
         readiness: {
@@ -1389,6 +1556,69 @@ export async function POST(request: NextRequest) {
         }
       }
 
+      if (rewardWalletRef && customerIdentity) {
+        const storeName =
+          cleanString(sellerData.storeName ?? sellerData.displayName, 160) || "Loja";
+        const currentBalance = rewardWalletBalance;
+        const nextBalance = currentBalance - pointsRedeemed;
+
+        if (nextBalance < 0) {
+          throw new OrderError(
+            "INSUFFICIENT_POINTS",
+            "Seu saldo de pontos foi alterado. Atualize a página e tente novamente.",
+            409,
+          );
+        }
+
+        const walletPayload: Record<string, unknown> = {
+          schemaVersion: 1,
+          customerUid: customerIdentity.uid,
+          sellerId: clean.sellerId,
+          storeName,
+          currency,
+          pointsBalance: nextBalance,
+          lifetimeEarned: cleanInteger(rewardWalletData.lifetimeEarned, 0, 2_000_000_000),
+          lifetimeRedeemed:
+            cleanInteger(rewardWalletData.lifetimeRedeemed, 0, 2_000_000_000) +
+            pointsRedeemed,
+          lifetimeRefunded: cleanInteger(
+            rewardWalletData.lifetimeRefunded,
+            0,
+            2_000_000_000,
+          ),
+          updatedAt: now,
+        };
+        if (!rewardWalletSnapshot?.exists) walletPayload.createdAt = now;
+        transaction.set(rewardWalletRef, walletPayload, { merge: true });
+
+        if (pointsRedeemed > 0) {
+          const redemptionRef = rewardWalletRef
+            .collection("transactions")
+            .doc(`redeem_${orderRef.id}`);
+          transaction.create(redemptionRef, {
+            schemaVersion: 1,
+            type: "redeem",
+            points: pointsRedeemed,
+            balanceBefore: currentBalance,
+            balanceAfter: nextBalance,
+            sellerId: clean.sellerId,
+            customerUid: customerIdentity.uid,
+            orderId: orderRef.id,
+            orderPath: orderRef.path,
+            orderSource: clean.source,
+            eventId: clean.eventId || null,
+            rewardMode: rewardEvaluation.mode,
+            rewardProductId: rewardEvaluation.rewardProductId || null,
+            rewardProductName: rewardEvaluation.rewardProductName || null,
+            label:
+              rewardEvaluation.mode === "product"
+                ? `Troca: ${rewardEvaluation.rewardProductName}`
+                : "Desconto com pontos",
+            createdAt: now,
+          });
+        }
+      }
+
       if (customerRef && customerIdentity) {
         const customerData = customerSnapshot?.data() ?? {};
         const customerRewards =
@@ -1468,6 +1698,12 @@ export async function POST(request: NextRequest) {
             : null,
           currency,
           totalAmountMinor,
+          offerDiscountMinor,
+          rewardsDiscountMinor,
+          pointsRedeemed,
+          pointsToEarn,
+          rewardMode: rewardEvaluation.mode,
+          rewardStatus: pointsToEarn > 0 ? "pending" : "not_eligible",
           totalItems: clean.totalItems,
           deliveryMode: clean.delivery.mode,
           deliveryDate: clean.delivery.date || null,
@@ -1491,6 +1727,10 @@ export async function POST(request: NextRequest) {
         discountMinor,
         shippingFeeMinor,
         totalAmountMinor,
+        rewardsDiscountMinor,
+        pointsRedeemed,
+        pointsToEarn,
+        rewardMode: rewardEvaluation.mode,
         orderStatus: initialOrderStatus,
         customerOrderRefId: customerOrderRef?.id || null,
         customerRegistered: Boolean(customerIdentity),
@@ -1513,6 +1753,10 @@ export async function POST(request: NextRequest) {
         orderStatus: initialOrderStatus,
         customerOrderRefId: customerOrderRef?.id || "",
         customerRegistered: Boolean(customerIdentity),
+        rewardsDiscountMinor,
+        pointsRedeemed,
+        pointsToEarn,
+        rewardMode: rewardEvaluation.mode,
         replayed: false,
       });
     });

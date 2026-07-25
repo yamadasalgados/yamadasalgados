@@ -16,6 +16,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
+import CustomerAppReadiness from "@/app/_components/CustomerAppReadiness";
 import { auth } from "@/app/lib/firebase";
 import { readStoredCustomerProfile } from "@/app/lib/customer-storage";
 import { useI18n } from "@/app/lib/i18n";
@@ -304,6 +305,10 @@ function CustomerLoginContent() {
               {text.visitStore}
             </Link>
           )}
+        </div>
+
+        <div className="mt-5">
+          <CustomerAppReadiness language={language} compact />
         </div>
 
         <div className="mt-6 rounded-2xl bg-amber-50 p-4 dark:bg-amber-950/30">

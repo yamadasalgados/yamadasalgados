@@ -3,6 +3,7 @@ import { auth } from "@/app/lib/firebase";
 export type PublicOrderSource = "store" | "event";
 export type PublicOrderLanguage = "pt" | "en" | "ja";
 export type PublicOrderDeliveryMode = "pickup" | "delivery" | "postal" | "none";
+export type PublicOrderRewardMode = "none" | "discount" | "product";
 
 export type PublicOrderErrorCode =
   | "INVALID_REQUEST"
@@ -15,6 +16,8 @@ export type PublicOrderErrorCode =
   | "TOO_MANY_REQUESTS"
   | "NETWORK_ERROR"
   | "AUTH_REQUIRED"
+  | "REWARDS_UNAVAILABLE"
+  | "INSUFFICIENT_POINTS"
   | "UNKNOWN_ERROR";
 
 export type CreatePublicOrderInput = {
@@ -25,6 +28,11 @@ export type CreatePublicOrderInput = {
   selectedOfferId?: string;
   customerClientId?: string;
   quantities: Record<string, number>;
+  rewards?: {
+    mode: PublicOrderRewardMode;
+    points?: number;
+    productId?: string;
+  };
   customer: {
     name: string;
     phone: string;
@@ -65,6 +73,10 @@ export type CreatePublicOrderResult = {
   orderStatus: "pending" | "ready";
   customerOrderRefId: string | null;
   customerRegistered: boolean;
+  rewardsDiscountMinor: number;
+  pointsRedeemed: number;
+  pointsToEarn: number;
+  rewardMode: PublicOrderRewardMode;
   replayed: boolean;
 };
 
@@ -176,6 +188,8 @@ function isKnownErrorCode(value: unknown): value is PublicOrderErrorCode {
     value === "TOO_MANY_REQUESTS" ||
     value === "NETWORK_ERROR" ||
     value === "AUTH_REQUIRED" ||
+    value === "REWARDS_UNAVAILABLE" ||
+    value === "INSUFFICIENT_POINTS" ||
     value === "UNKNOWN_ERROR"
   );
 }

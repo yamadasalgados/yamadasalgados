@@ -44,7 +44,9 @@ import {
 } from "@/app/lib/firebase";
 
 import CustomerAccountBar from "@/app/_components/CustomerAccountBar";
+import RewardsCheckoutPanel from "@/app/_components/RewardsCheckoutPanel";
 import useCustomerSession from "@/app/hooks/useCustomerSession";
+import useCustomerRewards from "@/app/hooks/useCustomerRewards";
 import {
   readLocalDraft,
   readStoredCustomerProfile,
@@ -67,6 +69,11 @@ import {
   useI18n,
 } from "@/app/lib/i18n";
 
+import {
+  EMPTY_REWARD_SELECTION,
+  evaluateRewardSelection,
+  type RewardRedemptionSelection,
+} from "@/app/lib/reward-schema";
 import {
   formatMoneyMajor,
   formatMoneyMinor,
@@ -275,6 +282,8 @@ const TEXT = {
       "Enviando pedido...",
     orderError:
       "Não foi possível enviar o pedido. Verifique a conexão e tente novamente.",
+    offlineOrder:
+      "Você está sem internet. Aguarde a conexão voltar antes de finalizar o pedido.",
     permissionError:
       "A criação do pedido foi bloqueada pelas permissões do Firestore.",
     stockError:
@@ -411,6 +420,8 @@ const TEXT = {
     sending: "Sending order...",
     orderError:
       "The order could not be sent. Check your connection and try again.",
+    offlineOrder:
+      "You are offline. Wait for the connection to return before placing the order.",
     permissionError:
       "Firestore permissions blocked the order creation.",
     stockError:
@@ -545,6 +556,8 @@ const TEXT = {
       "注文を送信しています...",
     orderError:
       "注文を送信できませんでした。接続を確認して、もう一度お試しください。",
+    offlineOrder:
+      "オフラインです。接続が戻ってから注文を確定してください。",
     permissionError:
       "Firestore の権限により注文の作成がブロックされました。",
     stockError:
@@ -958,6 +971,10 @@ export default function StoreClient({
 
   const customerSession =
     useCustomerSession();
+  const customerRewards = useCustomerRewards(
+    sellerId,
+    customerSession.registered,
+  );
   const customerDraftReadyRef =
     useRef(false);
   const customerDraftKey =
@@ -1047,6 +1064,7 @@ export default function StoreClient({
 
   const [formError, setFormError] =
     useState("");
+  const formErrorRef = useRef<HTMLDivElement | null>(null);
 
   const [submitting, setSubmitting] =
     useState(false);
@@ -1056,6 +1074,10 @@ export default function StoreClient({
 
   const [createdCustomerOrderRefId, setCreatedCustomerOrderRefId] =
     useState("");
+  const [rewardSelection, setRewardSelection] =
+    useState<RewardRedemptionSelection>({ ...EMPTY_REWARD_SELECTION });
+  const [createdPointsToEarn, setCreatedPointsToEarn] = useState(0);
+  const [createdPointsRedeemed, setCreatedPointsRedeemed] = useState(0);
 
   const [
     selectedProduct,
@@ -1068,6 +1090,14 @@ export default function StoreClient({
     selectedImageIndex,
     setSelectedImageIndex,
   ] = useState(0);
+
+  useEffect(() => {
+    if (!formError) return;
+    const frame = window.requestAnimationFrame(() => {
+      formErrorRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [formError, step]);
 
   useEffect(() => {
     customerDraftReadyRef.current = false;
@@ -1469,13 +1499,16 @@ const categorySummaries =
       const product
       of products
     ) {
+      if (product.availabilityStatus !== "active") {
+        continue;
+      }
+
       const current =
         grouped.get(
           product.category,
         );
 
       const available =
-        product.availabilityStatus === "made_to_order" ||
         typeof product.stock !== "number" ||
         product.stock > 0;
 
@@ -1536,6 +1569,10 @@ const visibleProducts =
 
     return products.filter(
       (product) => {
+        if (selectedCategory && product.availabilityStatus !== "active") {
+          return false;
+        }
+
         if (
           selectedCategory &&
           product.category !==
@@ -1572,11 +1609,6 @@ const visibleProducts =
 const showingProducts =
   selectedCategory !== null ||
   search.trim().length > 0;
-
-  const normalProducts = useMemo(
-    () => products.filter((product) => product.availabilityStatus === "active"),
-    [products],
-  );
 
   const madeToOrderProducts = useMemo(
     () => products.filter((product) => product.availabilityStatus === "made_to_order"),
@@ -1646,6 +1678,14 @@ const showingProducts =
       [cartItems],
     );
 
+  const subtotalMinor = useMemo(
+    () => cartItems.reduce(
+      (sum, item) => sum + item.priceMinor * item.qty,
+      0,
+    ),
+    [cartItems],
+  );
+
   const selectedOfferEvaluation:
     OfferEvaluation | null =
     useMemo(() => {
@@ -1674,9 +1714,40 @@ const showingProducts =
     storeProfile.currency,
   );
 
-  const productsTotal = Math.max(
+  const merchandisePayableBeforeRewardsMinor = Math.max(
     0,
-    subtotal - discount,
+    subtotalMinor - discountMinor,
+  );
+  const rewardEvaluation = useMemo(
+    () => evaluateRewardSelection({
+      selection: rewardSelection,
+      walletBalance: customerRewards.wallet?.pointsBalance ?? 0,
+      merchandisePayableMinor: merchandisePayableBeforeRewardsMinor,
+      currency: storeProfile.currency,
+      cartLines: cartItems.map((item) => ({
+        productId: item.id,
+        name: item.name,
+        quantity: item.qty,
+        unitPriceMinor: item.priceMinor,
+      })),
+      offerApplied: Boolean(selectedOfferEvaluation?.applicable),
+    }),
+    [
+      cartItems,
+      customerRewards.wallet?.pointsBalance,
+      merchandisePayableBeforeRewardsMinor,
+      rewardSelection,
+      selectedOfferEvaluation?.applicable,
+      storeProfile.currency,
+    ],
+  );
+  const rewardsDiscount = minorToMajor(
+    rewardEvaluation.discountMinor,
+    storeProfile.currency,
+  );
+  const productsTotal = minorToMajor(
+    Math.max(0, merchandisePayableBeforeRewardsMinor - rewardEvaluation.discountMinor),
+    storeProfile.currency,
   );
 
   const postalBlockedItems = useMemo(
@@ -1823,6 +1894,12 @@ const showingProducts =
       return;
     }
 
+    if (typeof navigator !== "undefined" && !navigator.onLine) {
+      setFormError(text.offlineOrder);
+      goToTop();
+      return;
+    }
+
     if (
       !customer.name.trim()
     ) {
@@ -1885,6 +1962,11 @@ const showingProducts =
         customerClientId:
           customerSession.clientId || undefined,
         quantities,
+        rewards: {
+          mode: rewardEvaluation.mode,
+          points: rewardEvaluation.pointsRedeemed,
+          productId: rewardEvaluation.rewardProductId || undefined,
+        },
         customer: {
           name: customer.name,
           phone: customer.phone,
@@ -1922,6 +2004,10 @@ const showingProducts =
         result.orderId,
       );
       setCreatedCustomerOrderRefId(result.customerOrderRefId || "");
+      setCreatedPointsToEarn(result.pointsToEarn || 0);
+      setCreatedPointsRedeemed(result.pointsRedeemed || 0);
+      setRewardSelection({ ...EMPTY_REWARD_SELECTION });
+      if (customerSession.registered) void customerRewards.refresh();
 
       writeStoredCustomerProfile(storedProfileFromCheckout(customer, delivery));
       removeLocalDraft(customerDraftKey);
@@ -1941,7 +2027,17 @@ const showingProducts =
         );
 
       const message =
-        errorCode === "AUTH_REQUIRED"
+        errorCode === "INSUFFICIENT_POINTS"
+          ? language === "ja"
+            ? "ポイント残高が不足しています。"
+            : language === "en"
+              ? "Your points balance is insufficient."
+              : "Seu saldo de pontos é insuficiente."
+          : errorCode === "REWARDS_UNAVAILABLE"
+            ? error instanceof Error
+              ? error.message
+              : text.orderError
+          : errorCode === "AUTH_REQUIRED"
           ? language === "ja"
             ? "セッションの有効期限が切れました。再度ログインしてください。"
             : language === "en"
@@ -1991,6 +2087,9 @@ const showingProducts =
 
     setCreatedOrderId("");
     setCreatedCustomerOrderRefId("");
+    setCreatedPointsToEarn(0);
+    setCreatedPointsRedeemed(0);
+    setRewardSelection({ ...EMPTY_REWARD_SELECTION });
     setFormError("");
     setSearch("");
     setSelectedCategory(null);
@@ -2099,6 +2198,29 @@ const showingProducts =
           <p className="mt-4 text-sm font-medium text-neutral-500 dark:text-neutral-400">
             {createdCustomerOrderRefId ? text.registeredOrderHelp : text.guestOrderHelp}
           </p>
+
+          {(createdPointsRedeemed > 0 || createdPointsToEarn > 0) && (
+            <div className="mt-4 rounded-2xl bg-violet-50 p-4 text-left text-sm font-bold text-violet-800 dark:bg-violet-950/40 dark:text-violet-200">
+              {createdPointsRedeemed > 0 && (
+                <p>
+                  {language === "ja"
+                    ? `${createdPointsRedeemed}ポイント使用しました。`
+                    : language === "en"
+                      ? `${createdPointsRedeemed} points used.`
+                      : `${createdPointsRedeemed} pontos utilizados.`}
+                </p>
+              )}
+              {createdPointsToEarn > 0 && (
+                <p className={createdPointsRedeemed > 0 ? "mt-1" : ""}>
+                  {language === "ja"
+                    ? `受け渡し完了後に${createdPointsToEarn}ポイント獲得します。`
+                    : language === "en"
+                      ? `You will earn ${createdPointsToEarn} points after delivery.`
+                      : `Você ganhará ${createdPointsToEarn} pontos após a entrega.`}
+                </p>
+              )}
+            </div>
+          )}
 
           <div className="mt-7 grid gap-3 sm:grid-cols-2">
             {createdCustomerOrderRefId && (
@@ -2234,6 +2356,7 @@ const showingProducts =
             session={customerSession}
             returnTo={`/store/${sellerId}`}
             language={language}
+            sellerId={sellerId}
           />
         </div>
 
@@ -2390,21 +2513,6 @@ const showingProducts =
         )}
 
         <StoreProductGrid
-          title={text.availableProductsTitle}
-          help={text.availableProductsHelp}
-          products={normalProducts}
-          cart={cart}
-          text={text}
-          locale={storeProfile.regionalLocale}
-          currency={storeProfile.currency}
-          onOpen={(product) => {
-            setSelectedProduct(product);
-            setSelectedImageIndex(0);
-          }}
-          onSetQuantity={setQuantity}
-        />
-
-        <StoreProductGrid
           title={text.madeToOrderTitle}
           help={text.madeToOrderHelp}
           products={madeToOrderProducts}
@@ -2528,9 +2636,11 @@ const showingProducts =
               {text.customerHelp}
             </p>
 
-            <FormError
-              message={formError}
-            />
+            <div ref={formErrorRef}>
+              <FormError
+                message={formError}
+              />
+            </div>
 
             <div className="mt-6 space-y-4">
               <Field
@@ -2623,9 +2733,11 @@ const showingProducts =
               {text.deliveryHelp}
             </p>
 
-            <FormError
-              message={formError}
-            />
+            <div ref={formErrorRef}>
+              <FormError
+                message={formError}
+              />
+            </div>
 
             <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               {[
@@ -2926,10 +3038,35 @@ const showingProducts =
               />
             </label>
 
+            <div className="mt-5">
+              <RewardsCheckoutPanel
+                language={language}
+                sellerId={sellerId}
+                returnTo={`/store/${sellerId}`}
+                registered={customerSession.registered}
+                loading={customerRewards.loading}
+                wallet={customerRewards.wallet}
+                currency={storeProfile.currency}
+                locale={storeProfile.regionalLocale}
+                cartLines={cartItems.map((item) => ({
+                  productId: item.id,
+                  name: item.name,
+                  quantity: item.qty,
+                  unitPriceMinor: item.priceMinor,
+                }))}
+                merchandisePayableMinor={merchandisePayableBeforeRewardsMinor}
+                offerApplied={Boolean(selectedOfferEvaluation?.applicable)}
+                selection={rewardSelection}
+                maximumDiscountPoints={rewardEvaluation.maximumDiscountPoints}
+                pointsToEarn={rewardEvaluation.pointsToEarn}
+                onChange={setRewardSelection}
+              />
+            </div>
+
             <OrderSummary
               items={cartItems}
               subtotal={subtotal}
-              discount={discount}
+              discount={discount + rewardsDiscount}
               shippingFee={shippingFee}
               showShipping={delivery.mode === "postal"}
               shippingLabel={
