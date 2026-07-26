@@ -1636,7 +1636,10 @@ const categorySummaries =
       const product
       of products
     ) {
-      if (!product.publiclyVisible) {
+      if (
+        !product.publiclyVisible ||
+        product.availabilityStatus !== "active"
+      ) {
         continue;
       }
 
@@ -1753,24 +1756,19 @@ const visibleProducts =
     [visibleProducts],
   );
 
-  const normalCategorySections = useMemo(() => {
-    const grouped = new Map<string, Product[]>();
-
-    for (const product of visibleNormalProducts) {
-      const current = grouped.get(product.category) ?? [];
-      current.push(product);
-      grouped.set(product.category, current);
-    }
-
-    return Array.from(grouped.entries())
-      .map(([category, categoryProducts]) => ({
-        category,
-        products: [...categoryProducts].sort((left, right) =>
+  const madeToOrderProducts = useMemo(
+    () =>
+      products
+        .filter(
+          (product) =>
+            product.publiclyVisible &&
+            product.availabilityStatus === "made_to_order",
+        )
+        .sort((left, right) =>
           compareStorefrontProducts(left, right, locale),
         ),
-      }))
-      .sort((left, right) => left.category.localeCompare(right.category, locale));
-  }, [locale, visibleNormalProducts]);
+    [locale, products],
+  );
 
   const cartItems =
     useMemo<CartItem[]>(() => {
@@ -2550,6 +2548,10 @@ const visibleProducts =
               setSelectedCategory(null);
               setSearch("");
               setSearchOpen(false);
+              window.scrollTo({
+                top: 0,
+                behavior: "smooth",
+              });
             }}
             className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-neutral-200 bg-white transition hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800"
             aria-label={text.backToCategories}
@@ -2557,6 +2559,14 @@ const visibleProducts =
             <ChevronLeft size={18} />
           </button>
         )}
+
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-black">
+            {search.trim()
+              ? text.searchResults
+              : selectedCategory ?? text.categoriesTitle}
+          </p>
+        </div>
 
         <button
           type="button"
@@ -2571,44 +2581,6 @@ const visibleProducts =
         >
           <Search size={18} />
         </button>
-
-        <div className="flex min-w-0 flex-1 snap-x gap-2 overflow-x-auto pb-1 scrollbar-none">
-          <button
-            type="button"
-            onClick={() => {
-              setSelectedCategory(null);
-              setSearch("");
-            }}
-            className={[
-              "shrink-0 snap-start rounded-full border px-4 py-2 text-xs font-black transition",
-              !selectedCategory && !search.trim()
-                ? "border-neutral-950 bg-neutral-950 text-white dark:border-white dark:bg-white dark:text-neutral-950"
-                : "border-neutral-200 bg-white text-neutral-700 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200",
-            ].join(" ")}
-          >
-            {text.all}
-          </button>
-
-          {categorySummaries.map((categoryItem) => (
-            <button
-              key={categoryItem.name}
-              type="button"
-              onClick={() => {
-                setSelectedCategory(categoryItem.name);
-                setSearch("");
-                setSearchOpen(false);
-              }}
-              className={[
-                "shrink-0 snap-start rounded-full border px-4 py-2 text-xs font-black transition",
-                selectedCategory === categoryItem.name
-                  ? "border-orange-500 bg-orange-500 text-white"
-                  : "border-neutral-200 bg-white text-neutral-700 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200",
-              ].join(" ")}
-            >
-              {categoryItem.name} · {categoryItem.count}
-            </button>
-          ))}
-        </div>
       </div>
 
       {searchOpen && (
@@ -2617,37 +2589,41 @@ const visibleProducts =
           <input
             autoFocus
             value={search}
-            onChange={(event) => setSearch(event.target.value)}
+            onChange={(event) => {
+              setSearch(event.target.value);
+              setSelectedCategory(null);
+            }}
             placeholder={text.search}
             className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-neutral-400"
           />
-          {(search || searchOpen) && (
-            <button
-              type="button"
-              onClick={() => {
-                setSearch("");
-                setSearchOpen(false);
-              }}
-              className="rounded-full p-1 text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800"
-              aria-label={text.close}
-            >
-              <X size={16} />
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={() => {
+              setSearch("");
+              setSearchOpen(false);
+            }}
+            className="rounded-full p-1 text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+            aria-label={text.close}
+          >
+            <X size={16} />
+          </button>
         </label>
       )}
     </section>
 
-    {visibleNormalProducts.length === 0 && visibleMadeToOrderProducts.length === 0 ? (
-      <EmptyState icon={<Search size={40} />} message={search.trim() ? text.emptySearch : text.emptyProducts} />
-    ) : (
-      <>
-        {normalCategorySections.map((section) => (
+    {search.trim() ? (
+      visibleNormalProducts.length === 0 &&
+      visibleMadeToOrderProducts.length === 0 ? (
+        <EmptyState
+          icon={<Search size={40} />}
+          message={text.emptySearch}
+        />
+      ) : (
+        <>
           <StoreProductGrid
-            key={section.category}
-            title={section.category}
+            title={text.searchResults}
             help=""
-            products={section.products}
+            products={visibleNormalProducts}
             cart={cart}
             bundleSelections={bundleSelections}
             offers={offers}
@@ -2662,12 +2638,127 @@ const visibleProducts =
             onSetQuantity={setQuantity}
             onConfigureBundle={setConfiguringBundle}
           />
-        ))}
+
+          <StoreProductGrid
+            title={text.madeToOrderTitle}
+            help={text.madeToOrderHelp}
+            products={visibleMadeToOrderProducts}
+            cart={cart}
+            bundleSelections={bundleSelections}
+            offers={offers}
+            language={language}
+            text={text}
+            locale={storeProfile.regionalLocale}
+            currency={storeProfile.currency}
+            madeToOrder
+            onOpen={(product) => {
+              setSelectedProduct(product);
+              setSelectedImageIndex(0);
+            }}
+            onSetQuantity={setQuantity}
+            onConfigureBundle={setConfiguringBundle}
+          />
+        </>
+      )
+    ) : selectedCategory ? (
+      visibleNormalProducts.length === 0 ? (
+        <EmptyState
+          icon={<Package size={40} />}
+          message={text.emptyProducts}
+        />
+      ) : (
+        <StoreProductGrid
+          title={selectedCategory}
+          help=""
+          products={visibleNormalProducts}
+          cart={cart}
+          bundleSelections={bundleSelections}
+          offers={offers}
+          language={language}
+          text={text}
+          locale={storeProfile.regionalLocale}
+          currency={storeProfile.currency}
+          onOpen={(product) => {
+            setSelectedProduct(product);
+            setSelectedImageIndex(0);
+          }}
+          onSetQuantity={setQuantity}
+          onConfigureBundle={setConfiguringBundle}
+        />
+      )
+    ) : (
+      <>
+        <section className="mt-6">
+          <h2 className="text-2xl font-black sm:text-3xl">
+            {text.chooseCategory}
+          </h2>
+
+          <p className="mt-2 text-sm text-neutral-600 dark:text-neutral-300">
+            {text.chooseCategoryHelp}
+          </p>
+
+          {categorySummaries.length === 0 ? (
+            <EmptyState
+              icon={<Package size={40} />}
+              message={text.emptyProducts}
+            />
+          ) : (
+            <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 lg:grid-cols-4">
+              {categorySummaries.map((categoryItem) => (
+                <button
+                  key={categoryItem.name}
+                  type="button"
+                  onClick={() => {
+                    setSelectedCategory(categoryItem.name);
+                    setSearch("");
+                    setSearchOpen(false);
+                    window.scrollTo({
+                      top: 0,
+                      behavior: "smooth",
+                    });
+                  }}
+                  className="group relative aspect-[4/3] overflow-hidden rounded-2xl border border-neutral-200 bg-neutral-900 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg dark:border-neutral-700"
+                >
+                  {categoryItem.imageUrl ? (
+                    <img
+                      src={categoryItem.imageUrl}
+                      alt={categoryItem.name}
+                      loading="lazy"
+                      className="h-full w-full object-cover transition duration-300 group-hover:scale-105"
+                    />
+                  ) : (
+                    <div className="flex h-full w-full items-center justify-center bg-neutral-200 dark:bg-neutral-800">
+                      <Package
+                        className="text-neutral-500"
+                        size={40}
+                      />
+                    </div>
+                  )}
+
+                  <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/25 to-transparent" />
+
+                  <div className="absolute inset-x-0 bottom-0 p-4 text-white">
+                    <h3 className="break-words text-base font-black sm:text-lg">
+                      {categoryItem.name}
+                    </h3>
+
+                    <p className="mt-1 text-xs font-semibold text-white/80">
+                      {categoryItem.count}{" "}
+                      {categoryItem.count === 1
+                        ? text.categoryProduct
+                        : text.categoryProducts}
+                    </p>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </section>
 
         <StoreProductGrid
           title={text.madeToOrderTitle}
           help={text.madeToOrderHelp}
-          products={visibleMadeToOrderProducts}
+          products={madeToOrderProducts}
           cart={cart}
           bundleSelections={bundleSelections}
           offers={offers}
