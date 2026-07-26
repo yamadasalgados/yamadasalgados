@@ -22,7 +22,7 @@ import MetricStrip from "@/app/_components/MetricStrip";
 import PageHeader from "@/app/_components/PageHeader";
 import { useSellerSession } from "@/app/_components/SellerSessionContext";
 import { db } from "@/app/lib/firebase";
-import { normalizeInventory, normalizeProductBundleConfig, normalizeProductContent, normalizeProductPriceMajor } from "@/app/lib/product-schema";
+import { normalizeInventory, normalizeProductBundleConfig, normalizeProductContent, normalizeProductPriceMajor, normalizeProductStorefrontConfig } from "@/app/lib/product-schema";
 import { normalizeProductShipping } from "@/app/lib/shipping-schema";
 import { useI18n } from "@/app/lib/i18n";
 import { formatMoneyMajor } from "@/app/lib/money";
@@ -353,6 +353,12 @@ export default function ProductsCatalogPage() {
             imageUrl: String(data.imageUrl || data.image || ""),
             extraImageUrls: Array.isArray(data.extraImageUrls) ? data.extraImageUrls.filter(Boolean) : [],
             bundleConfig: normalizeProductBundleConfig(data.bundleConfig),
+            storefront: normalizeProductStorefrontConfig(
+              data.storefront,
+              data.storefrontSubgroup,
+              data.storefrontSubgroupOrder,
+              data.storefrontOrder,
+            ),
           };
         }).filter((p) => p.name);
 
@@ -1278,6 +1284,17 @@ function ProductCard({
                   )}
                 </>}
           </div>
+
+          {product.storefront.subgroup && (
+            <div className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-bold text-sky-800 dark:border-sky-900/50 dark:bg-sky-950/20 dark:text-sky-200">
+              <span className="font-black">
+                {lang === "ja" ? "ストア表示" : lang === "en" ? "Storefront" : "Vitrine"}:
+              </span>{" "}
+              {product.storefront.subgroup}
+              {product.storefront.subgroupOrder !== null && ` · ${lang === "ja" ? "グループ" : lang === "en" ? "group" : "grupo"} ${product.storefront.subgroupOrder}`}
+              {product.storefront.productOrder !== null && ` · ${lang === "ja" ? "商品" : lang === "en" ? "item" : "item"} ${product.storefront.productOrder}`}
+            </div>
+          )}
 
           <div className="grid grid-cols-2 gap-2 text-[11px] font-bold text-neutral-500 dark:text-neutral-400">
             <div className="rounded-xl bg-neutral-100 px-3 py-2 dark:bg-neutral-800">

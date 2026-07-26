@@ -18,6 +18,38 @@ export type ProductBundleConfig = {
   optionProductIds: string[];
 };
 
+export type ProductStorefrontConfig = {
+  subgroup: string;
+  subgroupOrder: number | null;
+  productOrder: number | null;
+};
+
+export const EMPTY_PRODUCT_STOREFRONT_CONFIG: ProductStorefrontConfig = {
+  subgroup: "",
+  subgroupOrder: null,
+  productOrder: null,
+};
+
+function optionalOrder(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.max(-9999, Math.min(9999, Math.trunc(parsed))) : null;
+}
+
+export function normalizeProductStorefrontConfig(
+  value: unknown,
+  legacySubgroup?: unknown,
+  legacySubgroupOrder?: unknown,
+  legacyProductOrder?: unknown,
+): ProductStorefrontConfig {
+  const raw = record(value);
+  return {
+    subgroup: text(raw.subgroup ?? raw.group ?? legacySubgroup),
+    subgroupOrder: optionalOrder(raw.subgroupOrder ?? raw.groupOrder ?? legacySubgroupOrder),
+    productOrder: optionalOrder(raw.productOrder ?? raw.order ?? legacyProductOrder),
+  };
+}
+
 export const EMPTY_PRODUCT_BUNDLE_CONFIG: ProductBundleConfig = {
   enabled: false,
   totalUnits: 100,

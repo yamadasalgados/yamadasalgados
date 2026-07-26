@@ -33,6 +33,7 @@ import {
   emptyProductContent,
   normalizeProductBundleConfig,
   normalizeProductContent,
+  normalizeProductStorefrontConfig,
   type ProductContent,
   type ProductLanguage,
 } from "@/app/lib/product-schema";
@@ -93,6 +94,9 @@ type Snapshot = {
   bundleEnabled: boolean;
   bundleTotalUnits: string;
   bundleOptionProductIds: string[];
+  storefrontSubgroup: string;
+  storefrontSubgroupOrder: string;
+  storefrontProductOrder: string;
 };
 
 function buildSnapshot(values: Snapshot): string {
@@ -161,6 +165,9 @@ export default function ProductModal({
   const [bundleEnabled, setBundleEnabled] = useState(false);
   const [bundleTotalUnits, setBundleTotalUnits] = useState("100");
   const [bundleOptionProductIds, setBundleOptionProductIds] = useState<string[]>([]);
+  const [storefrontSubgroup, setStorefrontSubgroup] = useState("");
+  const [storefrontSubgroupOrder, setStorefrontSubgroupOrder] = useState("");
+  const [storefrontProductOrder, setStorefrontProductOrder] = useState("");
 
   const [creatingCategory, setCreatingCategory] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState("");
@@ -309,6 +316,9 @@ export default function ProductModal({
         bundleEnabled,
         bundleTotalUnits,
         bundleOptionProductIds,
+        storefrontSubgroup,
+        storefrontSubgroupOrder,
+        storefrontProductOrder,
       }),
     [
       category,
@@ -329,6 +339,9 @@ export default function ProductModal({
       bundleEnabled,
       bundleTotalUnits,
       bundleOptionProductIds,
+      storefrontSubgroup,
+      storefrontSubgroupOrder,
+      storefrontProductOrder,
     ],
   );
 
@@ -361,6 +374,7 @@ export default function ProductModal({
     const nextCategory =
       activeProduct?.category || activeCategories[0] || "";
     const activeBundle = normalizeProductBundleConfig(activeProduct?.bundleConfig);
+    const activeStorefront = normalizeProductStorefrontConfig(activeProduct?.storefront);
     const nextState: Snapshot = {
       name: activeProduct?.name || "",
       category: nextCategory,
@@ -386,6 +400,9 @@ export default function ProductModal({
       bundleEnabled: activeBundle.enabled,
       bundleTotalUnits: String(activeBundle.totalUnits || 100),
       bundleOptionProductIds: activeBundle.optionProductIds,
+      storefrontSubgroup: activeStorefront.subgroup,
+      storefrontSubgroupOrder: activeStorefront.subgroupOrder === null ? "" : String(activeStorefront.subgroupOrder),
+      storefrontProductOrder: activeStorefront.productOrder === null ? "" : String(activeStorefront.productOrder),
     };
 
     setName(nextState.name);
@@ -405,6 +422,9 @@ export default function ProductModal({
     setBundleEnabled(nextState.bundleEnabled);
     setBundleTotalUnits(nextState.bundleTotalUnits);
     setBundleOptionProductIds(nextState.bundleOptionProductIds);
+    setStorefrontSubgroup(nextState.storefrontSubgroup);
+    setStorefrontSubgroupOrder(nextState.storefrontSubgroupOrder);
+    setStorefrontProductOrder(nextState.storefrontProductOrder);
     setCreatingCategory(activeCategories.length === 0);
     setNewCategoryName("");
     setMainFile(null);
@@ -711,6 +731,11 @@ export default function ProductModal({
         ),
     )));
     const normalizedCategory = normalizeCategoryLabel(category);
+    const normalizedStorefront = normalizeProductStorefrontConfig({
+      subgroup: storefrontSubgroup,
+      subgroupOrder: storefrontSubgroupOrder,
+      productOrder: storefrontProductOrder,
+    });
 
     setSaving(true);
     setGeneralError("");
@@ -828,6 +853,7 @@ export default function ProductModal({
           totalUnits: normalizedBundleTotalUnits,
           optionProductIds: bundleEnabled ? normalizedBundleOptionIds : [],
         },
+        storefront: normalizedStorefront,
         status: bundleEnabled ? "made_to_order" as const : status,
         imageUrl: nextMainUrl,
         extraImageUrls: nextExtraUrls,
@@ -926,6 +952,7 @@ export default function ProductModal({
           postalEligible,
           shippingWeightGrams: weightGrams,
           bundleConfig: payload.bundleConfig,
+          storefront: payload.storefront,
           status: payload.status,
           imageUrl: nextMainUrl,
           extraImageUrls: nextExtraUrls,
@@ -951,6 +978,9 @@ export default function ProductModal({
         bundleEnabled: savedProduct.bundleConfig.enabled,
         bundleTotalUnits: String(savedProduct.bundleConfig.totalUnits),
         bundleOptionProductIds: savedProduct.bundleConfig.optionProductIds,
+        storefrontSubgroup: savedProduct.storefront.subgroup,
+        storefrontSubgroupOrder: savedProduct.storefront.subgroupOrder === null ? "" : String(savedProduct.storefront.subgroupOrder),
+        storefrontProductOrder: savedProduct.storefront.productOrder === null ? "" : String(savedProduct.storefront.productOrder),
       });
 
       initialSnapshotRef.current = finalSnapshot;
@@ -959,6 +989,9 @@ export default function ProductModal({
       setBundleEnabled(savedProduct.bundleConfig.enabled);
       setBundleTotalUnits(String(savedProduct.bundleConfig.totalUnits));
       setBundleOptionProductIds(savedProduct.bundleConfig.optionProductIds);
+      setStorefrontSubgroup(savedProduct.storefront.subgroup);
+      setStorefrontSubgroupOrder(savedProduct.storefront.subgroupOrder === null ? "" : String(savedProduct.storefront.subgroupOrder));
+      setStorefrontProductOrder(savedProduct.storefront.productOrder === null ? "" : String(savedProduct.storefront.productOrder));
       setMainFile(null);
       setExtraFiles([]);
       revokePreviews();
@@ -1017,6 +1050,9 @@ export default function ProductModal({
     sellerId,
     status,
     postalEligible,
+    storefrontSubgroup,
+    storefrontSubgroupOrder,
+    storefrontProductOrder,
     validate,
   ]);
 
@@ -1164,6 +1200,12 @@ export default function ProductModal({
                 }}
                 status={status}
                 setStatus={setStatus}
+                storefrontSubgroup={storefrontSubgroup}
+                setStorefrontSubgroup={setStorefrontSubgroup}
+                storefrontSubgroupOrder={storefrontSubgroupOrder}
+                setStorefrontSubgroupOrder={setStorefrontSubgroupOrder}
+                storefrontProductOrder={storefrontProductOrder}
+                setStorefrontProductOrder={setStorefrontProductOrder}
                 availableProducts={availableProducts}
                 currentProductId={product?.id}
                 bundleEnabled={bundleEnabled}

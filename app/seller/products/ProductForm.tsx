@@ -44,6 +44,12 @@ type Props = {
   setShippingWeightGrams: (value: string) => void;
   status: ProductStatus;
   setStatus: (value: ProductStatus) => void;
+  storefrontSubgroup: string;
+  setStorefrontSubgroup: (value: string) => void;
+  storefrontSubgroupOrder: string;
+  setStorefrontSubgroupOrder: (value: string) => void;
+  storefrontProductOrder: string;
+  setStorefrontProductOrder: (value: string) => void;
   availableProducts: ProductDoc[];
   currentProductId?: string;
   bundleEnabled: boolean;
@@ -85,8 +91,10 @@ export default function ProductForm(props: Props) {
     setSellPrice, quantity, setQuantity, reservedStock, stockQty, setStockQty,
     lowStockThreshold, setLowStockThreshold, inventoryTracked,
     setInventoryTracked, postalEligible, setPostalEligible,
-    shippingWeightGrams, setShippingWeightGrams, status, setStatus, availableProducts,
-    currentProductId, bundleEnabled, setBundleEnabled, bundleTotalUnits,
+    shippingWeightGrams, setShippingWeightGrams, status, setStatus,
+    storefrontSubgroup, setStorefrontSubgroup, storefrontSubgroupOrder,
+    setStorefrontSubgroupOrder, storefrontProductOrder, setStorefrontProductOrder,
+    availableProducts, currentProductId, bundleEnabled, setBundleEnabled, bundleTotalUnits,
     setBundleTotalUnits, bundleOptionProductIds, setBundleOptionProductIds, existingImageUrl,
     existingExtraUrls, mainPreview, extraPreviews, onPickMain, onPickExtras,
     removeExistingExtra, clearSelectedExtras,
@@ -97,6 +105,12 @@ export default function ProductForm(props: Props) {
     : lang === "en"
       ? { translations: "Multilingual product content", defaultName: "Default product name", short: "Short description", details: "Details", ingredients: "Ingredients", allergens: "Allergens", units: "Units per sale", stock: "Physical stock", threshold: "Low-stock threshold", track: "Track inventory", main: "Main image", extras: "Extra images", current: "Current images (click to remove)", queue: "Upload queue", creating: "Creating...", madeToOrder: "Made to order", madeToOrderHelp: "This item is sold by advance reservation rather than regular stock.", hidden: "Hidden from public store", hiddenHelp: "This product stays available for events, offers and configurable bundles, but is not listed in the permanent public store.", postal: "Postal eligible", postalHelp: "This product may be shipped from the permanent store.", weight: "Shipping weight (g)", weightHelp: "Required for weight-based shipping. Enter the approximate packed weight.", reserved: "Reserved", availableAfterReserved: "Available after reservations", bundleTitle: "Configurable bundle", bundleHelp: "Customers choose the products and quantities inside the bundle before adding it to the cart.", bundleToggle: "Sell as a configurable bundle", bundleUnits: "Total units per bundle", bundleOptions: "Selectable products", bundleOptionsHelp: "Choose at least two products that may be included in this bundle.", bundleSelected: "selected", bundleNoProducts: "Create regular products first so they can be used as bundle options." }
       : { translations: "Conteúdo multilíngue do produto", defaultName: "Nome padrão do produto", short: "Descrição curta", details: "Detalhes", ingredients: "Ingredientes", allergens: "Alérgenos", units: "Unidades por venda", stock: "Estoque físico", threshold: "Limite de estoque baixo", track: "Controlar estoque", main: "Imagem principal", extras: "Imagens extras", current: "Imagens atuais (clique para remover)", queue: "Fila de upload", creating: "Criando...", madeToOrder: "Sob encomenda", madeToOrderHelp: "Este item é vendido mediante reserva antecipada, fora do estoque comum.", hidden: "Oculto da loja pública", hiddenHelp: "O produto não aparece na Store permanente, mas continua disponível para eventos, ofertas e kits configuráveis.", postal: "Disponível para envio por correio", postalHelp: "Permite enviar este produto pela Store permanente.", weight: "Peso para envio (g)", weightHelp: "Necessário para frete por peso. Informe o peso aproximado já considerando a embalagem.", reserved: "Reservado", availableAfterReserved: "Disponível após reservas", bundleTitle: "Kit configurável", bundleHelp: "O cliente escolhe os produtos e distribui as quantidades do kit antes de adicionar ao carrinho.", bundleToggle: "Vender como kit configurável", bundleUnits: "Total de unidades por kit", bundleOptions: "Produtos disponíveis para escolha", bundleOptionsHelp: "Selecione pelo menos dois produtos que poderão compor este kit.", bundleSelected: "selecionados", bundleNoProducts: "Cadastre primeiro produtos normais para usá-los como opções do kit." };
+
+  const storefrontCopy = lang === "ja"
+    ? { title: "ストア表示（任意）", help: "同じカテゴリーの商品を種類ごとの行に整理できます。未入力の場合はこれまでどおり表示されます。", subgroup: "サブグループ / 種類", subgroupPlaceholder: "例：エンパーダ、エスフィーハ、ロール", subgroupOrder: "グループ順", productOrder: "グループ内の商品順", orderHelp: "数字が小さいほど先に表示されます。空欄の場合は名前順です。" }
+    : lang === "en"
+      ? { title: "Storefront organization (optional)", help: "Organize products from the same category into rows by type. Leave blank to keep the current layout.", subgroup: "Subgroup / type", subgroupPlaceholder: "Example: Empadas, Esfihas, Rolls", subgroupOrder: "Group order", productOrder: "Product order inside group", orderHelp: "Smaller numbers appear first. Blank values fall back to alphabetical order." }
+      : { title: "Organização da vitrine (opcional)", help: "Organize produtos da mesma categoria em fileiras por tipo. Se deixar em branco, a vitrine continua como está hoje.", subgroup: "Subgrupo / tipo", subgroupPlaceholder: "Ex.: Empadas, Esfihas, Enrolados", subgroupOrder: "Ordem do subgrupo", productOrder: "Ordem do produto no subgrupo", orderHelp: "Números menores aparecem primeiro. Campos vazios usam ordem alfabética." };
 
   const updateContent = (language: ProductLanguage, field: keyof ProductContent[ProductLanguage], value: string) => {
     setContent({ ...content, [language]: { ...content[language], [field]: value } });
@@ -137,6 +151,53 @@ export default function ProductForm(props: Props) {
       </div>}
       <FieldError message={errors.category} />
     </div>
+
+    <section className="space-y-4 rounded-2xl border border-neutral-200 p-4 dark:border-neutral-800 sm:col-span-2">
+      <div>
+        <h3 className="text-sm font-black">{storefrontCopy.title}</h3>
+        <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">{storefrontCopy.help}</p>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div className="space-y-1 sm:col-span-2">
+          <label htmlFor="product-storefront-subgroup" className="text-xs font-black uppercase tracking-wider">{storefrontCopy.subgroup}</label>
+          <input
+            id="product-storefront-subgroup"
+            value={storefrontSubgroup}
+            onChange={(event) => setStorefrontSubgroup(event.target.value)}
+            placeholder={storefrontCopy.subgroupPlaceholder}
+            disabled={disabled}
+            className={fieldClass()}
+          />
+        </div>
+        <div className="space-y-1">
+          <label htmlFor="product-storefront-group-order" className="text-xs font-black uppercase tracking-wider">{storefrontCopy.subgroupOrder}</label>
+          <input
+            id="product-storefront-group-order"
+            type="number"
+            inputMode="numeric"
+            value={storefrontSubgroupOrder}
+            onChange={(event) => setStorefrontSubgroupOrder(event.target.value)}
+            placeholder="1"
+            disabled={disabled}
+            className={fieldClass()}
+          />
+        </div>
+        <div className="space-y-1">
+          <label htmlFor="product-storefront-product-order" className="text-xs font-black uppercase tracking-wider">{storefrontCopy.productOrder}</label>
+          <input
+            id="product-storefront-product-order"
+            type="number"
+            inputMode="numeric"
+            value={storefrontProductOrder}
+            onChange={(event) => setStorefrontProductOrder(event.target.value)}
+            placeholder="1"
+            disabled={disabled}
+            className={fieldClass()}
+          />
+        </div>
+      </div>
+      <p className="text-[11px] font-medium text-neutral-500 dark:text-neutral-400">{storefrontCopy.orderHelp}</p>
+    </section>
 
     <section className="space-y-4 rounded-2xl border border-neutral-200 p-4 dark:border-neutral-800 sm:col-span-2">
       <h3 className="text-sm font-black">{copy.translations}</h3>

@@ -1,5 +1,5 @@
 import type { Timestamp } from "firebase/firestore";
-import type { ProductBundleConfig, ProductContent } from "@/app/lib/product-schema";
+import type { ProductBundleConfig, ProductContent, ProductStorefrontConfig } from "@/app/lib/product-schema";
 import type { ProductShipping } from "@/app/lib/shipping-schema";
 
 export type CategoryId = string;
@@ -43,6 +43,7 @@ export type ProductDoc = {
   imageUrl: string;
   extraImageUrls?: string[];
   bundleConfig: ProductBundleConfig;
+  storefront: ProductStorefrontConfig;
 };
 
 export type ProductFormField =

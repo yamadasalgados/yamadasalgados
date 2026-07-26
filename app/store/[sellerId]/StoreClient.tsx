@@ -82,9 +82,11 @@ import {
   normalizeInventory,
   normalizeProductBundleConfig,
   normalizeProductPriceMajor,
+  normalizeProductStorefrontConfig,
   normalizeProductPriceMinor,
   resolveLocalizedProductText,
   type ProductBundleConfig,
+  type ProductStorefrontConfig,
 } from "@/app/lib/product-schema";
 import {
   evaluateOfferForCart,
@@ -159,6 +161,7 @@ type Product = {
     | "quantity";
   shipping: ProductShipping;
   bundleConfig: ProductBundleConfig;
+  storefront: ProductStorefrontConfig;
   publiclyVisible: boolean;
 };
 
@@ -950,6 +953,12 @@ function normalizeProduct(
       raw.shippingWeightGrams,
     ),
     bundleConfig: normalizeProductBundleConfig(raw.bundleConfig),
+    storefront: normalizeProductStorefrontConfig(
+      raw.storefront,
+      raw.storefrontSubgroup,
+      raw.storefrontSubgroupOrder,
+      raw.storefrontOrder,
+    ),
     publiclyVisible,
   };
 }
@@ -1034,6 +1043,26 @@ function formatCurrency(
     currency,
     locale,
   );
+}
+
+function storefrontOrder(value: number | null): number {
+  return value === null ? Number.MAX_SAFE_INTEGER : value;
+}
+
+function compareStorefrontProducts(left: Product, right: Product, locale: string): number {
+  const categoryComparison = left.category.localeCompare(right.category, locale);
+  if (categoryComparison !== 0) return categoryComparison;
+
+  const groupOrderComparison = storefrontOrder(left.storefront.subgroupOrder) - storefrontOrder(right.storefront.subgroupOrder);
+  if (groupOrderComparison !== 0) return groupOrderComparison;
+
+  const groupComparison = left.storefront.subgroup.localeCompare(right.storefront.subgroup, locale);
+  if (groupComparison !== 0) return groupComparison;
+
+  const productOrderComparison = storefrontOrder(left.storefront.productOrder) - storefrontOrder(right.storefront.productOrder);
+  if (productOrderComparison !== 0) return productOrderComparison;
+
+  return left.name.localeCompare(right.name, locale);
 }
 
 export default function StoreClient({
@@ -1477,12 +1506,7 @@ export default function StoreClient({
                 ): product is Product =>
                   product !== null,
               )
-              .sort((a, b) =>
-                a.name.localeCompare(
-                  b.name,
-                  locale,
-                ),
-              );
+              .sort((a, b) => compareStorefrontProducts(a, b, locale));
 
           setProducts(
             loadedProducts,
@@ -1728,6 +1752,25 @@ const visibleProducts =
     () => visibleProducts.filter((product) => product.availabilityStatus === "made_to_order"),
     [visibleProducts],
   );
+
+  const normalCategorySections = useMemo(() => {
+    const grouped = new Map<string, Product[]>();
+
+    for (const product of visibleNormalProducts) {
+      const current = grouped.get(product.category) ?? [];
+      current.push(product);
+      grouped.set(product.category, current);
+    }
+
+    return Array.from(grouped.entries())
+      .map(([category, categoryProducts]) => ({
+        category,
+        products: [...categoryProducts].sort((left, right) =>
+          compareStorefrontProducts(left, right, locale),
+        ),
+      }))
+      .sort((left, right) => left.category.localeCompare(right.category, locale));
+  }, [locale, visibleNormalProducts]);
 
   const cartItems =
     useMemo<CartItem[]>(() => {
@@ -2599,28 +2642,27 @@ const visibleProducts =
       <EmptyState icon={<Search size={40} />} message={search.trim() ? text.emptySearch : text.emptyProducts} />
     ) : (
       <>
-        <StoreProductGrid
-          title={
-            search.trim()
-              ? text.searchResults
-              : selectedCategory ?? text.productsTitle
-          }
-          help={selectedCategory || search.trim() ? "" : text.availableProductsHelp}
-          products={visibleNormalProducts}
-          cart={cart}
-          bundleSelections={bundleSelections}
-          offers={offers}
-          language={language}
-          text={text}
-          locale={storeProfile.regionalLocale}
-          currency={storeProfile.currency}
-          onOpen={(product) => {
-            setSelectedProduct(product);
-            setSelectedImageIndex(0);
-          }}
-          onSetQuantity={setQuantity}
-          onConfigureBundle={setConfiguringBundle}
-        />
+        {normalCategorySections.map((section) => (
+          <StoreProductGrid
+            key={section.category}
+            title={section.category}
+            help=""
+            products={section.products}
+            cart={cart}
+            bundleSelections={bundleSelections}
+            offers={offers}
+            language={language}
+            text={text}
+            locale={storeProfile.regionalLocale}
+            currency={storeProfile.currency}
+            onOpen={(product) => {
+              setSelectedProduct(product);
+              setSelectedImageIndex(0);
+            }}
+            onSetQuantity={setQuantity}
+            onConfigureBundle={setConfiguringBundle}
+          />
+        ))}
 
         <StoreProductGrid
           title={text.madeToOrderTitle}
@@ -3508,6 +3550,35 @@ function StoreProductGrid({
 }) {
   if (products.length === 0) return null;
 
+  const hasConfiguredSubgroups = products.some((product) => product.storefront.subgroup.trim());
+  const subgroupRows = (() => {
+    if (!hasConfiguredSubgroups) {
+      return [{ key: "all", name: "", products: [...products].sort((left, right) => compareStorefrontProducts(left, right, locale)) }];
+    }
+
+    const grouped = new Map<string, Product[]>();
+    for (const product of products) {
+      const subgroup = product.storefront.subgroup.trim();
+      const key = subgroup || "__ungrouped__";
+      const current = grouped.get(key) ?? [];
+      current.push(product);
+      grouped.set(key, current);
+    }
+
+    return Array.from(grouped.entries())
+      .map(([key, rowProducts]) => {
+        const sortedProducts = [...rowProducts].sort((left, right) => compareStorefrontProducts(left, right, locale));
+        const first = sortedProducts[0];
+        return {
+          key,
+          name: key === "__ungrouped__" ? "" : first?.storefront.subgroup || key,
+          order: key === "__ungrouped__" ? Number.MAX_SAFE_INTEGER : storefrontOrder(first?.storefront.subgroupOrder ?? null),
+          products: sortedProducts,
+        };
+      })
+      .sort((left, right) => left.order - right.order || left.name.localeCompare(right.name, locale));
+  })();
+
   return (
     <section className="mt-8">
       <div className="mb-4">
@@ -3515,8 +3586,19 @@ function StoreProductGrid({
         {help && <p className="mt-2 text-sm text-neutral-600 dark:text-neutral-300">{help}</p>}
       </div>
 
-      <div className="grid grid-cols-2 gap-3 sm:gap-5 lg:grid-cols-3">
-        {products.map((product) => {
+      <div className="space-y-7">
+        {subgroupRows.map((row) => (
+          <div key={row.key}>
+            {row.name && (
+              <div className="mb-3 flex items-center gap-3">
+                <h3 className="shrink-0 text-sm font-black uppercase tracking-[0.16em] text-neutral-500 dark:text-neutral-400 sm:text-base">
+                  {row.name}
+                </h3>
+                <div className="h-px flex-1 bg-neutral-200 dark:bg-neutral-800" />
+              </div>
+            )}
+            <div className="grid grid-cols-2 gap-3 sm:gap-5 lg:grid-cols-3">
+        {row.products.map((product) => {
           const qty = cart[product.id] ?? 0;
           const configurableBundle =
             product.bundleConfig.enabled && product.bundleConfig.optionProductIds.length >= 2;
@@ -3686,6 +3768,9 @@ function StoreProductGrid({
             </article>
           );
         })}
+            </div>
+          </div>
+        ))}
       </div>
     </section>
   );
