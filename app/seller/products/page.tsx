@@ -15,7 +15,7 @@ import {
   Timestamp,
   updateDoc,
 } from "firebase/firestore";
-import { AlertTriangle, Clock3, Package, Plus, Tags } from "lucide-react";
+import { AlertTriangle, Clock3, EyeOff, Package, Plus, Tags } from "lucide-react";
 
 import FeedbackBanner from "@/app/_components/FeedbackBanner";
 import MetricStrip from "@/app/_components/MetricStrip";
@@ -84,6 +84,7 @@ interface ProductCardProps {
   badgeLabelActive: string;
   badgeLabelInactive: string;
   badgeLabelMadeToOrder: string;
+  badgeLabelHidden: string;
   btnEdit: string;
   btnDelete: string;
   btnActivate: string;
@@ -105,6 +106,7 @@ export default function ProductsCatalogPage() {
               "商品、カテゴリー、価格、在庫を一か所で管理します。",
             statsTotal: "商品数",
             statsMadeToOrder: "受注生産",
+            statsHidden: "公開ストア非表示",
             statsOut: "在庫切れ",
             statsCategories: "カテゴリー",
             legacyTitle: "既存カテゴリーを検出しました",
@@ -121,6 +123,7 @@ export default function ProductsCatalogPage() {
             allStatuses: "すべての状態",
             active: "販売中",
             madeToOrder: "受注生産",
+            hidden: "公開ストア非表示",
             inactive: "停止中",
             allStock: "すべての在庫",
             inStock: "在庫あり",
@@ -136,6 +139,7 @@ export default function ProductsCatalogPage() {
                 "Manage products, categories, prices, and stock in one place.",
               statsTotal: "Products",
               statsMadeToOrder: "Made to order",
+              statsHidden: "Hidden",
               statsOut: "Out of stock",
               statsCategories: "Categories",
               legacyTitle: "Existing categories detected",
@@ -152,6 +156,7 @@ export default function ProductsCatalogPage() {
               allStatuses: "All statuses",
               active: "Active",
               madeToOrder: "Made to order",
+              hidden: "Hidden from store",
               inactive: "Inactive",
               allStock: "All stock",
               inStock: "In stock",
@@ -166,6 +171,7 @@ export default function ProductsCatalogPage() {
                 "Gerencie produtos, categorias, preços e estoque em um só lugar.",
               statsTotal: "Produtos",
               statsMadeToOrder: "Sob encomenda",
+              statsHidden: "Ocultos",
               statsOut: "Sem estoque",
               statsCategories: "Categorias",
               legacyTitle: "Categorias existentes detectadas",
@@ -182,6 +188,7 @@ export default function ProductsCatalogPage() {
               allStatuses: "Todos os status",
               active: "Ativos",
               madeToOrder: "Sob encomenda",
+              hidden: "Ocultos da loja",
               inactive: "Inativos",
               allStock: "Todos os estoques",
               inStock: "Com estoque",
@@ -337,9 +344,11 @@ export default function ProductsCatalogPage() {
             status: (
               data.status === "inactive"
                 ? "inactive"
-                : data.status === "made_to_order" || data.status === "preorder"
-                  ? "made_to_order"
-                  : "active"
+                : data.status === "hidden"
+                  ? "hidden"
+                  : data.status === "made_to_order" || data.status === "preorder"
+                    ? "made_to_order"
+                    : "active"
             ) as ProductStatus,
             imageUrl: String(data.imageUrl || data.image || ""),
             extraImageUrls: Array.isArray(data.extraImageUrls) ? data.extraImageUrls.filter(Boolean) : [],
@@ -596,9 +605,12 @@ export default function ProductsCatalogPage() {
       madeToOrder: ownProducts.filter(
         (product) => product.status === "made_to_order"
       ).length,
+      hidden: ownProducts.filter(
+        (product) => product.status === "hidden"
+      ).length,
       outOfStock: ownProducts.filter(
         (product) =>
-          product.status !== "made_to_order" &&
+          product.status === "active" &&
           (product.inventory.available ?? Math.max(0, product.stockQty - product.inventory.reserved)) <= 0
       ).length,
       categories:
@@ -811,7 +823,7 @@ export default function ProductsCatalogPage() {
               icon: <AlertTriangle size={16} />,
               tone: catalogStats.outOfStock > 0 ? "danger" : "default",
               onClick: () => {
-                setStatusFilter("all");
+                setStatusFilter("active");
                 setStockFilter("out");
               },
               active: stockFilter === "out",
@@ -826,6 +838,17 @@ export default function ProductsCatalogPage() {
                 setStatusFilter("made_to_order");
               },
               active: statusFilter === "made_to_order",
+            },
+            {
+              label: catalogText.statsHidden,
+              value: catalogStats.hidden,
+              icon: <EyeOff size={16} />,
+              tone: "warning",
+              onClick: () => {
+                setStockFilter("all");
+                setStatusFilter("hidden");
+              },
+              active: statusFilter === "hidden",
             },
             {
               label: catalogText.statsCategories,
@@ -938,6 +961,9 @@ export default function ProductsCatalogPage() {
               <option value="made_to_order">
                 {catalogText.madeToOrder}
               </option>
+              <option value="hidden">
+                {catalogText.hidden}
+              </option>
               <option value="inactive">
                 {catalogText.inactive}
               </option>
@@ -1044,6 +1070,7 @@ export default function ProductsCatalogPage() {
                       badgeLabelActive={t("products.badge.active")}
                       badgeLabelInactive={t("products.badge.inactive")}
                       badgeLabelMadeToOrder={catalogText.madeToOrder}
+                      badgeLabelHidden={catalogText.hidden}
                       btnEdit={t("products.btn.edit")}
                       btnDelete={t("products.btn.delete")}
                       btnActivate={
@@ -1103,6 +1130,7 @@ function ProductCard({
   badgeLabelActive,
   badgeLabelInactive,
   badgeLabelMadeToOrder,
+  badgeLabelHidden,
   btnEdit,
   btnDelete,
   btnActivate,
@@ -1173,14 +1201,18 @@ function ProductCard({
                   ? "bg-emerald-600/90"
                   : product.status === "made_to_order"
                     ? "bg-violet-600/90"
-                    : "bg-neutral-700/90"
+                    : product.status === "hidden"
+                      ? "bg-amber-600/90"
+                      : "bg-neutral-700/90"
               }`}
             >
               {product.status === "active"
                 ? badgeLabelActive
                 : product.status === "made_to_order"
                   ? badgeLabelMadeToOrder
-                  : badgeLabelInactive}
+                  : product.status === "hidden"
+                    ? badgeLabelHidden
+                    : badgeLabelInactive}
             </span>
 
             <span className="max-w-[65%] truncate rounded-full bg-black/65 px-2.5 py-1 text-[10px] font-black uppercase tracking-wide text-white backdrop-blur-md">
@@ -1293,14 +1325,14 @@ function ProductCard({
               onClick={() =>
                 onToggleStatus(
                   product.id,
-                  product.status !== "inactive"
+                  product.status === "active" || product.status === "made_to_order"
                     ? "inactive"
                     : "active"
                 )
               }
               className="min-h-11 border-x border-neutral-100 px-2 text-xs font-black text-neutral-600 transition hover:bg-neutral-50 dark:border-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-800"
             >
-              {product.status !== "inactive"
+              {product.status === "active" || product.status === "made_to_order"
                 ? btnDeactivate
                 : btnActivate}
             </button>

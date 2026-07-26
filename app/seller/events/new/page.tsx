@@ -40,7 +40,7 @@ import type {
 } from "@/app/types/regional";
 
 type DeliveryChoice = "delivery" | "pickup" | "both";
-type ProductStatus = "active" | "inactive" | "made_to_order";
+type ProductStatus = "active" | "inactive" | "made_to_order" | "hidden";
 type EventProductMode = "normal" | "made_to_order";
 type ProductSelectionMode = "excluded" | EventProductMode;
 
@@ -240,9 +240,11 @@ export default function CreateNewEventPage() {
               category: String(data.category || ""),
               status: (data.status === "inactive"
                 ? "inactive"
-                : data.status === "made_to_order"
-                  ? "made_to_order"
-                  : "active") as ProductStatus,
+                : data.status === "hidden"
+                  ? "hidden"
+                  : data.status === "made_to_order"
+                    ? "made_to_order"
+                    : "active") as ProductStatus,
               stockQty: inventory.tracked ? inventory.available : undefined,
               lowStockThreshold: inventory.lowStockThreshold,
             };

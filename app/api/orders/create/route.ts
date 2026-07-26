@@ -533,6 +533,14 @@ function normalizeProductLine(params: {
 
   const status = cleanString(raw.status, 40);
   const catalogStatus = cleanString(catalogRaw.status, 40);
+  if (source === "store" && catalogStatus === "hidden") {
+    throw new OrderError(
+      "PRODUCT_UNAVAILABLE",
+      "Este produto não está disponível na loja pública.",
+      409,
+    );
+  }
+
   const disabled =
     raw.active === false ||
     raw.enabled === false ||

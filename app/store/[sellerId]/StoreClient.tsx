@@ -159,6 +159,7 @@ type Product = {
     | "quantity";
   shipping: ProductShipping;
   bundleConfig: ProductBundleConfig;
+  publiclyVisible: boolean;
 };
 
 type BundleSelection = {
@@ -237,7 +238,9 @@ const TEXT = {
     emptySearch:
       "Nenhum produto corresponde à busca.",
     outOfStock: "Esgotado — novas vendas estão bloqueadas.",
+    soldOutBadge: "Esgotado",
     lastUnits: "Últimas {count} unidades — garanta a sua.",
+    lastUnitsBadge: "Últimas {count}",
     stock: "Estoque",
     add: "Adicionar",
     cart: "Carrinho",
@@ -376,6 +379,12 @@ const TEXT = {
     kitInvalid: "Distribua exatamente {count} unidades antes de continuar.",
     kitComposition: "Composição do kit",
     removeKit: "Remover kit",
+    productsTitle: "Produtos",
+    categoriesTitle: "Categorias",
+    offerBadge: "Oferta",
+    offerSuggestion: "Faltam {count} itens para ativar {offer}.",
+    offerAppliedHint: "Oferta {offer} aplicada automaticamente.",
+    openSearch: "Abrir busca",
   },
 
   en: {
@@ -392,7 +401,9 @@ const TEXT = {
     emptySearch:
       "No products match your search.",
     outOfStock: "Sold out — new purchases are blocked.",
+    soldOutBadge: "Sold out",
     lastUnits: "Only {count} left — get yours now.",
+    lastUnitsBadge: "Only {count} left",
     stock: "Stock",
     add: "Add",
     cart: "Cart",
@@ -526,6 +537,12 @@ const TEXT = {
     kitInvalid: "Select exactly {count} units before continuing.",
     kitComposition: "Bundle composition",
     removeKit: "Remove bundle",
+    productsTitle: "Products",
+    categoriesTitle: "Categories",
+    offerBadge: "Offer",
+    offerSuggestion: "Add {count} more items to activate {offer}.",
+    offerAppliedHint: "Offer {offer} applied automatically.",
+    openSearch: "Open search",
   },
 
   ja: {
@@ -543,7 +560,9 @@ const TEXT = {
     emptySearch:
       "検索条件に一致する商品はありません。",
     outOfStock: "売り切れ — 新しい注文は受け付けていません。",
+    soldOutBadge: "売り切れ",
     lastUnits: "残り{count}点 — お早めにご注文ください。",
+    lastUnitsBadge: "残り{count}点",
     stock: "在庫",
     add: "追加",
     cart: "カート",
@@ -679,6 +698,12 @@ const TEXT = {
     kitInvalid: "合計{count}個になるように選択してください。",
     kitComposition: "セット内容",
     removeKit: "セットを削除",
+    productsTitle: "商品",
+    categoriesTitle: "カテゴリー",
+    offerBadge: "オファー",
+    offerSuggestion: "あと{count}点で{offer}が適用されます。",
+    offerAppliedHint: "{offer}が自動的に適用されました。",
+    openSearch: "検索を開く",
   },
 } as const;
 
@@ -778,6 +803,7 @@ function normalizeProduct(
     asString(raw.status)
       .toLowerCase();
 
+  const publiclyVisible = status !== "hidden";
   const availabilityStatus: ProductAvailabilityStatus =
     status === "made_to_order" || status === "preorder"
       ? "made_to_order"
@@ -924,6 +950,7 @@ function normalizeProduct(
       raw.shippingWeightGrams,
     ),
     bundleConfig: normalizeProductBundleConfig(raw.bundleConfig),
+    publiclyVisible,
   };
 }
 
@@ -1083,6 +1110,7 @@ export default function StoreClient({
 
   const [search, setSearch] =
     useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
 
   const [
     selectedCategory,
@@ -1286,7 +1314,7 @@ export default function StoreClient({
 
       for (const [productId, rawQuantity] of Object.entries(current)) {
         const product = productMap.get(productId);
-        if (!product) {
+        if (!product || !product.publiclyVisible) {
           changed = true;
           continue;
         }
@@ -1567,16 +1595,6 @@ export default function StoreClient({
   ]);
 
 
-  const selectedOffer =
-    useMemo(
-      () =>
-        offers.find(
-          (offer) =>
-            offer.id === selectedOfferId,
-        ) ?? null,
-      [offers, selectedOfferId],
-    );
-
 const categorySummaries =
   useMemo(() => {
     const grouped =
@@ -1594,7 +1612,7 @@ const categorySummaries =
       const product
       of products
     ) {
-      if (product.availabilityStatus !== "active") {
+      if (!product.publiclyVisible) {
         continue;
       }
 
@@ -1664,7 +1682,7 @@ const visibleProducts =
 
     return products.filter(
       (product) => {
-        if (selectedCategory && product.availabilityStatus !== "active") {
+        if (!product.publiclyVisible) {
           return false;
         }
 
@@ -1700,15 +1718,6 @@ const visibleProducts =
     search,
     selectedCategory,
   ]);
-
-const showingProducts =
-  selectedCategory !== null ||
-  search.trim().length > 0;
-
-  const madeToOrderProducts = useMemo(
-    () => products.filter((product) => product.availabilityStatus === "made_to_order"),
-    [products],
-  );
 
   const visibleNormalProducts = useMemo(
     () => visibleProducts.filter((product) => product.availabilityStatus === "active"),
@@ -1824,28 +1833,60 @@ const showingProducts =
     [cartItems],
   );
 
-  const selectedOfferEvaluation:
-    OfferEvaluation | null =
-    useMemo(() => {
-      if (!selectedOffer) {
-        return null;
-      }
+  const offerEvaluations = useMemo(
+    () => {
+      const lines = cartItems.map((item) => ({
+        productId: item.id,
+        quantity: item.qty,
+        priceMinor: item.priceMinor,
+      }));
 
-      return evaluateOfferForCart(
-        selectedOffer,
-        cartItems.map((item) => ({
-          productId: item.id,
-          quantity: item.qty,
-          priceMinor: item.priceMinor,
-        })),
-      );
-    }, [cartItems, selectedOffer]);
+      return offers.map((offer) => evaluateOfferForCart(offer, lines));
+    },
+    [cartItems, offers],
+  );
+
+  const appliedOfferEvaluation = useMemo<OfferEvaluation | null>(
+    () =>
+      offerEvaluations
+        .filter((evaluation) => evaluation.applicable)
+        .sort(
+          (left, right) =>
+            right.discountAmountMinor - left.discountAmountMinor ||
+            right.bundleCount - left.bundleCount,
+        )[0] ?? null,
+    [offerEvaluations],
+  );
+
+  const suggestedOfferEvaluation = useMemo<OfferEvaluation | null>(
+    () =>
+      offerEvaluations
+        .filter(
+          (evaluation) =>
+            !evaluation.applicable &&
+            evaluation.eligibleQuantity > 0 &&
+            evaluation.nextBundleRemaining > 0,
+        )
+        .sort(
+          (left, right) =>
+            left.nextBundleRemaining - right.nextBundleRemaining ||
+            right.eligibleQuantity - left.eligibleQuantity,
+        )[0] ?? null,
+    [offerEvaluations],
+  );
+
+  const selectedOfferEvaluation =
+    appliedOfferEvaluation ?? suggestedOfferEvaluation;
+
+  useEffect(() => {
+    const automaticOfferId = appliedOfferEvaluation?.offer.id ?? "";
+    setSelectedOfferId((current) =>
+      current === automaticOfferId ? current : automaticOfferId,
+    );
+  }, [appliedOfferEvaluation]);
 
   const discountMinor =
-    selectedOfferEvaluation?.applicable
-      ? selectedOfferEvaluation
-          .discountAmountMinor
-      : 0;
+    appliedOfferEvaluation?.discountAmountMinor ?? 0;
 
   const discount = minorToMajor(
     discountMinor,
@@ -1868,14 +1909,14 @@ const showingProducts =
         quantity: item.qty,
         unitPriceMinor: item.priceMinor,
       })),
-      offerApplied: Boolean(selectedOfferEvaluation?.applicable),
+      offerApplied: Boolean(appliedOfferEvaluation),
     }),
     [
       cartItems,
       customerRewards.wallet?.pointsBalance,
       merchandisePayableBeforeRewardsMinor,
       rewardSelection,
-      selectedOfferEvaluation?.applicable,
+      appliedOfferEvaluation,
       storeProfile.currency,
     ],
   );
@@ -2144,7 +2185,7 @@ const showingProducts =
         sellerId,
         language,
         selectedOfferId:
-          selectedOfferId || undefined,
+          appliedOfferEvaluation?.offer.id || undefined,
         customerClientId:
           customerSession.clientId || undefined,
         quantities,
@@ -2457,162 +2498,138 @@ const showingProducts =
 
 {step === "products" && (
   <>
-    <StoreOffersSection
-      offers={offers}
-      selectedOfferId={selectedOfferId}
-      evaluation={selectedOfferEvaluation}
-      products={products}
-      language={language}
-      locale={storeProfile.regionalLocale}
-      currency={storeProfile.currency}
-      text={text}
-      onSelect={(offerId) => {
-        setSelectedOfferId(offerId);
-      }}
-    />
-
-    <section className="mt-6 rounded-3xl border border-neutral-200 bg-white p-4 shadow-sm dark:border-neutral-800 dark:bg-neutral-900 sm:p-5">
-      <label className="flex items-center gap-3 rounded-2xl border border-neutral-200 bg-neutral-50 px-4 py-3 dark:border-neutral-700 dark:bg-neutral-950/50">
-        <Search
-          className="shrink-0 text-neutral-400"
-          size={20}
-        />
-
-        <input
-          value={search}
-          onChange={(
-            event,
-          ) =>
-            setSearch(
-              event.target
-                .value,
-            )
-          }
-          placeholder={
-            text.search
-          }
-          className="w-full bg-transparent outline-none placeholder:text-neutral-400"
-        />
-
-        {search && (
+    <section className="sticky top-0 z-20 -mx-4 border-b border-neutral-200 bg-neutral-50/95 px-4 py-3 backdrop-blur dark:border-neutral-800 dark:bg-neutral-950/95 sm:static sm:mx-0 sm:rounded-2xl sm:border sm:bg-white sm:px-4 sm:dark:bg-neutral-900">
+      <div className="flex items-center gap-2">
+        {(selectedCategory || search.trim()) && (
           <button
             type="button"
-            onClick={() =>
-              setSearch("")
-            }
-            className="rounded-lg p-1 hover:bg-neutral-200 dark:hover:bg-neutral-800"
-            aria-label={
-              text.close
-            }
+            onClick={() => {
+              setSelectedCategory(null);
+              setSearch("");
+              setSearchOpen(false);
+            }}
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-neutral-200 bg-white transition hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800"
+            aria-label={text.backToCategories}
           >
-            <X size={17} />
+            <ChevronLeft size={18} />
           </button>
         )}
-      </label>
+
+        <button
+          type="button"
+          onClick={() => setSearchOpen((current) => !current)}
+          className={[
+            "flex h-10 w-10 shrink-0 items-center justify-center rounded-full border transition",
+            searchOpen || search.trim()
+              ? "border-orange-400 bg-orange-50 text-orange-700 dark:border-orange-700 dark:bg-orange-950/30 dark:text-orange-200"
+              : "border-neutral-200 bg-white hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800",
+          ].join(" ")}
+          aria-label={text.openSearch}
+        >
+          <Search size={18} />
+        </button>
+
+        <div className="flex min-w-0 flex-1 snap-x gap-2 overflow-x-auto pb-1 scrollbar-none">
+          <button
+            type="button"
+            onClick={() => {
+              setSelectedCategory(null);
+              setSearch("");
+            }}
+            className={[
+              "shrink-0 snap-start rounded-full border px-4 py-2 text-xs font-black transition",
+              !selectedCategory && !search.trim()
+                ? "border-neutral-950 bg-neutral-950 text-white dark:border-white dark:bg-white dark:text-neutral-950"
+                : "border-neutral-200 bg-white text-neutral-700 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200",
+            ].join(" ")}
+          >
+            {text.all}
+          </button>
+
+          {categorySummaries.map((categoryItem) => (
+            <button
+              key={categoryItem.name}
+              type="button"
+              onClick={() => {
+                setSelectedCategory(categoryItem.name);
+                setSearch("");
+                setSearchOpen(false);
+              }}
+              className={[
+                "shrink-0 snap-start rounded-full border px-4 py-2 text-xs font-black transition",
+                selectedCategory === categoryItem.name
+                  ? "border-orange-500 bg-orange-500 text-white"
+                  : "border-neutral-200 bg-white text-neutral-700 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200",
+              ].join(" ")}
+            >
+              {categoryItem.name} · {categoryItem.count}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {searchOpen && (
+        <label className="mt-3 flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-4 py-2.5 dark:border-neutral-700 dark:bg-neutral-900">
+          <Search className="shrink-0 text-neutral-400" size={18} />
+          <input
+            autoFocus
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder={text.search}
+            className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-neutral-400"
+          />
+          {(search || searchOpen) && (
+            <button
+              type="button"
+              onClick={() => {
+                setSearch("");
+                setSearchOpen(false);
+              }}
+              className="rounded-full p-1 text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+              aria-label={text.close}
+            >
+              <X size={16} />
+            </button>
+          )}
+        </label>
+      )}
     </section>
 
-    {!showingProducts ? (
+    {visibleNormalProducts.length === 0 && visibleMadeToOrderProducts.length === 0 ? (
+      <EmptyState icon={<Search size={40} />} message={search.trim() ? text.emptySearch : text.emptyProducts} />
+    ) : (
       <>
-        <section className="mt-8">
-          <h2 className="text-2xl font-black sm:text-3xl">
-            {
-              text.chooseCategory
-            }
-          </h2>
-
-          <p className="mt-2 text-sm text-neutral-600 dark:text-neutral-300">
-            {
-              text.chooseCategoryHelp
-            }
-          </p>
-        </section>
-
-        {products.length === 0 ? (
-          <EmptyState
-            icon={
-              <Package
-                size={40}
-              />
-            }
-            message={
-              text.emptyProducts
-            }
-          />
-        ) : (
-          <section className="mt-5 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
-            {categorySummaries.map(
-              (
-                categoryItem,
-              ) => (
-                <button
-                  key={
-                    categoryItem.name
-                  }
-                  type="button"
-                  onClick={() => {
-                    setSelectedCategory(
-                      categoryItem.name,
-                    );
-                    setSearch("");
-                    window.scrollTo({
-                      top: 0,
-                      behavior:
-                        "smooth",
-                    });
-                  }}
-                  className="group relative aspect-[4/3] overflow-hidden rounded-2xl border border-neutral-200 bg-neutral-900 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg dark:border-neutral-700"
-                >
-                  {categoryItem.imageUrl ? (
-                    <img
-                      src={
-                        categoryItem.imageUrl
-                      }
-                      alt={
-                        categoryItem.name
-                      }
-                      loading="lazy"
-                      className="h-full w-full object-cover transition duration-300 group-hover:scale-105"
-                    />
-                  ) : (
-                    <div className="flex h-full w-full items-center justify-center bg-neutral-200 dark:bg-neutral-800">
-                      <Package
-                        className="text-neutral-500"
-                        size={40}
-                      />
-                    </div>
-                  )}
-
-                  <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/25 to-transparent" />
-
-                  <div className="absolute inset-x-0 bottom-0 p-4 text-white">
-                    <h3 className="break-words text-base font-black sm:text-lg">
-                      {
-                        categoryItem.name
-                      }
-                    </h3>
-
-                    <p className="mt-1 text-xs font-semibold text-white/80">
-                      {
-                        categoryItem.count
-                      }{" "}
-                      {categoryItem.count ===
-                      1
-                        ? text.categoryProduct
-                        : text.categoryProducts}
-                    </p>
-                  </div>
-                </button>
-              ),
-            )}
-          </section>
-        )}
+        <StoreProductGrid
+          title={
+            search.trim()
+              ? text.searchResults
+              : selectedCategory ?? text.productsTitle
+          }
+          help={selectedCategory || search.trim() ? "" : text.availableProductsHelp}
+          products={visibleNormalProducts}
+          cart={cart}
+          bundleSelections={bundleSelections}
+          offers={offers}
+          language={language}
+          text={text}
+          locale={storeProfile.regionalLocale}
+          currency={storeProfile.currency}
+          onOpen={(product) => {
+            setSelectedProduct(product);
+            setSelectedImageIndex(0);
+          }}
+          onSetQuantity={setQuantity}
+          onConfigureBundle={setConfiguringBundle}
+        />
 
         <StoreProductGrid
           title={text.madeToOrderTitle}
           help={text.madeToOrderHelp}
-          products={madeToOrderProducts}
+          products={visibleMadeToOrderProducts}
           cart={cart}
           bundleSelections={bundleSelections}
+          offers={offers}
+          language={language}
           text={text}
           locale={storeProfile.regionalLocale}
           currency={storeProfile.currency}
@@ -2624,95 +2641,6 @@ const showingProducts =
           onSetQuantity={setQuantity}
           onConfigureBundle={setConfiguringBundle}
         />
-      </>
-    ) : (
-      <>
-        <section className="mt-6 flex flex-col gap-4 rounded-3xl border border-neutral-200 bg-white p-5 shadow-sm dark:border-neutral-800 dark:bg-neutral-900 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <p className="text-xs font-bold uppercase tracking-wide text-orange-700 dark:text-orange-300">
-              {search.trim()
-                ? text.searchResults
-                : text.productsStep}
-            </p>
-
-            <h2 className="mt-1 text-2xl font-black">
-              {selectedCategory ??
-                (selectedOffer
-                  ? resolveLocalizedOfferText(
-                      selectedOffer.content,
-                      language,
-                      language,
-                    ).name
-                  : text.searchResults)}
-            </h2>
-          </div>
-
-          <button
-            type="button"
-            onClick={() => {
-              setSelectedCategory(
-                null,
-              );
-              setSearch("");
-              window.scrollTo({
-                top: 0,
-                behavior:
-                  "smooth",
-              });
-            }}
-            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-neutral-200 px-4 py-2 font-bold transition hover:bg-neutral-50 dark:border-neutral-700 dark:hover:bg-neutral-800"
-          >
-            <ChevronLeft
-              size={18}
-            />
-            {
-              text.backToCategories
-            }
-          </button>
-        </section>
-
-        {visibleProducts.length === 0 ? (
-          <EmptyState
-            icon={<Search size={40} />}
-            message={text.emptySearch}
-          />
-        ) : (
-          <>
-            <StoreProductGrid
-              title={text.availableProductsTitle}
-              help={text.availableProductsHelp}
-              products={visibleNormalProducts}
-              cart={cart}
-              bundleSelections={bundleSelections}
-              text={text}
-              locale={storeProfile.regionalLocale}
-              currency={storeProfile.currency}
-              onOpen={(product) => {
-                setSelectedProduct(product);
-                setSelectedImageIndex(0);
-              }}
-              onSetQuantity={setQuantity}
-              onConfigureBundle={setConfiguringBundle}
-            />
-            <StoreProductGrid
-              title={text.madeToOrderTitle}
-              help={text.madeToOrderHelp}
-              products={visibleMadeToOrderProducts}
-              cart={cart}
-              bundleSelections={bundleSelections}
-              text={text}
-              locale={storeProfile.regionalLocale}
-              currency={storeProfile.currency}
-              madeToOrder
-              onOpen={(product) => {
-                setSelectedProduct(product);
-                setSelectedImageIndex(0);
-              }}
-              onSetQuantity={setQuantity}
-              onConfigureBundle={setConfiguringBundle}
-            />
-          </>
-        )}
       </>
     )}
   </>
@@ -3156,7 +3084,7 @@ const showingProducts =
                   unitPriceMinor: item.priceMinor,
                 }))}
                 merchandisePayableMinor={merchandisePayableBeforeRewardsMinor}
-                offerApplied={Boolean(selectedOfferEvaluation?.applicable)}
+                offerApplied={Boolean(appliedOfferEvaluation)}
                 selection={rewardSelection}
                 maximumDiscountPoints={rewardEvaluation.maximumDiscountPoints}
                 pointsToEarn={rewardEvaluation.pointsToEarn}
@@ -3185,6 +3113,7 @@ const showingProducts =
               discountLabel={text.discount}
               offerEvaluation={selectedOfferEvaluation}
               language={language}
+              text={text}
             />
 
             <button
@@ -3503,12 +3432,57 @@ function Field({
   );
 }
 
+
+function offerHeadline(
+  offer: OfferDoc,
+  language: Language,
+  currency: SupportedCurrency,
+  locale: RegionalLocale,
+): string {
+  const quantity = offer.requiredQuantity;
+
+  if (offer.pricing.mode === "fixed_total") {
+    const promotional = formatMoneyMinor(
+      offer.pricing.promotionalTotalMinor ?? 0,
+      currency,
+      locale,
+    );
+    return language === "ja"
+      ? `${quantity}点で${promotional}`
+      : language === "en"
+        ? `Get ${quantity} for ${promotional}`
+        : `Leve ${quantity} por ${promotional}`;
+  }
+
+  if (offer.pricing.mode === "fixed_discount") {
+    const discount = formatMoneyMinor(
+      offer.pricing.discountMinor ?? 0,
+      currency,
+      locale,
+    );
+    return language === "ja"
+      ? `${quantity}点で${discount}割引`
+      : language === "en"
+        ? `Get ${quantity} and save ${discount}`
+        : `Leve ${quantity} e economize ${discount}`;
+  }
+
+  const percentage = offer.pricing.percentage ?? 0;
+  return language === "ja"
+    ? `${quantity}点で${percentage}%割引`
+    : language === "en"
+      ? `Get ${quantity} with ${percentage}% off`
+      : `Leve ${quantity} com ${percentage}% de desconto`;
+}
+
 function StoreProductGrid({
   title,
   help,
   products,
   cart,
   bundleSelections,
+  offers,
+  language,
   text,
   locale,
   currency,
@@ -3522,6 +3496,8 @@ function StoreProductGrid({
   products: Product[];
   cart: Record<string, number>;
   bundleSelections: Record<string, BundleSelection>;
+  offers: OfferDoc[];
+  language: Language;
   text: (typeof TEXT)[Language];
   locale: RegionalLocale;
   currency: SupportedCurrency;
@@ -3536,7 +3512,7 @@ function StoreProductGrid({
     <section className="mt-8">
       <div className="mb-4">
         <h2 className="text-2xl font-black sm:text-3xl">{title}</h2>
-        <p className="mt-2 text-sm text-neutral-600 dark:text-neutral-300">{help}</p>
+        {help && <p className="mt-2 text-sm text-neutral-600 dark:text-neutral-300">{help}</p>}
       </div>
 
       <div className="grid grid-cols-2 gap-3 sm:gap-5 lg:grid-cols-3">
@@ -3560,6 +3536,12 @@ function StoreProductGrid({
             !madeToOrder &&
             typeof product.stock === "number" &&
             qty >= product.stock;
+          const highlightedOffer = offers
+            .filter((offer) => offer.eligibleProductIds.includes(product.id))
+            .sort((left, right) => left.requiredQuantity - right.requiredQuantity)[0] ?? null;
+          const highlightedOfferText = highlightedOffer
+            ? offerHeadline(highlightedOffer, language, currency, locale)
+            : "";
 
           return (
             <article
@@ -3570,9 +3552,11 @@ function StoreProductGrid({
                   ? "border-violet-200 dark:border-violet-900/60"
                   : soldOut
                     ? "border-red-300 bg-red-50/40 opacity-80 dark:border-red-900/70 dark:bg-red-950/10"
-                    : lastUnits
-                      ? "border-amber-400 bg-amber-50/50 shadow-amber-100 dark:border-amber-700 dark:bg-amber-950/10"
-                      : "border-neutral-200 dark:border-neutral-800",
+                    : highlightedOffer
+                      ? "border-orange-400 bg-orange-50/30 shadow-orange-100 dark:border-orange-700 dark:bg-orange-950/10"
+                      : lastUnits
+                        ? "border-amber-400 bg-amber-50/50 shadow-amber-100 dark:border-amber-700 dark:bg-amber-950/10"
+                        : "border-neutral-200 dark:border-neutral-800",
               ].join(" ")}
             >
               <button
@@ -3601,13 +3585,19 @@ function StoreProductGrid({
 
                 {!madeToOrder && lastUnits && (
                   <span className="absolute left-3 top-3 rounded-full bg-amber-500 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-white shadow-lg">
-                    {text.lastUnits.replace("{count}", String(product.stock))}
+                    {text.lastUnitsBadge.replace("{count}", String(product.stock))}
                   </span>
                 )}
 
                 {!madeToOrder && soldOut && (
                   <span className="absolute left-3 top-3 rounded-full bg-red-600 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-white shadow-lg">
-                    {text.outOfStock}
+                    {text.soldOutBadge}
+                  </span>
+                )}
+
+                {highlightedOffer && !soldOut && (
+                  <span className="absolute right-3 top-3 rounded-full bg-orange-500 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-white shadow-lg">
+                    {text.offerBadge}
                   </span>
                 )}
 
@@ -3640,21 +3630,20 @@ function StoreProductGrid({
                   </p>
                 )}
 
-                {madeToOrder ? (
+                {madeToOrder && (
                   <p className="mt-3 rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-xs font-bold text-violet-700 dark:border-violet-900/50 dark:bg-violet-950/20 dark:text-violet-300">
                     {configurableBundle
                       ? `${text.kitTarget}: ${product.bundleConfig.totalUnits}`
                       : text.madeToOrderNotice}
                   </p>
-                ) : lastUnits ? (
-                  <p className="mt-3 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-black text-amber-900 dark:border-amber-800 dark:bg-amber-950/20 dark:text-amber-200">
-                    {text.lastUnits.replace("{count}", String(product.stock))}
-                  </p>
-                ) : soldOut ? (
-                  <p className="mt-3 rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-xs font-black text-red-800 dark:border-red-900/60 dark:bg-red-950/20 dark:text-red-300">
-                    {text.outOfStock}
-                  </p>
-                ) : null}
+                )}
+
+                {highlightedOffer && !soldOut && (
+                  <div className="mt-3 rounded-xl border border-orange-300 bg-orange-50 px-3 py-2 text-orange-900 dark:border-orange-800 dark:bg-orange-950/20 dark:text-orange-200">
+                    <p className="text-[10px] font-black uppercase tracking-wider">{text.offerBadge}</p>
+                    <p className="mt-0.5 text-xs font-black sm:text-sm">{highlightedOfferText}</p>
+                  </div>
+                )}
 
                 {configurableBundle && qty > 0 ? (
                   <div className="mt-3 space-y-2">
@@ -3883,212 +3872,6 @@ function BundleConfiguratorDialog({
   );
 }
 
-function StoreOffersSection({
-  offers,
-  selectedOfferId,
-  evaluation,
-  products,
-  language,
-  locale,
-  currency,
-  text,
-  onSelect,
-}: {
-  offers: OfferDoc[];
-  selectedOfferId: string;
-  evaluation: OfferEvaluation | null;
-  products: Product[];
-  language: Language;
-  locale: string;
-  currency: SupportedCurrency;
-  text: (typeof TEXT)[Language];
-  onSelect: (offerId: string) => void;
-}) {
-  if (offers.length === 0) {
-    return null;
-  }
-
-  const productById = new Map(
-    products.map((product) => [
-      product.id,
-      product,
-    ]),
-  );
-
-  return (
-    <section className="mt-6 space-y-4">
-      <div>
-        <h2 className="text-2xl font-black sm:text-3xl">
-          {text.offersTitle}
-        </h2>
-        <p className="mt-2 text-sm text-neutral-600 dark:text-neutral-300">
-          {text.offersHelp}
-        </p>
-      </div>
-
-      <div className="flex snap-x snap-mandatory gap-4 overflow-x-auto pb-2 scrollbar-none">
-        {offers.map((offer) => {
-          const localized =
-            resolveLocalizedOfferText(
-              offer.content,
-              language,
-              language,
-            );
-          const selected =
-            offer.id === selectedOfferId;
-          const currentEvaluation =
-            selected ? evaluation : null;
-          const eligibleNames =
-            offer.eligibleProductIds
-              .map((id) =>
-                productById.get(id)?.name,
-              )
-              .filter(
-                (name): name is string =>
-                  Boolean(name),
-              );
-
-          let priceLabel = "";
-
-          if (
-            offer.pricing.mode ===
-            "fixed_total"
-          ) {
-            priceLabel = `${formatMoneyMinor(
-              offer.pricing
-                .regularTotalMinor ?? 0,
-              currency,
-              locale,
-            )} → ${formatMoneyMinor(
-              offer.pricing
-                .promotionalTotalMinor ?? 0,
-              currency,
-              locale,
-            )}`;
-          } else if (
-            offer.pricing.mode ===
-            "fixed_discount"
-          ) {
-            priceLabel = `- ${formatMoneyMinor(
-              offer.pricing
-                .discountMinor ?? 0,
-              currency,
-              locale,
-            )}`;
-          } else {
-            priceLabel = `${offer.pricing.percentage ?? 0}%`;
-          }
-
-          const progressLabel =
-            currentEvaluation
-              ? currentEvaluation.applicable
-                ? `${text.offerReady} · ${currentEvaluation.bundleCount} ${text.offerBundles}`
-                : text.offerRemaining.replace(
-                    "{count}",
-                    String(
-                      currentEvaluation.nextBundleRemaining,
-                    ),
-                  )
-              : "";
-
-          return (
-            <article
-              key={offer.id}
-              className={[
-                "min-w-[min(88vw,420px)] snap-start overflow-hidden rounded-3xl border bg-white shadow-sm transition dark:bg-neutral-900",
-                selected
-                  ? "border-orange-500 ring-2 ring-orange-500/20"
-                  : "border-neutral-200 dark:border-neutral-800",
-              ].join(" ")}
-            >
-              <div className="p-3 sm:p-5">
-                <div className="flex items-start justify-between gap-4">
-                  <div className="min-w-0">
-                    <p className="text-xs font-black uppercase tracking-wider text-orange-700 dark:text-orange-300">
-                      {text.requiredOfferQuantity}: {offer.requiredQuantity}
-                    </p>
-                    <h3 className="mt-2 break-words text-xl font-black">
-                      {localized.name}
-                    </h3>
-                  </div>
-
-                  <Gift
-                    size={28}
-                    className="shrink-0 text-orange-500"
-                  />
-                </div>
-
-                {localized.description && (
-                  <p className="mt-3 text-sm text-neutral-600 dark:text-neutral-300">
-                    {localized.description}
-                  </p>
-                )}
-
-                <p className="mt-4 text-lg font-black">
-                  {priceLabel}
-                </p>
-
-                {eligibleNames.length > 0 && (
-                  <div className="mt-4">
-                    <p className="text-[10px] font-black uppercase tracking-wider text-neutral-400">
-                      {text.offerProducts}
-                    </p>
-                    <p className="mt-1 line-clamp-2 text-xs font-semibold text-neutral-600 dark:text-neutral-300">
-                      {eligibleNames.join(" · ")}
-                    </p>
-                  </div>
-                )}
-
-                {selected && currentEvaluation && (
-                  <div
-                    className={[
-                      "mt-4 rounded-2xl border p-4 text-sm font-bold",
-                      currentEvaluation.applicable
-                        ? "border-green-200 bg-green-50 text-green-700 dark:border-green-900/50 dark:bg-green-950/20 dark:text-green-300"
-                        : "border-orange-200 bg-orange-50 text-orange-800 dark:border-orange-900/50 dark:bg-orange-950/20 dark:text-orange-200",
-                    ].join(" ")}
-                  >
-                    <p>{progressLabel}</p>
-
-                    {currentEvaluation.applicable && (
-                      <p className="mt-2 text-xs font-black">
-                        {text.offerSavings}: {formatMoneyMinor(
-                          currentEvaluation.discountAmountMinor,
-                          currency,
-                          locale,
-                        )}
-                      </p>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              <button
-                type="button"
-                onClick={() =>
-                  onSelect(
-                    selected ? "" : offer.id,
-                  )
-                }
-                className={[
-                  "flex min-h-12 w-full items-center justify-center border-t px-4 text-sm font-black transition",
-                  selected
-                    ? "border-orange-200 bg-orange-50 text-orange-800 hover:bg-orange-100 dark:border-orange-900/50 dark:bg-orange-950/20 dark:text-orange-200"
-                    : "border-neutral-200 bg-neutral-950 text-white hover:bg-neutral-800 dark:border-neutral-800 dark:bg-white dark:text-neutral-950 dark:hover:bg-neutral-200",
-                ].join(" ")}
-              >
-                {selected
-                  ? text.removeOffer
-                  : text.useOffer}
-              </button>
-            </article>
-          );
-        })}
-      </div>
-    </section>
-  );
-}
-
 function OrderSummary({
   items,
   subtotal,
@@ -4104,6 +3887,7 @@ function OrderSummary({
   discountLabel,
   offerEvaluation,
   language,
+  text,
 }: {
   items: CartItem[];
   subtotal: number;
@@ -4119,6 +3903,7 @@ function OrderSummary({
   discountLabel: string;
   offerEvaluation: OfferEvaluation | null;
   language: Language;
+  text: (typeof TEXT)[Language];
 }) {
   return (
     <section className="mt-6 rounded-2xl bg-neutral-100 p-5 dark:bg-neutral-800">
@@ -4151,6 +3936,23 @@ function OrderSummary({
             {formatCurrency(subtotal, locale, currency)}
           </span>
         </div>
+
+        {offerEvaluation &&
+          !offerEvaluation.applicable &&
+          offerEvaluation.eligibleQuantity > 0 && (
+            <p className="rounded-xl border border-orange-200 bg-orange-50 px-3 py-2 text-xs font-semibold text-orange-800 dark:border-orange-900/50 dark:bg-orange-950/20 dark:text-orange-200">
+              {text.offerSuggestion
+                .replace("{count}", String(offerEvaluation.nextBundleRemaining))
+                .replace(
+                  "{offer}",
+                  resolveLocalizedOfferText(
+                    offerEvaluation.offer.content,
+                    language,
+                    language,
+                  ).name,
+                )}
+            </p>
+          )}
 
         {discount > 0 && (
           <>
@@ -4366,6 +4168,23 @@ function CartDrawer({
                 {formatCurrency(subtotal, locale, currency)}
               </span>
             </div>
+
+            {offerEvaluation &&
+              !offerEvaluation.applicable &&
+              offerEvaluation.eligibleQuantity > 0 && (
+                <p className="rounded-xl border border-orange-200 bg-orange-50 px-3 py-2 text-xs font-semibold text-orange-800 dark:border-orange-900/50 dark:bg-orange-950/20 dark:text-orange-200">
+                  {text.offerSuggestion
+                    .replace("{count}", String(offerEvaluation.nextBundleRemaining))
+                    .replace(
+                      "{offer}",
+                      resolveLocalizedOfferText(
+                        offerEvaluation.offer.content,
+                        language,
+                        language,
+                      ).name,
+                    )}
+                </p>
+              )}
 
             {discount > 0 && (
               <>

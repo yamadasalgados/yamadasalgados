@@ -3,7 +3,7 @@ import type { ProductBundleConfig, ProductContent } from "@/app/lib/product-sche
 import type { ProductShipping } from "@/app/lib/shipping-schema";
 
 export type CategoryId = string;
-export type ProductStatus = "active" | "made_to_order" | "inactive";
+export type ProductStatus = "active" | "made_to_order" | "hidden" | "inactive";
 export type PlanId = "starter" | "pro" | "business";
 
 export type ProductInventory = {
