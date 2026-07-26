@@ -63,6 +63,9 @@ import {
 import {
   accessIsActive,
 } from "@/app/lib/access-control";
+import {
+  normalizeSellerOrderSettings,
+} from "@/app/lib/order-settings-schema";
 
 import {
   useI18n,
@@ -141,6 +144,7 @@ type StoreProfile = {
   currency: SupportedCurrency;
   regionalLocale: RegionalLocale;
   available: boolean;
+  acceptOrdersWithoutStock: boolean;
 };
 
 type Product = {
@@ -242,6 +246,12 @@ const TEXT = {
       "Nenhum produto corresponde à busca.",
     outOfStock: "Esgotado — novas vendas estão bloqueadas.",
     soldOutBadge: "Esgotado",
+    stockConfirmationBadge: "Sob confirmação",
+    stockConfirmationNotice: "Disponibilidade e prazo serão confirmados após o pedido.",
+    stockConfirmationCart:
+      "Alguns itens ultrapassam o estoque atual: {products}. O pedido ficará pendente e o seller entrará em contato se necessário.",
+    stockConfirmationSuccess:
+      "Há itens com disponibilidade pendente. O seller confirmará o prazo após revisar o pedido.",
     lastUnits: "Últimas {count} unidades — garanta a sua.",
     lastUnitsBadge: "Últimas {count}",
     stock: "Estoque",
@@ -405,6 +415,12 @@ const TEXT = {
       "No products match your search.",
     outOfStock: "Sold out — new purchases are blocked.",
     soldOutBadge: "Sold out",
+    stockConfirmationBadge: "Confirmation required",
+    stockConfirmationNotice: "Availability and timing will be confirmed after the order.",
+    stockConfirmationCart:
+      "Some items exceed current stock: {products}. The order will remain pending and the seller will contact you if needed.",
+    stockConfirmationSuccess:
+      "Some items are pending availability confirmation. The seller will confirm timing after reviewing the order.",
     lastUnits: "Only {count} left — get yours now.",
     lastUnitsBadge: "Only {count} left",
     stock: "Stock",
@@ -564,6 +580,12 @@ const TEXT = {
       "検索条件に一致する商品はありません。",
     outOfStock: "売り切れ — 新しい注文は受け付けていません。",
     soldOutBadge: "売り切れ",
+    stockConfirmationBadge: "在庫確認",
+    stockConfirmationNotice: "在庫状況と受取時期は注文後に確認します。",
+    stockConfirmationCart:
+      "現在の在庫を超える商品があります: {products}。注文は保留となり、必要に応じて販売者から連絡します。",
+    stockConfirmationSuccess:
+      "在庫確認が必要な商品があります。販売者が注文確認後に受取時期をご案内します。",
     lastUnits: "残り{count}点 — お早めにご注文ください。",
     lastUnitsBadge: "残り{count}点",
     stock: "在庫",
@@ -1030,6 +1052,10 @@ function normalizeStoreProfile(
     regionalLocale,
     available:
       accessIsActive(raw),
+    acceptOrdersWithoutStock: normalizeSellerOrderSettings(
+      raw.orderSettings,
+      raw.acceptOrdersWithoutStock,
+    ).acceptOrdersWithoutStock,
   };
 }
 
@@ -1114,6 +1140,7 @@ export default function StoreClient({
       currency: "JPY",
       regionalLocale: "ja-JP",
       available: false,
+      acceptOrdersWithoutStock: true,
     });
 
   const [shippingSettings, setShippingSettings] =
@@ -1204,6 +1231,8 @@ export default function StoreClient({
     useState<RewardRedemptionSelection>({ ...EMPTY_REWARD_SELECTION });
   const [createdPointsToEarn, setCreatedPointsToEarn] = useState(0);
   const [createdPointsRedeemed, setCreatedPointsRedeemed] = useState(0);
+  const [createdRequiresStockConfirmation, setCreatedRequiresStockConfirmation] =
+    useState(false);
 
   const [
     selectedProduct,
@@ -1369,6 +1398,7 @@ export default function StoreClient({
               : 0;
         } else {
           safeQuantity =
+            storeProfile.acceptOrdersWithoutStock ||
             product.availabilityStatus === "made_to_order" ||
             typeof product.stock !== "number"
               ? quantity
@@ -1381,7 +1411,12 @@ export default function StoreClient({
 
       return changed ? next : current;
     });
-  }, [loading, products, bundleSelections]);
+  }, [
+    loading,
+    products,
+    bundleSelections,
+    storeProfile.acceptOrdersWithoutStock,
+  ]);
 
   useEffect(() => {
     if (!sellerId.trim()) {
@@ -1843,6 +1878,38 @@ const visibleProducts =
       }, []);
     }, [cart, products, bundleSelections]);
 
+  const stockConfirmationItems = useMemo(
+    () =>
+      storeProfile.acceptOrdersWithoutStock
+        ? cartItems
+            .filter(
+              (item) =>
+                item.availabilityStatus !== "made_to_order" &&
+                typeof item.stock === "number" &&
+                item.qty > item.stock,
+            )
+            .map((item) => ({
+              id: item.id,
+              name: item.name,
+              shortage: Math.max(0, item.qty - (item.stock ?? 0)),
+            }))
+        : [],
+    [cartItems, storeProfile.acceptOrdersWithoutStock],
+  );
+
+  const stockConfirmationMessage = useMemo(
+    () =>
+      stockConfirmationItems.length > 0
+        ? text.stockConfirmationCart.replace(
+            "{products}",
+            stockConfirmationItems
+              .map((item) => `${item.name} (+${item.shortage})`)
+              .join(", "),
+          )
+        : "",
+    [stockConfirmationItems, text.stockConfirmationCart],
+  );
+
   const totalItems =
     useMemo(
       () =>
@@ -2034,6 +2101,7 @@ const visibleProducts =
       ) => {
         const requestedSafeQty = Math.max(0, Math.floor(requestedQty));
         const safeQty =
+          storeProfile.acceptOrdersWithoutStock ||
           product.availabilityStatus === "made_to_order" ||
           typeof product.stock !== "number"
             ? requestedSafeQty
@@ -2058,7 +2126,7 @@ const visibleProducts =
           },
         );
       },
-      [],
+      [storeProfile.acceptOrdersWithoutStock],
     );
 
   const saveBundleSelection = useCallback((product: Product, selection: BundleSelection) => {
@@ -2275,6 +2343,7 @@ const visibleProducts =
       setCreatedCustomerOrderRefId(result.customerOrderRefId || "");
       setCreatedPointsToEarn(result.pointsToEarn || 0);
       setCreatedPointsRedeemed(result.pointsRedeemed || 0);
+      setCreatedRequiresStockConfirmation(stockConfirmationItems.length > 0);
       setRewardSelection({ ...EMPTY_REWARD_SELECTION });
       if (customerSession.registered) void customerRewards.refresh();
 
@@ -2359,6 +2428,7 @@ const visibleProducts =
     setCreatedCustomerOrderRefId("");
     setCreatedPointsToEarn(0);
     setCreatedPointsRedeemed(0);
+    setCreatedRequiresStockConfirmation(false);
     setRewardSelection({ ...EMPTY_REWARD_SELECTION });
     setFormError("");
     setSearch("");
@@ -2468,6 +2538,12 @@ const visibleProducts =
           <p className="mt-4 text-sm font-medium text-neutral-500 dark:text-neutral-400">
             {createdCustomerOrderRefId ? text.registeredOrderHelp : text.guestOrderHelp}
           </p>
+
+          {createdRequiresStockConfirmation && (
+            <p className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-left text-sm font-bold leading-relaxed text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200">
+              {text.stockConfirmationSuccess}
+            </p>
+          )}
 
           {(createdPointsRedeemed > 0 || createdPointsToEarn > 0) && (
             <div className="mt-4 rounded-2xl bg-violet-50 p-4 text-left text-sm font-bold text-violet-800 dark:bg-violet-950/40 dark:text-violet-200">
@@ -2631,6 +2707,7 @@ const visibleProducts =
             text={text}
             locale={storeProfile.regionalLocale}
             currency={storeProfile.currency}
+            acceptOrdersWithoutStock={storeProfile.acceptOrdersWithoutStock}
             onOpen={(product) => {
               setSelectedProduct(product);
               setSelectedImageIndex(0);
@@ -2650,6 +2727,7 @@ const visibleProducts =
             text={text}
             locale={storeProfile.regionalLocale}
             currency={storeProfile.currency}
+            acceptOrdersWithoutStock={storeProfile.acceptOrdersWithoutStock}
             madeToOrder
             onOpen={(product) => {
               setSelectedProduct(product);
@@ -2678,6 +2756,7 @@ const visibleProducts =
           text={text}
           locale={storeProfile.regionalLocale}
           currency={storeProfile.currency}
+          acceptOrdersWithoutStock={storeProfile.acceptOrdersWithoutStock}
           onOpen={(product) => {
             setSelectedProduct(product);
             setSelectedImageIndex(0);
@@ -2766,6 +2845,7 @@ const visibleProducts =
           text={text}
           locale={storeProfile.regionalLocale}
           currency={storeProfile.currency}
+          acceptOrdersWithoutStock={storeProfile.acceptOrdersWithoutStock}
           madeToOrder
           onOpen={(product) => {
             setSelectedProduct(product);
@@ -3245,6 +3325,7 @@ const visibleProducts =
               subtotalLabel={text.subtotal}
               discountLabel={text.discount}
               offerEvaluation={selectedOfferEvaluation}
+              stockConfirmationMessage={stockConfirmationMessage}
               language={language}
               text={text}
             />
@@ -3350,6 +3431,7 @@ const visibleProducts =
           currency={storeProfile.currency}
           text={text}
           offerEvaluation={selectedOfferEvaluation}
+          stockConfirmationMessage={stockConfirmationMessage}
           language={language}
           onClose={() =>
             setCartOpen(false)
@@ -3619,6 +3701,7 @@ function StoreProductGrid({
   text,
   locale,
   currency,
+  acceptOrdersWithoutStock,
   madeToOrder = false,
   onOpen,
   onSetQuantity,
@@ -3634,6 +3717,7 @@ function StoreProductGrid({
   text: (typeof TEXT)[Language];
   locale: RegionalLocale;
   currency: SupportedCurrency;
+  acceptOrdersWithoutStock: boolean;
   madeToOrder?: boolean;
   onOpen: (product: Product) => void;
   onSetQuantity: (product: Product, quantity: number) => void;
@@ -3696,16 +3780,19 @@ function StoreProductGrid({
           const savedBundle = bundleSelections[product.id];
           const selectedBundleUnits = Object.values(savedBundle?.selections ?? {})
             .reduce((sum, quantity) => sum + Math.max(0, Math.floor(Number(quantity) || 0)), 0);
-          const soldOut =
+          const hasNoStock =
             !madeToOrder &&
             typeof product.stock === "number" &&
             product.stock <= 0;
+          const soldOut = hasNoStock && !acceptOrdersWithoutStock;
+          const needsConfirmation = hasNoStock && acceptOrdersWithoutStock;
           const lastUnits =
             !madeToOrder &&
             typeof product.stock === "number" &&
             product.stock > 0 &&
             product.stock <= 10;
           const reachedCartLimit =
+            !acceptOrdersWithoutStock &&
             !madeToOrder &&
             typeof product.stock === "number" &&
             qty >= product.stock;
@@ -3725,6 +3812,8 @@ function StoreProductGrid({
                   ? "border-violet-200 dark:border-violet-900/60"
                   : soldOut
                     ? "border-red-300 bg-red-50/40 opacity-80 dark:border-red-900/70 dark:bg-red-950/10"
+                    : needsConfirmation
+                      ? "border-amber-400 bg-amber-50/40 dark:border-amber-700 dark:bg-amber-950/10"
                     : highlightedOffer
                       ? "border-orange-400 bg-orange-50/30 shadow-orange-100 dark:border-orange-700 dark:bg-orange-950/10"
                       : lastUnits
@@ -3759,6 +3848,12 @@ function StoreProductGrid({
                 {!madeToOrder && lastUnits && (
                   <span className="absolute left-3 top-3 rounded-full bg-amber-500 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-white shadow-lg">
                     {text.lastUnitsBadge.replace("{count}", String(product.stock))}
+                  </span>
+                )}
+
+                {!madeToOrder && needsConfirmation && (
+                  <span className="absolute left-3 top-3 rounded-full bg-amber-500 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-white shadow-lg">
+                    {text.stockConfirmationBadge}
                   </span>
                 )}
 
@@ -3808,6 +3903,12 @@ function StoreProductGrid({
                     {configurableBundle
                       ? `${text.kitTarget}: ${product.bundleConfig.totalUnits}`
                       : text.madeToOrderNotice}
+                  </p>
+                )}
+
+                {needsConfirmation && (
+                  <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold leading-relaxed text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-200">
+                    {text.stockConfirmationNotice}
                   </p>
                 )}
 
@@ -4062,6 +4163,7 @@ function OrderSummary({
   subtotalLabel,
   discountLabel,
   offerEvaluation,
+  stockConfirmationMessage,
   language,
   text,
 }: {
@@ -4078,6 +4180,7 @@ function OrderSummary({
   subtotalLabel: string;
   discountLabel: string;
   offerEvaluation: OfferEvaluation | null;
+  stockConfirmationMessage: string;
   language: Language;
   text: (typeof TEXT)[Language];
 }) {
@@ -4104,6 +4207,12 @@ function OrderSummary({
           </div>
         ))}
       </div>
+
+      {stockConfirmationMessage && (
+        <p className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold leading-relaxed text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-200">
+          {stockConfirmationMessage}
+        </p>
+      )}
 
       <div className="mt-4 space-y-2 border-t border-neutral-300 pt-4 text-sm dark:border-neutral-700">
         <div className="flex items-center justify-between gap-4">
@@ -4181,6 +4290,7 @@ function CartDrawer({
   currency,
   text,
   offerEvaluation,
+  stockConfirmationMessage,
   language,
   onClose,
   onContinue,
@@ -4197,6 +4307,7 @@ function CartDrawer({
   currency: SupportedCurrency;
   text: (typeof TEXT)[Language];
   offerEvaluation: OfferEvaluation | null;
+  stockConfirmationMessage: string;
   language: Language;
   onClose: () => void;
   onContinue: () => void;
@@ -4344,6 +4455,12 @@ function CartDrawer({
                 {formatCurrency(subtotal, locale, currency)}
               </span>
             </div>
+
+            {stockConfirmationMessage && (
+              <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold leading-relaxed text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-200">
+                {stockConfirmationMessage}
+              </p>
+            )}
 
             {offerEvaluation &&
               !offerEvaluation.applicable &&

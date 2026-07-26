@@ -54,6 +54,7 @@ import {
   minorToMajor,
 } from "@/app/lib/money";
 import { normalizeProductInventory } from "@/app/lib/inventory-schema";
+import { normalizeSellerOrderSettings } from "@/app/lib/order-settings-schema";
 import type {
   RegionalLocale,
   SupportedCurrency,
@@ -397,6 +398,7 @@ const uiLocale =
   const [currentUrl, setCurrentUrl] = useState("");
 
   const [productsData, setProductsData] = useState<Record<string, ProductImageData>>({});
+  const [acceptOrdersWithoutStock, setAcceptOrdersWithoutStock] = useState(true);
   const [offers, setOffers] = useState<OfferDoc[]>([]);
   const [selectedOfferId, setSelectedOfferId] = useState("");
   const [activeCategory, setActiveCategory] = useState("__all__");
@@ -483,6 +485,41 @@ const uiLocale =
   const totalItems = useMemo(() => {
     return orderableIds.reduce((sum, pid) => sum + (quantities[pid] || 0), 0);
   }, [orderableIds, quantities]);
+
+  const stockConfirmationItems = useMemo(
+    () =>
+      acceptOrdersWithoutStock
+        ? orderableIds
+            .map((productId) => {
+              const product = productsData[productId];
+              const quantity = quantities[productId] || 0;
+              const stock =
+                typeof product?.stockQty === "number"
+                  ? Math.max(0, Math.floor(product.stockQty))
+                  : null;
+
+              if (
+                !product ||
+                product.availabilityMode === "made_to_order" ||
+                stock === null ||
+                quantity <= stock
+              ) {
+                return null;
+              }
+
+              return {
+                productId,
+                name: product.name || productId,
+                shortage: quantity - stock,
+              };
+            })
+            .filter(
+              (item): item is { productId: string; name: string; shortage: number } =>
+                item !== null,
+            )
+        : [],
+    [acceptOrdersWithoutStock, orderableIds, productsData, quantities],
+  );
 
   const selectedOffer = useMemo(
     () => offers.find((offer) => offer.id === selectedOfferId) ?? null,
@@ -605,7 +642,7 @@ const uiLocale =
         const current = prev[productId] || 0;
         const requested = Math.max(0, current + delta);
         const next =
-          madeToOrder || availableStock === null
+          acceptOrdersWithoutStock || madeToOrder || availableStock === null
             ? requested
             : Math.min(requested, availableStock);
 
@@ -613,7 +650,7 @@ const uiLocale =
         return { ...prev, [productId]: next };
       });
     },
-    [productsData],
+    [acceptOrdersWithoutStock, productsData],
   );
 
   const handleGetLocation = useCallback(() => {
@@ -783,6 +820,7 @@ const uiLocale =
 
         const quantity = Math.max(0, Math.floor(Number(rawQuantity) || 0));
         const safeQuantity =
+          acceptOrdersWithoutStock ||
           product.availabilityMode === "made_to_order" ||
           typeof product.stockQty !== "number"
             ? quantity
@@ -794,7 +832,7 @@ const uiLocale =
 
       return changed ? next : current;
     });
-  }, [event, orderableIds, productsData]);
+  }, [acceptOrdersWithoutStock, event, orderableIds, productsData]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -825,6 +863,12 @@ const uiLocale =
         const data = snap.data() as any;
         const sellerSnapshot = await getDoc(doc(db, "sellers", sellerId));
         const sellerData = sellerSnapshot.exists() ? sellerSnapshot.data() as any : {};
+        setAcceptOrdersWithoutStock(
+          normalizeSellerOrderSettings(
+            sellerData.orderSettings,
+            sellerData.acceptOrdersWithoutStock,
+          ).acceptOrdersWithoutStock,
+        );
         const sellerRegional =
           sellerData.regional && typeof sellerData.regional === "object"
             ? sellerData.regional
@@ -1313,6 +1357,7 @@ const uiLocale =
           currency={currency}
           locale={locale}
           eventClosed={eventClosed}
+          acceptOrdersWithoutStock={acceptOrdersWithoutStock}
           madeToOrder={false}
           onAdjust={adjustQuantity}
           tr={tr}
@@ -1338,6 +1383,7 @@ const uiLocale =
             currency={currency}
             locale={locale}
             eventClosed={eventClosed}
+            acceptOrdersWithoutStock={acceptOrdersWithoutStock}
             madeToOrder
             onAdjust={adjustQuantity}
             tr={tr}
@@ -1553,6 +1599,22 @@ const uiLocale =
               <span className="text-neutral-900 dark:text-white">{totalItems}</span>
             </p>
           </div>
+
+          {stockConfirmationItems.length > 0 && (
+            <p className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-bold leading-relaxed text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-200">
+              {language === "ja"
+                ? `在庫確認が必要な商品があります: ${stockConfirmationItems
+                    .map((item) => `${item.name} (+${item.shortage})`)
+                    .join("、")}。注文は保留となり、販売者が確認します。`
+                : language === "en"
+                  ? `Some items exceed current stock: ${stockConfirmationItems
+                      .map((item) => `${item.name} (+${item.shortage})`)
+                      .join(", ")}. The order will remain pending for seller confirmation.`
+                  : `Alguns itens ultrapassam o estoque atual: ${stockConfirmationItems
+                      .map((item) => `${item.name} (+${item.shortage})`)
+                      .join(", ")}. O pedido ficará pendente para confirmação do seller.`}
+            </p>
+          )}
 
           {subtotalAmount > 0 && (
             <RewardsCheckoutPanel
@@ -1771,6 +1833,7 @@ function EventProductGrid({
   currency,
   locale,
   eventClosed,
+  acceptOrdersWithoutStock,
   madeToOrder,
   onAdjust,
   tr,
@@ -1782,6 +1845,7 @@ function EventProductGrid({
   currency: SupportedCurrency;
   locale: string;
   eventClosed: boolean;
+  acceptOrdersWithoutStock: boolean;
   madeToOrder: boolean;
   onAdjust: (productId: string, delta: number) => void;
   tr: (key: string, fallback: string) => string;
@@ -1802,13 +1866,16 @@ function EventProductGrid({
         const name = info?.name || productId;
         const quantity = quantities[productId] ?? 0;
         const stock = typeof info?.stockQty === "number" ? info.stockQty : null;
-        const soldOut = !madeToOrder && stock !== null && stock <= 0;
+        const hasNoStock = !madeToOrder && stock !== null && stock <= 0;
+        const soldOut = hasNoStock && !acceptOrdersWithoutStock;
+        const needsConfirmation = hasNoStock && acceptOrdersWithoutStock;
         const lastUnits =
           !madeToOrder &&
           stock !== null &&
           stock > 0 &&
           stock <= 10;
         const reachedQuantityLimit =
+          !acceptOrdersWithoutStock &&
           !madeToOrder &&
           stock !== null &&
           quantity >= stock;
@@ -1822,6 +1889,8 @@ function EventProductGrid({
                 ? "border-violet-200 dark:border-violet-900/60"
                 : soldOut
                   ? "border-red-300 bg-red-50/40 opacity-80 dark:border-red-900/70 dark:bg-red-950/10"
+                  : needsConfirmation
+                    ? "border-amber-400 bg-amber-50/40 dark:border-amber-700 dark:bg-amber-950/10"
                   : lastUnits
                     ? "border-amber-400 bg-amber-50/50 dark:border-amber-700 dark:bg-amber-950/10"
                     : "border-neutral-200 dark:border-neutral-800",
@@ -1853,6 +1922,12 @@ function EventProductGrid({
                   </span>
                 )}
 
+                {!madeToOrder && needsConfirmation && (
+                  <span className="absolute left-2 top-2 rounded-full bg-amber-500 px-2 py-1 text-[9px] font-black uppercase tracking-wider text-white shadow-lg">
+                    {tr("event.product.confirmation_required", "Sob confirmação")}
+                  </span>
+                )}
+
                 {!madeToOrder && soldOut && (
                   <span className="absolute left-2 top-2 rounded-full bg-red-600 px-2 py-1 text-[9px] font-black uppercase tracking-wider text-white shadow-lg">
                     {tr("event.product.sold_out", "Esgotado")}
@@ -1876,6 +1951,13 @@ function EventProductGrid({
                       "event.product.last_units_notice",
                       "Últimas {count} unidades — garanta a sua.",
                     ).replace("{count}", String(stock))}
+                  </p>
+                ) : needsConfirmation ? (
+                  <p className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-[10px] font-black leading-relaxed text-amber-900 dark:border-amber-800 dark:bg-amber-950/20 dark:text-amber-200">
+                    {tr(
+                      "event.product.confirmation_notice",
+                      "Disponibilidade e prazo serão confirmados após o pedido.",
+                    )}
                   </p>
                 ) : soldOut ? (
                   <p className="rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-[10px] font-black text-red-800 dark:border-red-900/60 dark:bg-red-950/20 dark:text-red-300">

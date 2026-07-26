@@ -6,6 +6,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAdminAuth, getAdminDb } from "@/app/lib/firebaseAdmin";
 import { normalizeCustomerAddress } from "@/app/lib/customer-profile";
 import { normalizeProductInventory } from "@/app/lib/inventory-schema";
+import { normalizeSellerOrderSettings } from "@/app/lib/order-settings-schema";
 import { normalizeProductBundleConfig } from "@/app/lib/product-schema";
 import {
   evaluateRewardSelection,
@@ -1027,6 +1028,10 @@ export async function POST(request: NextRequest) {
       }
 
       const sellerData = sellerSnapshot.data() ?? {};
+      const orderSettings = normalizeSellerOrderSettings(
+        sellerData.orderSettings,
+        sellerData.acceptOrdersWithoutStock,
+      );
       if (!sellerAcceptsOrders(sellerData, nowMillis)) {
         throw new OrderError(
           "SELLER_UNAVAILABLE",
@@ -1214,7 +1219,10 @@ export async function POST(request: NextRequest) {
           line.stockShortage > 0,
       );
 
-      if (unavailableStockLines.length > 0) {
+      if (
+        unavailableStockLines.length > 0 &&
+        !orderSettings.acceptOrdersWithoutStock
+      ) {
         throw new OrderError(
           "PRODUCT_UNAVAILABLE",
           unavailableStockLines.length === 1
@@ -1559,6 +1567,8 @@ export async function POST(request: NextRequest) {
           hasMadeToOrderItems,
           hasStockShortage,
           reasonCodes: readinessReasonCodes,
+          stockOrderPolicy: orderSettings.stockOrderPolicy,
+          sellerConfirmationRequired: hasStockShortage,
         },
         inventoryManaged: true,
         inventoryState: {

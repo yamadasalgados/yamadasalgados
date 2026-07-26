@@ -35,6 +35,10 @@ import {
   normalizeSellerRegionalProfile,
 } from "@/app/lib/seller-regional-profile";
 import {
+  normalizeSellerOrderSettings,
+  type SellerOrderSettings,
+} from "@/app/lib/order-settings-schema";
+import {
   useI18n,
 } from "@/app/lib/i18n";
 import type {
@@ -85,6 +89,7 @@ export type UserDoc = {
   regionalLocale?: RegionalLocale | null;
   timeZone?: string;
   defaultLanguage?: SupportedLanguage;
+  orderSettings?: SellerOrderSettings;
 };
 
 type SellerGuardChildrenArgs = {
@@ -226,6 +231,10 @@ function buildProfile(
     timeZone: regional.timeZone,
     defaultLanguage:
       regional.defaultLanguage,
+    orderSettings: normalizeSellerOrderSettings(
+      seller?.orderSettings,
+      seller?.acceptOrdersWithoutStock,
+    ),
   };
 }
 

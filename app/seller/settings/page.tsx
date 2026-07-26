@@ -41,6 +41,10 @@ import {
   type PostalPricingMode,
 } from "@/app/lib/shipping-schema";
 import { useI18n } from "@/app/lib/i18n";
+import {
+  normalizeSellerOrderSettings,
+  type StockOrderPolicy,
+} from "@/app/lib/order-settings-schema";
 import { useSellerSession } from "@/app/_components/SellerSessionContext";
 import PageHeader from "@/app/_components/PageHeader";
 import FeedbackBanner from "@/app/_components/FeedbackBanner";
@@ -81,6 +85,8 @@ export default function SellerSettingsPage() {
   const [timeZone, setTimeZone] = useState("Asia/Tokyo");
   const [language, setLanguage] = useState<SupportedLanguage>(lang);
   const [accessLabel, setAccessLabel] = useState("");
+  const [stockOrderPolicy, setStockOrderPolicy] =
+    useState<StockOrderPolicy>("accept_pending");
 
   const [postalEnabled, setPostalEnabled] = useState(false);
   const [postalPricingMode, setPostalPricingMode] =
@@ -131,6 +137,15 @@ export default function SellerSettingsPage() {
           invalidBand: "重量帯には正しい重量と送料を入力してください。",
           bandRequired: "重量別料金には少なくとも1つの重量帯が必要です。",
           duplicateBand: "同じ上限重量が重複しています。",
+          stockPolicyTitle: "在庫切れ商品の注文",
+          stockPolicySubtitle:
+            "在庫が不足していても注文を受け付け、後から納期や代替品を確認できます。",
+          acceptPending: "注文を受け付けて後で確認",
+          acceptPendingHelp:
+            "不足分は保留中として記録され、製造・在庫不足として販売者画面に表示されます。",
+          blockStock: "在庫数を超える注文をブロック",
+          blockStockHelp:
+            "在庫が0の場合は追加できず、在庫数を超えて注文できません。",
         }
       : lang === "en"
         ? {
@@ -168,6 +183,15 @@ export default function SellerSettingsPage() {
             invalidBand: "Enter a valid maximum weight and shipping price.",
             bandRequired: "Add at least one weight band for weight-based pricing.",
             duplicateBand: "Maximum weights cannot be repeated.",
+            stockPolicyTitle: "Orders without stock",
+            stockPolicySubtitle:
+              "Choose whether customers may request products that are not immediately available.",
+            acceptPending: "Accept order and confirm later",
+            acceptPendingHelp:
+              "Missing quantities are recorded as pending production or stock shortage for the seller.",
+            blockStock: "Block orders above available stock",
+            blockStockHelp:
+              "Customers cannot add sold-out items or exceed the available quantity.",
           }
         : {
             title: "Configurações da loja",
@@ -205,6 +229,15 @@ export default function SellerSettingsPage() {
             invalidBand: "Informe um peso máximo e um valor de frete válidos.",
             bandRequired: "Adicione pelo menos uma faixa para a tabela por peso.",
             duplicateBand: "Não repita o mesmo peso máximo em duas faixas.",
+            stockPolicyTitle: "Pedidos sem estoque",
+            stockPolicySubtitle:
+              "Escolha se o cliente pode pedir itens que não estão disponíveis imediatamente.",
+            acceptPending: "Aceitar pedido e confirmar depois",
+            acceptPendingHelp:
+              "A quantidade faltante fica registrada como pendência de estoque ou produção para o seller.",
+            blockStock: "Bloquear acima do estoque disponível",
+            blockStockHelp:
+              "O cliente não consegue adicionar itens esgotados nem ultrapassar a quantidade disponível.",
           };
 
   useEffect(() => {
@@ -242,6 +275,9 @@ export default function SellerSettingsPage() {
               ? "LIFETIME"
               : String(billingInterval).toUpperCase()
           } · ${String(accessStatus)}`,
+        );
+        setStockOrderPolicy(
+          normalizeSellerOrderSettings(profile.orderSettings).stockOrderPolicy,
         );
         setPostalEnabled(shipping.postalEnabled);
         setPostalPricingMode(shipping.pricingMode);
@@ -359,6 +395,11 @@ export default function SellerSettingsPage() {
             locale: selected.regionalLocale,
             timeZone: selected.timeZone,
           },
+          orderSettings: {
+            schemaVersion: 1,
+            stockOrderPolicy,
+            acceptOrdersWithoutStock: stockOrderPolicy === "accept_pending",
+          },
           updatedAt: timestamp,
           updatedBy: user.uid,
         },
@@ -419,6 +460,7 @@ export default function SellerSettingsPage() {
     sellerId,
     sellerSession,
     setLang,
+    stockOrderPolicy,
     storeName,
     timeZone,
     user,
@@ -492,6 +534,41 @@ export default function SellerSettingsPage() {
             <option value="ja">日本語</option>
           </select>
         </SettingField>
+
+        <section className="space-y-4 rounded-3xl border border-amber-200 bg-amber-50/60 p-5 dark:border-amber-900/50 dark:bg-amber-950/20">
+          <div className="flex items-start gap-3">
+            <PackageCheck className="mt-0.5 h-5 w-5 shrink-0 text-amber-700 dark:text-amber-300" />
+            <div>
+              <h2 className="font-black">{copy.stockPolicyTitle}</h2>
+              <p className="mt-1 text-xs font-semibold leading-relaxed text-amber-900/75 dark:text-amber-200/80">
+                {copy.stockPolicySubtitle}
+              </p>
+            </div>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            {([
+              ["accept_pending", copy.acceptPending, copy.acceptPendingHelp],
+              ["block", copy.blockStock, copy.blockStockHelp],
+            ] as Array<[StockOrderPolicy, string, string]>).map(([value, label, help]) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setStockOrderPolicy(value)}
+                className={`rounded-2xl border p-4 text-left transition ${
+                  stockOrderPolicy === value
+                    ? "border-amber-500 bg-amber-100 ring-2 ring-amber-200 dark:border-amber-500 dark:bg-amber-950/50 dark:ring-amber-900"
+                    : "border-neutral-200 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-950/50"
+                }`}
+              >
+                <span className="block text-sm font-black">{label}</span>
+                <span className="mt-1 block text-[11px] font-semibold leading-relaxed text-neutral-500 dark:text-neutral-400">
+                  {help}
+                </span>
+              </button>
+            ))}
+          </div>
+        </section>
 
         <section className="space-y-5 rounded-3xl border border-blue-200 bg-blue-50/60 p-5 dark:border-blue-900/50 dark:bg-blue-950/20">
           <div className="flex items-start gap-3">
