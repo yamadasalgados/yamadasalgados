@@ -4,6 +4,7 @@ import * as admin from "firebase-admin";
 import { NextRequest, NextResponse } from "next/server";
 
 import { getAdminAuth, getAdminDb } from "@/app/lib/firebaseAdmin";
+import { normalizePrintSettings } from "@/app/lib/print-server";
 import { normalizeCustomerAddress } from "@/app/lib/customer-profile";
 import { normalizeProductInventory } from "@/app/lib/inventory-schema";
 import { normalizeSellerOrderSettings } from "@/app/lib/order-settings-schema";
@@ -920,6 +921,7 @@ export async function POST(request: NextRequest) {
       clean.source === "store" && clean.delivery.mode === "postal"
         ? sellerRef.collection("settings").doc("shipping")
         : null;
+    const printingSettingsRef = sellerRef.collection("settings").doc("printing");
 
     const fingerprintPayload = {
       source: clean.source,
@@ -950,6 +952,7 @@ export async function POST(request: NextRequest) {
     const customerOrderRef = customerRef
       ? customerRef.collection("orders").doc(sha256(orderRef.path))
       : null;
+    const printJobRef = sellerRef.collection("printJobs").doc(`order_${orderRef.id}`);
 
     const transactionResult = await db.runTransaction(async (transaction) => {
       const refs: admin.firestore.DocumentReference[] = [markerRef, sellerRef];
@@ -961,6 +964,7 @@ export async function POST(request: NextRequest) {
       refs.push(...bundleOptionRefs);
       if (offerRef) refs.push(offerRef);
       if (shippingSettingsRef) refs.push(shippingSettingsRef);
+      refs.push(printingSettingsRef);
 
       const snapshots = await transaction.getAll(...refs);
       let cursor = 0;
@@ -976,6 +980,7 @@ export async function POST(request: NextRequest) {
       const bundleOptionSnapshots = bundleOptionRefs.map(() => snapshots[cursor++]);
       const offerSnapshot = offerRef ? snapshots[cursor++] : null;
       const shippingSettingsSnapshot = shippingSettingsRef ? snapshots[cursor++] : null;
+      const printingSettingsSnapshot = snapshots[cursor++];
 
       if (markerSnapshot.exists) {
         const markerData = markerSnapshot.data() ?? {};
@@ -1836,6 +1841,25 @@ export async function POST(request: NextRequest) {
       }
 
       transaction.create(orderRef, orderPayload);
+
+      const printingSettings = normalizePrintSettings(printingSettingsSnapshot.data());
+      if (printingSettings.enabled && printingSettings.autoPrint && printingSettings.tokenHash) {
+        transaction.create(printJobRef, {
+          schemaVersion: 1,
+          type: "order",
+          sellerId: clean.sellerId,
+          orderId: orderRef.id,
+          orderPath: orderRef.path,
+          orderSource: clean.source,
+          eventId: clean.eventId || null,
+          status: "pending",
+          copies: printingSettings.copies,
+          attempts: 0,
+          createdAt: now,
+          updatedAt: now,
+          createdBy: "public-order-api",
+        });
+      }
 
       if (customerOrderRef && customerIdentity) {
         transaction.create(customerOrderRef, {

@@ -48,6 +48,7 @@ import {
 import { useSellerSession } from "@/app/_components/SellerSessionContext";
 import PageHeader from "@/app/_components/PageHeader";
 import FeedbackBanner from "@/app/_components/FeedbackBanner";
+import PrinterSettingsCard from "@/app/seller/settings/PrinterSettingsCard";
 import type {
   OperatingCountry,
   SupportedLanguage,
@@ -569,6 +570,8 @@ export default function SellerSettingsPage() {
             ))}
           </div>
         </section>
+
+        <PrinterSettingsCard lang={lang} />
 
         <section className="space-y-5 rounded-3xl border border-blue-200 bg-blue-50/60 p-5 dark:border-blue-900/50 dark:bg-blue-950/20">
           <div className="flex items-start gap-3">

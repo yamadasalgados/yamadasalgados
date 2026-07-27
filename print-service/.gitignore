@@ -1,0 +1,9 @@
+.env
+output/*.pdf
+state/*.json
+logs/*.log
+scripts/node-path.txt
+!output/.gitkeep
+!state/.gitkeep
+!logs/.gitkeep
+!tools/.gitkeep
