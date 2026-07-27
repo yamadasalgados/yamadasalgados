@@ -953,6 +953,7 @@ export async function POST(request: NextRequest) {
       ? customerRef.collection("orders").doc(sha256(orderRef.path))
       : null;
     const printJobRef = sellerRef.collection("printJobs").doc(`order_${orderRef.id}`);
+    const notificationStateRef = sellerRef.collection("notificationState").doc("orders");
 
     const transactionResult = await db.runTransaction(async (transaction) => {
       const refs: admin.firestore.DocumentReference[] = [markerRef, sellerRef];
@@ -1841,6 +1842,23 @@ export async function POST(request: NextRequest) {
       }
 
       transaction.create(orderRef, orderPayload);
+
+      transaction.set(
+        notificationStateRef,
+        {
+          schemaVersion: 1,
+          unreadCount: admin.firestore.FieldValue.increment(1),
+          storeUnreadCount: admin.firestore.FieldValue.increment(clean.source === "store" ? 1 : 0),
+          eventUnreadCount: admin.firestore.FieldValue.increment(clean.source === "event" ? 1 : 0),
+          lastOrderId: orderRef.id,
+          lastOrderSource: clean.source,
+          lastEventId: clean.eventId || null,
+          lastCustomerName: clean.customer.name || null,
+          lastOrderAt: now,
+          updatedAt: now,
+        },
+        { merge: true },
+      );
 
       const printingSettings = normalizePrintSettings(printingSettingsSnapshot.data());
       if (printingSettings.enabled && printingSettings.autoPrint && printingSettings.tokenHash) {

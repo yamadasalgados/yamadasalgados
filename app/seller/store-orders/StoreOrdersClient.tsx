@@ -15,6 +15,7 @@ import {
 } from "react";
 
 import {
+  auth,
   db,
 } from "@/app/lib/firebase";
 import {
@@ -149,6 +150,37 @@ export default function StoreOrdersClient() {
     useState(false);
   const [reloadKey, setReloadKey] =
     useState(0);
+
+  useEffect(() => {
+    if (sellerLoading || !sellerId) return;
+    let cancelled = false;
+
+    async function markStoreOrdersRead() {
+      const currentUser = auth.currentUser;
+      if (!currentUser) return;
+      try {
+        const token = await currentUser.getIdToken();
+        const response = await fetch("/api/seller/notifications/mark-read", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ sellerId, scope: "store" }),
+        });
+        if (!cancelled && response.ok) {
+          window.dispatchEvent(new Event("yamada:seller-order-badge-refresh"));
+        }
+      } catch (error) {
+        console.warn("[StoreOrdersClient] Falha ao limpar badge:", error);
+      }
+    }
+
+    void markStoreOrdersRead();
+    return () => {
+      cancelled = true;
+    };
+  }, [sellerId, sellerLoading]);
 
   useEffect(() => {
     if (sellerLoading) {

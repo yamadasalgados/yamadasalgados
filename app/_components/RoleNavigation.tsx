@@ -51,6 +51,7 @@ type NavItem = {
   label: string;
   icon: LucideIcon;
   exact?: boolean;
+  badge?: number;
 };
 
 type BaseProps = {
@@ -84,7 +85,22 @@ function NavLink({ item, compact = false }: { item: NavItem; compact?: boolean }
           : "text-neutral-600 hover:bg-neutral-100 hover:text-neutral-950 dark:text-neutral-300 dark:hover:bg-neutral-800 dark:hover:text-white",
       ].join(" ")}
     >
-      <Icon size={compact ? 19 : 16} />
+      <span className="relative inline-flex shrink-0">
+        <Icon size={compact ? 19 : 16} />
+        {(item.badge ?? 0) > 0 && (
+          <span
+            className={[
+              "absolute -right-2 -top-2 inline-flex min-w-4 items-center justify-center rounded-full bg-red-600 px-1 text-[9px] font-black leading-4 text-white ring-2",
+              active
+                ? "ring-neutral-950 dark:ring-white"
+                : "ring-white dark:ring-neutral-950",
+            ].join(" ")}
+            aria-label={`${item.badge} novos`}
+          >
+            {(item.badge ?? 0) > 99 ? "99+" : item.badge}
+          </span>
+        )}
+      </span>
       <span className={compact ? "max-w-[72px] truncate" : "whitespace-nowrap"}>{item.label}</span>
     </Link>
   );
@@ -385,12 +401,69 @@ export function AdminNav({ displayName = "" }: { displayName?: string }) {
 export function SellerNav({ displayName = "", sellerId = "" }: { displayName?: string; sellerId?: string }) {
   const copy = useCopy();
   const router = useRouter();
+  const [orderBadges, setOrderBadges] = useState({ store: 0, event: 0 });
+
+  const refreshOrderBadges = useCallback(async () => {
+    const currentUser = auth.currentUser;
+    if (!currentUser || !sellerId) {
+      setOrderBadges({ store: 0, event: 0 });
+      return;
+    }
+
+    try {
+      const token = await currentUser.getIdToken();
+      const response = await fetch(
+        `/api/seller/notifications/summary?sellerId=${encodeURIComponent(sellerId)}`,
+        {
+          headers: { authorization: `Bearer ${token}` },
+          cache: "no-store",
+        },
+      );
+      const payload = (await response.json().catch(() => null)) as
+        | { ok?: boolean; storeUnreadCount?: number; eventUnreadCount?: number }
+        | null;
+      if (!response.ok || !payload?.ok) return;
+      setOrderBadges({
+        store: Math.max(0, Math.floor(Number(payload.storeUnreadCount) || 0)),
+        event: Math.max(0, Math.floor(Number(payload.eventUnreadCount) || 0)),
+      });
+    } catch (error) {
+      console.warn("[SellerNav] Falha ao atualizar badges:", error);
+    }
+  }, [sellerId]);
+
+  useEffect(() => {
+    void refreshOrderBadges();
+    const timer = window.setInterval(() => void refreshOrderBadges(), 30_000);
+    const onFocus = () => void refreshOrderBadges();
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") void refreshOrderBadges();
+    };
+    const onCustomRefresh = () => void refreshOrderBadges();
+    const onServiceWorkerMessage = (event: MessageEvent) => {
+      if (event.data?.type === "YAMADA_PUSH_RECEIVED") void refreshOrderBadges();
+    };
+
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("yamada:seller-order-badge-refresh", onCustomRefresh);
+    document.addEventListener("visibilitychange", onVisibility);
+    navigator.serviceWorker?.addEventListener("message", onServiceWorkerMessage);
+
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("yamada:seller-order-badge-refresh", onCustomRefresh);
+      document.removeEventListener("visibilitychange", onVisibility);
+      navigator.serviceWorker?.removeEventListener("message", onServiceWorkerMessage);
+    };
+  }, [refreshOrderBadges]);
+
   const mainItems: NavItem[] = [
     { href: "/seller", label: copy.dashboard, icon: LayoutDashboard, exact: true },
-    { href: "/seller/store-orders", label: copy.orders, icon: ClipboardList },
+    { href: "/seller/store-orders", label: copy.orders, icon: ClipboardList, badge: orderBadges.store },
     { href: "/seller/production", label: copy.production, icon: PackageSearch },
     { href: "/seller/products", label: copy.products, icon: ShoppingBag },
-    { href: "/seller/events", label: copy.events, icon: CalendarDays },
+    { href: "/seller/events", label: copy.events, icon: CalendarDays, badge: orderBadges.event },
   ];
   const extra: NavItem[] = [
     { href: "/seller/offers", label: copy.offers, icon: Gift },

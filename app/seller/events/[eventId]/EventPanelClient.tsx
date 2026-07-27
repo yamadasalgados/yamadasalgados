@@ -350,6 +350,35 @@ const [messageSummaries, setMessageSummaries] = useState<Record<string, MessageS
 
   const [filterDate, setFilterDate] = useState<string>("todas");
 
+  useEffect(() => {
+    if (!sellerUid || !safeId || !authUser) return;
+    let cancelled = false;
+
+    async function markEventOrdersRead() {
+      try {
+        const token = await authUser.getIdToken();
+        const response = await fetch("/api/seller/notifications/mark-read", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ sellerId: sellerUid, eventId: safeId, scope: "event" }),
+        });
+        if (!cancelled && response.ok) {
+          window.dispatchEvent(new Event("yamada:seller-order-badge-refresh"));
+        }
+      } catch (error) {
+        console.warn("[EventPanel] Falha ao limpar badge do evento:", error);
+      }
+    }
+
+    void markEventOrdersRead();
+    return () => {
+      cancelled = true;
+    };
+  }, [authUser, safeId, sellerUid]);
+
   const yen = useCallback(
     (amount: number) =>
       formatMoneyMajor(

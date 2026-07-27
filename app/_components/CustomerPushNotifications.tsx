@@ -80,6 +80,26 @@ function urlBase64ToArrayBuffer(base64: string): ArrayBuffer {
   return bytes.buffer;
 }
 
+function applicationServerKeyMatches(subscription: PushSubscription, publicKey: string): boolean {
+  const current = subscription.options.applicationServerKey;
+  if (!current) return false;
+  const expected = new Uint8Array(urlBase64ToArrayBuffer(publicKey));
+  const actual = new Uint8Array(current);
+  if (actual.length !== expected.length) return false;
+  return actual.every((value, index) => value === expected[index]);
+}
+
+async function currentKeySubscription(
+  registration: ServiceWorkerRegistration,
+  publicKey: string,
+): Promise<PushSubscription | null> {
+  const existing = await registration.pushManager.getSubscription();
+  if (!existing) return null;
+  if (applicationServerKeyMatches(existing, publicKey)) return existing;
+  await existing.unsubscribe().catch(() => false);
+  return null;
+}
+
 function isIosDevice() {
   return /iphone|ipad|ipod/i.test(window.navigator.userAgent);
 }
@@ -181,7 +201,7 @@ export default function CustomerPushNotifications({
 
     try {
       const registration = await serviceWorkerRegistration();
-      const subscription = await registration.pushManager.getSubscription();
+      const subscription = await currentKeySubscription(registration, publicKey);
       if (!subscription) {
         setState("ready");
         return;
@@ -209,7 +229,7 @@ export default function CustomerPushNotifications({
         return;
       }
       const registration = await serviceWorkerRegistration();
-      let subscription = await registration.pushManager.getSubscription();
+      let subscription = await currentKeySubscription(registration, publicKey);
       if (!subscription) {
         subscription = await registration.pushManager.subscribe({
           userVisibleOnly: true,

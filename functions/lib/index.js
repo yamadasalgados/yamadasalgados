@@ -1,16 +1,10 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.deleteSeller = exports.expireSubscriptionsDaily = exports.activateSubscription = exports.onAuthCreateUserProfile = exports.notifyOnNewEvent = exports.createEventOrder = void 0;
-// functions/src/index.ts
-var createEventOrder_1 = require("./createEventOrder");
-Object.defineProperty(exports, "createEventOrder", { enumerable: true, get: function () { return createEventOrder_1.createEventOrder; } });
-var notifyOnNewEvent_1 = require("./notifyOnNewEvent");
-Object.defineProperty(exports, "notifyOnNewEvent", { enumerable: true, get: function () { return notifyOnNewEvent_1.notifyOnNewEvent; } });
-var onAuthCreateUserProfile_1 = require("./onAuthCreateUserProfile");
-Object.defineProperty(exports, "onAuthCreateUserProfile", { enumerable: true, get: function () { return onAuthCreateUserProfile_1.onAuthCreateUserProfile; } });
-var subscriptions_1 = require("./subscriptions");
-Object.defineProperty(exports, "activateSubscription", { enumerable: true, get: function () { return subscriptions_1.activateSubscription; } });
-Object.defineProperty(exports, "expireSubscriptionsDaily", { enumerable: true, get: function () { return subscriptions_1.expireSubscriptionsDaily; } });
-var deleteSeller_1 = require("./deleteSeller");
-Object.defineProperty(exports, "deleteSeller", { enumerable: true, get: function () { return deleteSeller_1.deleteSeller; } });
+exports.notifySellerEventOrderCreated = exports.notifySellerStoreOrderCreated = exports.notifyCustomerEventOrderStatus = exports.notifyCustomerStoreOrderStatus = exports.notifyOnNewEvent = void 0;
+var notifications_1 = require("./notifications");
+Object.defineProperty(exports, "notifyOnNewEvent", { enumerable: true, get: function () { return notifications_1.notifyOnNewEvent; } });
+Object.defineProperty(exports, "notifyCustomerStoreOrderStatus", { enumerable: true, get: function () { return notifications_1.notifyCustomerStoreOrderStatus; } });
+Object.defineProperty(exports, "notifyCustomerEventOrderStatus", { enumerable: true, get: function () { return notifications_1.notifyCustomerEventOrderStatus; } });
+Object.defineProperty(exports, "notifySellerStoreOrderCreated", { enumerable: true, get: function () { return notifications_1.notifySellerStoreOrderCreated; } });
+Object.defineProperty(exports, "notifySellerEventOrderCreated", { enumerable: true, get: function () { return notifications_1.notifySellerEventOrderCreated; } });
 //# sourceMappingURL=index.js.map

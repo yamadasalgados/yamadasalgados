@@ -1,0 +1,457 @@
+import { onDocumentCreated, onDocumentUpdated } from "firebase-functions/v2/firestore";
+import * as admin from "firebase-admin";
+import webpush from "web-push";
+import { defineSecret, defineString } from "firebase-functions/params";
+
+if (!admin.apps.length) admin.initializeApp();
+const db = admin.firestore();
+
+const vapidPublic = defineString("VAPID_PUBLIC");
+const vapidPrivate = defineSecret("VAPID_PRIVATE");
+const adminEmail = defineString("ADMIN_EMAIL", {
+  default: "mailto:admin@yamada.app",
+});
+
+type Language = "pt" | "en" | "ja";
+type CustomerNoticeKind = "production" | "ready" | "delivered" | "cancelled";
+type OrderSource = "store" | "event";
+
+type StoredPushSubscription = {
+  endpoint: string;
+  language?: Language;
+  keys: { p256dh: string; auth: string };
+};
+
+type StoredRegionalPushSubscription = StoredPushSubscription & {
+  sellerId: string;
+  regionId: string;
+};
+
+function cleanString(value: unknown, maxLength: number): string {
+  return typeof value === "string" ? value.trim().slice(0, maxLength) : "";
+}
+
+function languageOf(value: unknown): Language {
+  return value === "en" || value === "ja" ? value : "pt";
+}
+
+function nonNegativeInteger(value: unknown): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.max(0, Math.floor(parsed)) : 0;
+}
+
+function isValidPushSubscription(value: unknown): value is StoredPushSubscription {
+  const data = value as StoredPushSubscription | null;
+  return Boolean(data?.endpoint && data?.keys?.p256dh && data?.keys?.auth);
+}
+
+function isValidRegionalSubscription(value: unknown): value is StoredRegionalPushSubscription {
+  const data = value as StoredRegionalPushSubscription | null;
+  return Boolean(
+    isValidPushSubscription(data) && data?.sellerId && data?.regionId,
+  );
+}
+
+let configuredFingerprint = "";
+
+function ensurePushConfigured(): boolean {
+  const publicKey = vapidPublic.value().trim();
+  const privateKey = vapidPrivate.value().trim();
+  const subject = adminEmail.value().trim() || "mailto:admin@yamada.app";
+  if (!publicKey || !privateKey) {
+    console.error("[push] VAPID_PUBLIC ou VAPID_PRIVATE não configurado.");
+    return false;
+  }
+
+  const fingerprint = `${subject}|${publicKey}|${privateKey.slice(0, 8)}`;
+  if (configuredFingerprint !== fingerprint) {
+    webpush.setVapidDetails(subject, publicKey, privateKey);
+    configuredFingerprint = fingerprint;
+  }
+  return true;
+}
+
+async function sendAndClean(params: {
+  subscriptionRef: admin.firestore.DocumentReference;
+  endpointMirrorRef?: admin.firestore.DocumentReference;
+  subscriptionData: StoredPushSubscription;
+  payload: Record<string, unknown>;
+}) {
+  try {
+    await webpush.sendNotification(
+      {
+        endpoint: params.subscriptionData.endpoint,
+        keys: params.subscriptionData.keys,
+      } as any,
+      JSON.stringify(params.payload),
+    );
+  } catch (error: any) {
+    if (error?.statusCode === 404 || error?.statusCode === 410) {
+      await Promise.all([
+        params.subscriptionRef.delete().catch(() => undefined),
+        params.endpointMirrorRef?.delete().catch(() => undefined),
+      ]);
+      return;
+    }
+    console.error(
+      `[push] Falha endpoint=${params.subscriptionRef.path}:`,
+      error?.message || error,
+    );
+  }
+}
+
+function normalizeStatus(value: unknown): "pending" | "ready" | "delivered" | "cancelled" {
+  if (value === "ready" || value === "delivered" || value === "cancelled") return value;
+  return "pending";
+}
+
+function producedTotal(order: Record<string, any>): number {
+  const items = Array.isArray(order.items) ? order.items : [];
+  return items.reduce((sum: number, raw: any) => {
+    const state = raw?.inventoryState && typeof raw.inventoryState === "object"
+      ? raw.inventoryState
+      : {};
+    const value = Number(state.producedQuantity ?? raw?.producedQuantity ?? 0);
+    return sum + (Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0);
+  }, 0);
+}
+
+function customerNoticeKind(
+  before: Record<string, any>,
+  after: Record<string, any>,
+): CustomerNoticeKind | null {
+  const beforeStatus = normalizeStatus(before.fulfillmentStatus ?? before.status);
+  const afterStatus = normalizeStatus(after.fulfillmentStatus ?? after.status);
+
+  if (beforeStatus !== afterStatus) {
+    if (afterStatus === "ready") return "ready";
+    if (afterStatus === "delivered") return "delivered";
+    if (afterStatus === "cancelled") return "cancelled";
+  }
+
+  if (afterStatus === "pending" && producedTotal(before) <= 0 && producedTotal(after) > 0) {
+    return "production";
+  }
+
+  return null;
+}
+
+function customerCopy(params: {
+  language: Language;
+  kind: CustomerNoticeKind;
+  orderId: string;
+  storeName: string;
+}) {
+  const number = `#${params.orderId}`;
+  const merchant = params.storeName ? ` · ${params.storeName}` : "";
+  const copy = {
+    pt: {
+      production: { title: "Seu pedido está em preparação 👩‍🍳", body: `O pedido ${number}${merchant} começou a ser preparado.` },
+      ready: { title: "Seu pedido está pronto ✅", body: `O pedido ${number}${merchant} está pronto para retirada ou entrega.` },
+      delivered: { title: "Pedido concluído 🎉", body: `O pedido ${number}${merchant} foi marcado como entregue.` },
+      cancelled: { title: "Pedido cancelado", body: `O pedido ${number}${merchant} foi cancelado. Abra o app para ver os detalhes.` },
+    },
+    en: {
+      production: { title: "Your order is being prepared 👩‍🍳", body: `Order ${number}${merchant} has started being prepared.` },
+      ready: { title: "Your order is ready ✅", body: `Order ${number}${merchant} is ready for pickup or delivery.` },
+      delivered: { title: "Order completed 🎉", body: `Order ${number}${merchant} was marked as delivered.` },
+      cancelled: { title: "Order cancelled", body: `Order ${number}${merchant} was cancelled. Open the app for details.` },
+    },
+    ja: {
+      production: { title: "注文の準備を開始しました 👩‍🍳", body: `注文 ${number}${merchant} の準備が始まりました。` },
+      ready: { title: "注文の準備ができました ✅", body: `注文 ${number}${merchant} は受け取り・配達の準備ができました。` },
+      delivered: { title: "注文が完了しました 🎉", body: `注文 ${number}${merchant} は受け渡し済みになりました。` },
+      cancelled: { title: "注文がキャンセルされました", body: `注文 ${number}${merchant} はキャンセルされました。詳細はアプリで確認してください。` },
+    },
+  } as const;
+  return copy[params.language][params.kind];
+}
+
+async function sendCustomerOrderNotice(params: {
+  before: Record<string, any>;
+  after: Record<string, any>;
+  orderId: string;
+}) {
+  const kind = customerNoticeKind(params.before, params.after);
+  if (!kind) return;
+
+  const customerUid = cleanString(params.after.customerUid, 160);
+  const referenceId = cleanString(params.after.customerOrderRefId, 160);
+  if (!customerUid || !referenceId || customerUid.includes("/") || referenceId.includes("/")) {
+    console.info(`[customer-push] Pedido ${params.orderId} não pertence a cliente registrado.`);
+    return;
+  }
+  if (!ensurePushConfigured()) return;
+
+  const customerRef = db.collection("customers").doc(customerUid);
+  const [customerSnapshot, subscriptionsSnapshot] = await Promise.all([
+    customerRef.get(),
+    customerRef.collection("pushSubscriptions").get(),
+  ]);
+  if (subscriptionsSnapshot.empty) {
+    console.info(`[customer-push] Cliente ${customerUid} sem assinaturas.`);
+    return;
+  }
+
+  const customerLanguage = languageOf(customerSnapshot.data()?.preferredLanguage);
+  const storeName = cleanString(
+    params.after.storeName ?? params.after.sellerName ?? params.after.eventTitle ?? params.after.title,
+    120,
+  );
+
+  await Promise.all(
+    subscriptionsSnapshot.docs.map(async (subscriptionSnapshot) => {
+      const subscriptionData = subscriptionSnapshot.data();
+      if (!isValidPushSubscription(subscriptionData)) {
+        await subscriptionSnapshot.ref.delete().catch(() => undefined);
+        return;
+      }
+      const language = languageOf(subscriptionData.language ?? customerLanguage);
+      const localized = customerCopy({ language, kind, orderId: params.orderId, storeName });
+      await sendAndClean({
+        subscriptionRef: subscriptionSnapshot.ref,
+        endpointMirrorRef: db.collection("customerPushEndpoints").doc(subscriptionSnapshot.id),
+        subscriptionData,
+        payload: {
+          ...localized,
+          url: `/customer/orders/${encodeURIComponent(referenceId)}`,
+          icon: "/icon-192x192.png",
+          badge: "/icon-192x192.png",
+          tag: `customer-order-${referenceId}-${kind}`,
+          renotify: true,
+          badgeCount: 1,
+          kind: `customer-order-${kind}`,
+          orderReferenceId: referenceId,
+          orderId: params.orderId,
+        },
+      });
+    }),
+  );
+}
+
+function sellerCopy(params: {
+  language: Language;
+  source: OrderSource;
+  orderId: string;
+  customerName: string;
+  totalItems: number;
+}) {
+  const number = `#${params.orderId}`;
+  const customer = params.customerName || (params.language === "ja" ? "お客様" : params.language === "en" ? "Customer" : "Cliente");
+  const items = params.totalItems;
+  if (params.language === "ja") {
+    return {
+      title: params.source === "event" ? "イベントの新しい注文 🔔" : "新しい注文 🔔",
+      body: `${customer} · ${number} · ${items}点`,
+    };
+  }
+  if (params.language === "en") {
+    return {
+      title: params.source === "event" ? "New event order 🔔" : "New store order 🔔",
+      body: `${customer} · ${number} · ${items} ${items === 1 ? "item" : "items"}`,
+    };
+  }
+  return {
+    title: params.source === "event" ? "Novo pedido de evento 🔔" : "Novo pedido da loja 🔔",
+    body: `${customer} · ${number} · ${items} ${items === 1 ? "item" : "itens"}`,
+  };
+}
+
+async function sendSellerOrderNotice(params: {
+  sellerId: string;
+  eventId: string;
+  orderId: string;
+  source: OrderSource;
+  order: Record<string, any>;
+}) {
+  if (!ensurePushConfigured()) return;
+  const sellerRef = db.collection("sellers").doc(params.sellerId);
+  const [subscriptionsSnapshot, stateSnapshot] = await Promise.all([
+    sellerRef.collection("pushSubscriptions").get(),
+    sellerRef.collection("notificationState").doc("orders").get(),
+  ]);
+  if (subscriptionsSnapshot.empty) {
+    console.info(`[seller-push] Seller ${params.sellerId} sem assinaturas.`);
+    return;
+  }
+
+  const badgeCount = Math.max(
+    1,
+    nonNegativeInteger(stateSnapshot.data()?.unreadCount),
+  );
+  const customerName = cleanString(
+    params.order.customerName ?? params.order.customer?.name,
+    120,
+  );
+  const totalItems = Math.max(
+    1,
+    nonNegativeInteger(params.order.totalItems) ||
+      (Array.isArray(params.order.items)
+        ? params.order.items.reduce(
+            (sum: number, item: any) => sum + nonNegativeInteger(item?.quantity ?? item?.qty),
+            0,
+          )
+        : 1),
+  );
+  const url = params.source === "event"
+    ? `/seller/events/${encodeURIComponent(params.eventId)}`
+    : `/seller/store-orders/${encodeURIComponent(params.orderId)}`;
+
+  await Promise.all(
+    subscriptionsSnapshot.docs.map(async (subscriptionSnapshot) => {
+      const subscriptionData = subscriptionSnapshot.data();
+      if (!isValidPushSubscription(subscriptionData)) {
+        await subscriptionSnapshot.ref.delete().catch(() => undefined);
+        return;
+      }
+      const language = languageOf(subscriptionData.language);
+      const localized = sellerCopy({
+        language,
+        source: params.source,
+        orderId: params.orderId,
+        customerName,
+        totalItems,
+      });
+      await sendAndClean({
+        subscriptionRef: subscriptionSnapshot.ref,
+        endpointMirrorRef: db.collection("sellerPushEndpoints").doc(subscriptionSnapshot.id),
+        subscriptionData,
+        payload: {
+          ...localized,
+          url,
+          icon: "/icon-192x192.png",
+          badge: "/icon-192x192.png",
+          tag: `seller-order-${params.source}-${params.orderId}`,
+          renotify: true,
+          requireInteraction: true,
+          badgeCount,
+          kind: "seller-new-order",
+          sellerId: params.sellerId,
+          eventId: params.eventId,
+          orderId: params.orderId,
+        },
+      });
+    }),
+  );
+}
+
+export const notifyOnNewEvent = onDocumentCreated(
+  {
+    document: "sellers/{sellerId}/events/{eventId}",
+    region: "asia-northeast1",
+    secrets: [vapidPrivate],
+  },
+  async (event) => {
+    const snapshot = event.data;
+    if (!snapshot) return;
+    const eventData = snapshot.data();
+    if (!eventData || eventData.status !== "active") return;
+    const sellerId = cleanString(event.params.sellerId, 160);
+    const regionId = cleanString(eventData.regionId, 160);
+    if (!sellerId || !regionId || !ensurePushConfigured()) return;
+
+    const subscriptionsSnapshot = await db
+      .collection("pushSubscriptions")
+      .where("sellerId", "==", sellerId)
+      .where("regionId", "==", regionId)
+      .get();
+    const title = cleanString(eventData.title, 160) || "Novo evento disponível 🎉";
+
+    await Promise.all(
+      subscriptionsSnapshot.docs.map(async (subscriptionSnapshot) => {
+        const subscriptionData = subscriptionSnapshot.data();
+        if (!isValidRegionalSubscription(subscriptionData)) {
+          await subscriptionSnapshot.ref.delete().catch(() => undefined);
+          return;
+        }
+        await sendAndClean({
+          subscriptionRef: subscriptionSnapshot.ref,
+          subscriptionData,
+          payload: {
+            title: "Novo evento disponível 🎉",
+            body: title,
+            url: `/event/${encodeURIComponent(sellerId)}/${encodeURIComponent(event.params.eventId)}`,
+            icon: "/icon-192x192.png",
+            badge: "/icon-192x192.png",
+            tag: `event-${sellerId}-${event.params.eventId}`,
+            kind: "new-event",
+          },
+        });
+      }),
+    );
+  },
+);
+
+export const notifyCustomerStoreOrderStatus = onDocumentUpdated(
+  {
+    document: "sellers/{sellerId}/storeOrders/{orderId}",
+    region: "asia-northeast1",
+    secrets: [vapidPrivate],
+  },
+  async (event) => {
+    const before = event.data?.before.data();
+    const after = event.data?.after.data();
+    if (!before || !after) return;
+    await sendCustomerOrderNotice({
+      before,
+      after,
+      orderId: cleanString(event.params.orderId, 160),
+    });
+  },
+);
+
+export const notifyCustomerEventOrderStatus = onDocumentUpdated(
+  {
+    document: "sellers/{sellerId}/events/{eventId}/orders/{orderId}",
+    region: "asia-northeast1",
+    secrets: [vapidPrivate],
+  },
+  async (event) => {
+    const before = event.data?.before.data();
+    const after = event.data?.after.data();
+    if (!before || !after) return;
+    await sendCustomerOrderNotice({
+      before,
+      after,
+      orderId: cleanString(event.params.orderId, 160),
+    });
+  },
+);
+
+export const notifySellerStoreOrderCreated = onDocumentCreated(
+  {
+    document: "sellers/{sellerId}/storeOrders/{orderId}",
+    region: "asia-northeast1",
+    secrets: [vapidPrivate],
+  },
+  async (event) => {
+    const order = event.data?.data();
+    if (!order) return;
+    await sendSellerOrderNotice({
+      sellerId: cleanString(event.params.sellerId, 160),
+      eventId: "",
+      orderId: cleanString(event.params.orderId, 160),
+      source: "store",
+      order,
+    });
+  },
+);
+
+export const notifySellerEventOrderCreated = onDocumentCreated(
+  {
+    document: "sellers/{sellerId}/events/{eventId}/orders/{orderId}",
+    region: "asia-northeast1",
+    secrets: [vapidPrivate],
+  },
+  async (event) => {
+    const order = event.data?.data();
+    if (!order) return;
+    await sendSellerOrderNotice({
+      sellerId: cleanString(event.params.sellerId, 160),
+      eventId: cleanString(event.params.eventId, 160),
+      orderId: cleanString(event.params.orderId, 160),
+      source: "event",
+      order,
+    });
+  },
+);

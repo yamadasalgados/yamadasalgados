@@ -49,6 +49,7 @@ import { useSellerSession } from "@/app/_components/SellerSessionContext";
 import PageHeader from "@/app/_components/PageHeader";
 import FeedbackBanner from "@/app/_components/FeedbackBanner";
 import PrinterSettingsCard from "@/app/seller/settings/PrinterSettingsCard";
+import SellerPushNotifications from "@/app/_components/SellerPushNotifications";
 import type {
   OperatingCountry,
   SupportedLanguage,
@@ -570,6 +571,8 @@ export default function SellerSettingsPage() {
             ))}
           </div>
         </section>
+
+        <SellerPushNotifications language={lang === "en" || lang === "ja" ? lang : "pt"} />
 
         <PrinterSettingsCard lang={lang} />
 
