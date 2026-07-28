@@ -60,6 +60,8 @@ const COPY = {
     noSubscription: "A assinatura deste aparelho não foi encontrada no Firebase. Desative e ative novamente.",
     staleSubscription: "A assinatura foi criada com uma chave antiga. Desative e ative novamente.",
     pushRejected: "O serviço push recusou a assinatura. Desative e ative novamente.",
+    timeoutQueued: "A solicitação foi salva, mas a função notifyPushTestRequest não começou. Publique essa função no Firebase e tente novamente.",
+    timeoutProcessing: "A função começou, mas não terminou. Verifique os logs de notifyPushTestRequest e a configuração VAPID_PRIVATE.",
     timeout: "O teste não terminou a tempo. Consulte os logs da função notifyPushTestRequest.",
     diagnosticError: "O teste completo falhou.",
     diagnostics: "Diagnóstico",
@@ -90,6 +92,8 @@ const COPY = {
     noSubscription: "This device subscription was not found in Firebase. Disable and enable it again.",
     staleSubscription: "The subscription uses an old key. Disable and enable it again.",
     pushRejected: "The push service rejected the subscription. Disable and enable it again.",
+    timeoutQueued: "The request was saved, but notifyPushTestRequest did not start. Deploy that Firebase function and try again.",
+    timeoutProcessing: "The function started but did not finish. Check the notifyPushTestRequest logs and VAPID_PRIVATE configuration.",
     timeout: "The test did not finish in time. Check the notifyPushTestRequest logs.",
     diagnosticError: "The full test failed.",
     diagnostics: "Diagnostics",
@@ -120,6 +124,8 @@ const COPY = {
     noSubscription: "この端末の購読がFirebaseにありません。無効化して再度有効にしてください。",
     staleSubscription: "古いキーで作成された購読です。無効化して再度有効にしてください。",
     pushRejected: "Pushサービスが購読を拒否しました。無効化して再度有効にしてください。",
+    timeoutQueued: "リクエストは保存されましたが、notifyPushTestRequestが開始されませんでした。Firebaseへこの関数をデプロイしてください。",
+    timeoutProcessing: "関数は開始しましたが完了しませんでした。notifyPushTestRequestのログとVAPID_PRIVATEを確認してください。",
     timeout: "テストが時間内に完了しませんでした。notifyPushTestRequestのログを確認してください。",
     diagnosticError: "完全テストに失敗しました。",
     diagnostics: "診断",
@@ -138,7 +144,9 @@ function diagnosticMessage(
   if (code === "NO_SUBSCRIPTION") return text.noSubscription;
   if (code === "STALE_SUBSCRIPTION") return text.staleSubscription;
   if (code === "PUSH_REJECTED") return text.pushRejected;
-  if (code === "PUSH_TEST_TIMEOUT") return text.timeout;
+  if (code === "PUSH_TEST_TIMEOUT_QUEUED") return text.timeoutQueued;
+  if (code === "PUSH_TEST_TIMEOUT_PROCESSING") return text.timeoutProcessing;
+  if (code === "PUSH_TEST_TIMEOUT" || code === "PUSH_TEST_TIMEOUT_UNKNOWN") return text.timeout;
   return fallback || text.diagnosticError;
 }
 

@@ -89,6 +89,28 @@ function ensurePushConfigured(): boolean {
   return true;
 }
 
+
+class PushSendTimeoutError extends Error {
+  constructor() {
+    super("O serviço push não respondeu dentro do tempo limite.");
+    this.name = "PushSendTimeoutError";
+  }
+}
+
+async function withPushTimeout<T>(promise: Promise<T>, timeoutMs = 20_000): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new PushSendTimeoutError()), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 async function sendAndClean(params: {
   subscriptionRef: admin.firestore.DocumentReference;
   endpointMirrorRef?: admin.firestore.DocumentReference;
@@ -110,12 +132,14 @@ async function sendAndClean(params: {
   }
 
   try {
-    const response = await webpush.sendNotification(
-      {
-        endpoint: params.subscriptionData.endpoint,
-        keys: params.subscriptionData.keys,
-      } as any,
-      JSON.stringify(params.payload),
+    const response = await withPushTimeout(
+      webpush.sendNotification(
+        {
+          endpoint: params.subscriptionData.endpoint,
+          keys: params.subscriptionData.keys,
+        } as any,
+        JSON.stringify(params.payload),
+      ),
     );
     console.info(
       `[push] Enviado endpoint=${params.subscriptionRef.path} status=${response.statusCode}`,
@@ -127,6 +151,16 @@ async function sendAndClean(params: {
       message: "O serviço push aceitou a mensagem.",
     };
   } catch (error: any) {
+    if (error instanceof PushSendTimeoutError) {
+      console.error(`[push] Timeout endpoint=${params.subscriptionRef.path}`);
+      return {
+        ok: false,
+        statusCode: 0,
+        code: "PUSH_TIMEOUT",
+        message: error.message,
+      };
+    }
+
     const statusCode = Number(error?.statusCode) || 0;
     if (statusCode === 404 || statusCode === 410) {
       await Promise.all([
@@ -560,7 +594,8 @@ export const notifyPushTestRequest = onDocumentCreated(
     const snapshot = event.data;
     if (!snapshot) return;
 
-    const requestData = snapshot.data() ?? {};
+    try {
+      const requestData = snapshot.data() ?? {};
     const targetType = requestData.targetType === "seller" ? "seller" : requestData.targetType === "customer" ? "customer" : "";
     const targetId = cleanString(requestData.targetId, 160);
     const subscriptionId = cleanString(requestData.subscriptionId, 128);
@@ -693,13 +728,32 @@ export const notifyPushTestRequest = onDocumentCreated(
       },
     });
 
-    await finish({
-      status: result.ok ? "sent" : "error",
-      code: result.code,
-      message: result.message,
-      sentCount: result.ok ? 1 : 0,
-      failedCount: result.ok ? 0 : 1,
-      pushStatusCode: result.statusCode,
-    });
+      await finish({
+        status: result.ok ? "sent" : "error",
+        code: result.code,
+        message: result.message,
+        sentCount: result.ok ? 1 : 0,
+        failedCount: result.ok ? 0 : 1,
+        pushStatusCode: result.statusCode,
+      });
+    } catch (error) {
+      console.error(`[push-test] Falha inesperada request=${event.params.requestId}:`, error);
+      await snapshot.ref.set(
+        {
+          status: "error",
+          code: "FUNCTION_ERROR",
+          message:
+            error instanceof Error
+              ? cleanString(error.message, 500) || "A função de teste falhou."
+              : "A função de teste falhou.",
+          sentCount: 0,
+          failedCount: 1,
+          serverVapidFingerprint: currentServerVapidFingerprint(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          completedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true },
+      );
+    }
   },
 );

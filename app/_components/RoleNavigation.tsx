@@ -79,7 +79,9 @@ function NavLink({ item, compact = false }: { item: NavItem; compact?: boolean }
       aria-current={active ? "page" : undefined}
       className={[
         "inline-flex items-center justify-center gap-2 rounded-xl font-black transition",
-        compact ? "min-h-11 flex-1 px-2 py-2 text-[10px]" : "px-3 py-2 text-xs",
+        compact
+          ? "min-h-12 min-w-0 flex-col gap-0.5 px-1 py-1.5 text-[9px] leading-tight"
+          : "px-3 py-2 text-xs",
         active
           ? "bg-neutral-950 text-white dark:bg-white dark:text-neutral-950"
           : "text-neutral-600 hover:bg-neutral-100 hover:text-neutral-950 dark:text-neutral-300 dark:hover:bg-neutral-800 dark:hover:text-white",
@@ -101,7 +103,15 @@ function NavLink({ item, compact = false }: { item: NavItem; compact?: boolean }
           </span>
         )}
       </span>
-      <span className={compact ? "max-w-[72px] truncate" : "whitespace-nowrap"}>{item.label}</span>
+      <span
+        className={
+          compact
+            ? "block w-full min-w-0 truncate text-center"
+            : "whitespace-nowrap"
+        }
+      >
+        {item.label}
+      </span>
     </Link>
   );
 }
@@ -320,7 +330,12 @@ function MobileBottomNav({ items }: { items: NavItem[] }) {
       className="fixed inset-x-0 bottom-0 z-50 border-t border-neutral-200 bg-white/95 px-2 pb-[max(env(safe-area-inset-bottom),0.35rem)] pt-2 shadow-[0_-10px_30px_rgba(0,0,0,0.08)] backdrop-blur dark:border-neutral-800 dark:bg-neutral-950/95 lg:hidden"
       aria-label="Mobile navigation"
     >
-      <div className="mx-auto flex max-w-xl gap-1">
+      <div
+        className="mx-auto grid w-full max-w-xl gap-0.5"
+        style={{
+          gridTemplateColumns: `repeat(${Math.max(1, items.length)}, minmax(0, 1fr))`,
+        }}
+      >
         {items.map((item) => <NavLink key={item.href} item={item} compact />)}
       </div>
     </nav>

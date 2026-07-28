@@ -163,6 +163,7 @@ export async function waitForPushTest(params: {
   timeoutMs?: number;
 }): Promise<PushTestResult> {
   const deadline = Date.now() + (params.timeoutMs ?? 45_000);
+  let lastStatus: PushTestStatus | "unknown" = "unknown";
 
   while (Date.now() < deadline) {
     const separator = params.url.includes("?") ? "&" : "?";
@@ -183,6 +184,15 @@ export async function waitForPushTest(params: {
     }
 
     const status = payload.status;
+    if (
+      status === "queued" ||
+      status === "processing" ||
+      status === "sent" ||
+      status === "partial" ||
+      status === "error"
+    ) {
+      lastStatus = status;
+    }
     if (status === "sent" || status === "partial" || status === "error") {
       return {
         ok: status === "sent" || status === "partial",
@@ -201,5 +211,11 @@ export async function waitForPushTest(params: {
     await sleep(1_200);
   }
 
-  throw new Error("PUSH_TEST_TIMEOUT");
+  const suffix =
+    lastStatus === "queued"
+      ? "QUEUED"
+      : lastStatus === "processing"
+        ? "PROCESSING"
+        : "UNKNOWN";
+  throw new Error(`PUSH_TEST_TIMEOUT_${suffix}`);
 }
