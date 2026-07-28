@@ -1,4 +1,4 @@
-"use client"; 
+"use client";  
 
 import Link from "next/link";
 import { useI18n } from "@/app/lib/i18n"; // Ajustado para o caminho correto dentro de _old
