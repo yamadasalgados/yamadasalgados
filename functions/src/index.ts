@@ -4,4 +4,5 @@ export {
   notifyCustomerEventOrderStatus,
   notifySellerStoreOrderCreated,
   notifySellerEventOrderCreated,
+  notifyPushTestRequest,
 } from "./notifications";

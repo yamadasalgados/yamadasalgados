@@ -76,11 +76,18 @@ export async function POST(request: NextRequest) {
     const p256dh = cleanString(keys.p256dh, 2048);
     const auth = cleanString(keys.auth, 2048);
     const language = languageOf(body.language);
+    const vapidFingerprint = cleanString(body.vapidFingerprint, 64);
 
     if (!endpoint || !p256dh || !auth || !/^https:\/\//i.test(endpoint)) {
       throw new PushSubscriptionError(
         "INVALID_SUBSCRIPTION",
         "A assinatura de notificações é inválida.",
+      );
+    }
+    if (vapidFingerprint && !/^[a-f0-9]{16,64}$/i.test(vapidFingerprint)) {
+      throw new PushSubscriptionError(
+        "INVALID_FINGERPRINT",
+        "A identificação da chave pública é inválida.",
       );
     }
 
@@ -118,6 +125,7 @@ export async function POST(request: NextRequest) {
           endpoint,
           keys: { p256dh, auth },
           language,
+          vapidFingerprint,
           userAgent: cleanString(request.headers.get("user-agent"), 600),
           createdAt: subscriptionSnapshot.exists
             ? subscriptionSnapshot.data()?.createdAt ?? now

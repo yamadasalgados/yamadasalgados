@@ -5,9 +5,17 @@ import PWAClient from "@/app/_components/pwa-client"; // Ajustado para _old
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Order System",
-  description: "Gerenciamento de Eventos e Vendas",
-  manifest: "/manifest.json",
+  title: "Yamada",
+  description: "Pedidos, eventos e acompanhamento de produção.",
+  manifest: "/manifest.webmanifest",
+  appleWebApp: {
+    capable: true,
+    title: "Yamada",
+    statusBarStyle: "black-translucent",
+  },
+  icons: {
+    apple: "/icon-192x192.png",
+  },
 };
 
 // Configuração estrita de Viewport ideal para Mobile/PWA (Evita zoom indesejado no Safari)

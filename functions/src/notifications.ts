@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { onDocumentCreated, onDocumentUpdated } from "firebase-functions/v2/firestore";
 import * as admin from "firebase-admin";
 import webpush from "web-push";
@@ -19,7 +20,15 @@ type OrderSource = "store" | "event";
 type StoredPushSubscription = {
   endpoint: string;
   language?: Language;
+  vapidFingerprint?: string;
   keys: { p256dh: string; auth: string };
+};
+
+type PushSendResult = {
+  ok: boolean;
+  statusCode: number;
+  code: string;
+  message: string;
 };
 
 type StoredRegionalPushSubscription = StoredPushSubscription & {
@@ -38,6 +47,15 @@ function languageOf(value: unknown): Language {
 function nonNegativeInteger(value: unknown): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? Math.max(0, Math.floor(parsed)) : 0;
+}
+
+function publicKeyFingerprint(value: string): string {
+  return createHash("sha256").update(value.trim()).digest("hex").slice(0, 16);
+}
+
+function currentServerVapidFingerprint(): string {
+  const publicKey = vapidPublic.value().trim();
+  return publicKey ? publicKeyFingerprint(publicKey) : "";
 }
 
 function isValidPushSubscription(value: unknown): value is StoredPushSubscription {
@@ -76,27 +94,65 @@ async function sendAndClean(params: {
   endpointMirrorRef?: admin.firestore.DocumentReference;
   subscriptionData: StoredPushSubscription;
   payload: Record<string, unknown>;
-}) {
+}): Promise<PushSendResult> {
+  const serverFingerprint = currentServerVapidFingerprint();
+  const storedFingerprint = cleanString(params.subscriptionData.vapidFingerprint, 64);
+  if (storedFingerprint && serverFingerprint && storedFingerprint !== serverFingerprint) {
+    console.error(
+      `[push] VAPID mismatch endpoint=${params.subscriptionRef.path} stored=${storedFingerprint} server=${serverFingerprint}`,
+    );
+    return {
+      ok: false,
+      statusCode: 0,
+      code: "STALE_SUBSCRIPTION",
+      message: "A assinatura foi criada com uma chave VAPID diferente.",
+    };
+  }
+
   try {
-    await webpush.sendNotification(
+    const response = await webpush.sendNotification(
       {
         endpoint: params.subscriptionData.endpoint,
         keys: params.subscriptionData.keys,
       } as any,
       JSON.stringify(params.payload),
     );
+    console.info(
+      `[push] Enviado endpoint=${params.subscriptionRef.path} status=${response.statusCode}`,
+    );
+    return {
+      ok: true,
+      statusCode: response.statusCode,
+      code: "SENT",
+      message: "O serviço push aceitou a mensagem.",
+    };
   } catch (error: any) {
-    if (error?.statusCode === 404 || error?.statusCode === 410) {
+    const statusCode = Number(error?.statusCode) || 0;
+    if (statusCode === 404 || statusCode === 410) {
       await Promise.all([
         params.subscriptionRef.delete().catch(() => undefined),
         params.endpointMirrorRef?.delete().catch(() => undefined),
       ]);
-      return;
+      console.warn(
+        `[push] Assinatura expirada removida endpoint=${params.subscriptionRef.path} status=${statusCode}`,
+      );
+      return {
+        ok: false,
+        statusCode,
+        code: "NO_SUBSCRIPTION",
+        message: "A assinatura expirou e foi removida.",
+      };
     }
     console.error(
-      `[push] Falha endpoint=${params.subscriptionRef.path}:`,
-      error?.message || error,
+      `[push] Falha endpoint=${params.subscriptionRef.path} status=${statusCode}:`,
+      error?.body || error?.message || error,
     );
+    return {
+      ok: false,
+      statusCode,
+      code: "PUSH_REJECTED",
+      message: cleanString(error?.body ?? error?.message, 400) || "O serviço push recusou a mensagem.",
+    };
   }
 }
 
@@ -173,8 +229,12 @@ async function sendCustomerOrderNotice(params: {
   orderId: string;
 }) {
   const kind = customerNoticeKind(params.before, params.after);
-  if (!kind) return;
+  if (!kind) {
+    console.info(`[customer-push] Pedido ${params.orderId} atualizado sem mudança notificável.`);
+    return;
+  }
 
+  console.info(`[customer-push] Pedido ${params.orderId} gerou aviso kind=${kind}.`);
   const customerUid = cleanString(params.after.customerUid, 160);
   const referenceId = cleanString(params.after.customerOrderRefId, 160);
   if (!customerUid || !referenceId || customerUid.includes("/") || referenceId.includes("/")) {
@@ -192,6 +252,9 @@ async function sendCustomerOrderNotice(params: {
     console.info(`[customer-push] Cliente ${customerUid} sem assinaturas.`);
     return;
   }
+  console.info(
+    `[customer-push] Cliente ${customerUid} assinaturas=${subscriptionsSnapshot.size} reference=${referenceId}`,
+  );
 
   const customerLanguage = languageOf(customerSnapshot.data()?.preferredLanguage);
   const storeName = cleanString(
@@ -274,6 +337,9 @@ async function sendSellerOrderNotice(params: {
     console.info(`[seller-push] Seller ${params.sellerId} sem assinaturas.`);
     return;
   }
+  console.info(
+    `[seller-push] Seller ${params.sellerId} assinaturas=${subscriptionsSnapshot.size} order=${params.orderId}`,
+  );
 
   const badgeCount = Math.max(
     1,
@@ -452,6 +518,188 @@ export const notifySellerEventOrderCreated = onDocumentCreated(
       orderId: cleanString(event.params.orderId, 160),
       source: "event",
       order,
+    });
+  },
+);
+
+function pushTestCopy(language: Language, targetType: "customer" | "seller") {
+  if (language === "ja") {
+    return {
+      title: "Yamada 通知テスト 🔔",
+      body:
+        targetType === "seller"
+          ? "新規注文通知の接続は正常です。"
+          : "注文状況通知の接続は正常です。",
+    };
+  }
+  if (language === "en") {
+    return {
+      title: "Yamada notification test 🔔",
+      body:
+        targetType === "seller"
+          ? "The new-order notification connection is working."
+          : "The order-status notification connection is working.",
+    };
+  }
+  return {
+    title: "Teste de notificação Yamada 🔔",
+    body:
+      targetType === "seller"
+        ? "A conexão dos avisos de novos pedidos está funcionando."
+        : "A conexão dos avisos de andamento do pedido está funcionando.",
+  };
+}
+
+export const notifyPushTestRequest = onDocumentCreated(
+  {
+    document: "pushTestRequests/{requestId}",
+    region: "asia-northeast1",
+    secrets: [vapidPrivate],
+  },
+  async (event) => {
+    const snapshot = event.data;
+    if (!snapshot) return;
+
+    const requestData = snapshot.data() ?? {};
+    const targetType = requestData.targetType === "seller" ? "seller" : requestData.targetType === "customer" ? "customer" : "";
+    const targetId = cleanString(requestData.targetId, 160);
+    const subscriptionId = cleanString(requestData.subscriptionId, 128);
+    const clientFingerprint = cleanString(requestData.clientVapidFingerprint, 64);
+    const serverFingerprint = currentServerVapidFingerprint();
+    const language = languageOf(requestData.language);
+
+    const finish = async (data: {
+      status: "sent" | "partial" | "error";
+      code: string;
+      message: string;
+      sentCount: number;
+      failedCount: number;
+      pushStatusCode?: number;
+    }) => {
+      await snapshot.ref.set(
+        {
+          ...data,
+          serverVapidFingerprint: serverFingerprint,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          completedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true },
+      );
+    };
+
+    await snapshot.ref.set(
+      {
+        status: "processing",
+        code: "PROCESSING",
+        message: "Teste em processamento.",
+        serverVapidFingerprint: serverFingerprint,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+
+    if (!targetType || !targetId || targetId.includes("/") || !/^[a-f0-9]{64}$/i.test(subscriptionId)) {
+      await finish({
+        status: "error",
+        code: "INVALID_REQUEST",
+        message: "Os dados do teste são inválidos.",
+        sentCount: 0,
+        failedCount: 1,
+      });
+      return;
+    }
+
+    if (!ensurePushConfigured() || !serverFingerprint) {
+      await finish({
+        status: "error",
+        code: "PUSH_CONFIGURATION_MISSING",
+        message: "As chaves VAPID das Firebase Functions não estão configuradas.",
+        sentCount: 0,
+        failedCount: 1,
+      });
+      return;
+    }
+
+    if (clientFingerprint && clientFingerprint !== serverFingerprint) {
+      console.error(
+        `[push-test] VAPID mismatch request=${event.params.requestId} client=${clientFingerprint} server=${serverFingerprint}`,
+      );
+      await finish({
+        status: "error",
+        code: "VAPID_MISMATCH",
+        message: "A chave pública da Vercel é diferente da chave pública das Firebase Functions.",
+        sentCount: 0,
+        failedCount: 1,
+      });
+      return;
+    }
+
+    const ownerRef = db.collection(targetType === "seller" ? "sellers" : "customers").doc(targetId);
+    const subscriptionRef = ownerRef.collection("pushSubscriptions").doc(subscriptionId);
+    const subscriptionSnapshot = await subscriptionRef.get();
+    if (!subscriptionSnapshot.exists) {
+      await finish({
+        status: "error",
+        code: "NO_SUBSCRIPTION",
+        message: "A assinatura deste aparelho não foi encontrada no Firebase.",
+        sentCount: 0,
+        failedCount: 1,
+      });
+      return;
+    }
+
+    const subscriptionData = subscriptionSnapshot.data();
+    if (!isValidPushSubscription(subscriptionData)) {
+      await subscriptionRef.delete().catch(() => undefined);
+      await finish({
+        status: "error",
+        code: "NO_SUBSCRIPTION",
+        message: "A assinatura salva é inválida e foi removida.",
+        sentCount: 0,
+        failedCount: 1,
+      });
+      return;
+    }
+
+    const storedFingerprint = cleanString(subscriptionData.vapidFingerprint, 64);
+    if (storedFingerprint && storedFingerprint !== serverFingerprint) {
+      await finish({
+        status: "error",
+        code: "STALE_SUBSCRIPTION",
+        message: "A assinatura deste aparelho foi criada com uma chave VAPID antiga.",
+        sentCount: 0,
+        failedCount: 1,
+      });
+      return;
+    }
+
+    const localized = pushTestCopy(language, targetType);
+    const result = await sendAndClean({
+      subscriptionRef,
+      endpointMirrorRef: db
+        .collection(targetType === "seller" ? "sellerPushEndpoints" : "customerPushEndpoints")
+        .doc(subscriptionId),
+      subscriptionData,
+      payload: {
+        ...localized,
+        url: targetType === "seller" ? "/seller/settings" : "/customer/profile",
+        icon: "/icon-192x192.png",
+        badge: "/icon-192x192.png",
+        tag: `push-test-${event.params.requestId}`,
+        renotify: true,
+        requireInteraction: false,
+        badgeCount: 1,
+        kind: "push-test",
+      },
+    });
+
+    await finish({
+      status: result.ok ? "sent" : "error",
+      code: result.code,
+      message: result.message,
+      sentCount: result.ok ? 1 : 0,
+      failedCount: result.ok ? 0 : 1,
+      pushStatusCode: result.statusCode,
     });
   },
 );

@@ -1,4 +1,4 @@
-const STATIC_CACHE = "yamada-static-06c7";
+const STATIC_CACHE = "yamada-static-06c7a";
 const STATIC_PATH_PREFIXES = ["/_next/static/", "/icons/"];
 const DEFAULT_ICON = "/icon-192x192.png";
 
