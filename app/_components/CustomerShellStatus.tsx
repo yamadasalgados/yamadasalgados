@@ -16,7 +16,7 @@ export default function CustomerShellStatus() {
 
   return (
     <div className="mx-auto w-full max-w-6xl space-y-3 px-4 pt-4 sm:px-6">
-      <CustomerAppReadiness language={language} compact />
+      <CustomerAppReadiness language={language} compact mode="offline" />
       {session.registered && !onProfile && (
         <CustomerPushNotifications
           session={session}

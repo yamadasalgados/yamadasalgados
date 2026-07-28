@@ -1,6 +1,7 @@
-const STATIC_CACHE = "yamada-static-06c7a";
+const STATIC_CACHE = "yamada-static-06c8";
 const STATIC_PATH_PREFIXES = ["/_next/static/", "/icons/"];
 const DEFAULT_ICON = "/icon-192x192.png";
+const DEFAULT_BADGE = "/notification-badge.png";
 
 self.addEventListener("install", () => {
   // Atualizações aguardam o comando explícito da interface.
@@ -105,11 +106,12 @@ self.addEventListener("push", (event) => {
   const options = {
     body: data.body || "Há uma nova atualização.",
     icon: data.icon || DEFAULT_ICON,
-    badge: data.badge || DEFAULT_ICON,
+    badge: data.badge || DEFAULT_BADGE,
     tag: data.tag || undefined,
-    renotify: Boolean(data.renotify),
+    renotify: Boolean(data.tag) && data.renotify !== false,
     requireInteraction: Boolean(data.requireInteraction),
-    vibrate: Array.isArray(data.vibrate) ? data.vibrate : [180, 80, 180],
+    vibrate: Array.isArray(data.vibrate) ? data.vibrate : [250, 100, 250, 100, 400],
+    silent: false,
     data: {
       url: data.url || "/",
       orderReferenceId: data.orderReferenceId || "",

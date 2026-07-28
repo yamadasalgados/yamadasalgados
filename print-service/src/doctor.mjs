@@ -4,7 +4,11 @@ import { promisify } from "node:util";
 
 import { api } from "./api.mjs";
 import { assertConfig, config } from "./config.mjs";
-import { findWindowsPrinter } from "./windows.mjs";
+import {
+  findWindowsPrinter,
+  getSumatraPrinterReport,
+  getWindowsFileVersion,
+} from "./windows.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -27,7 +31,8 @@ async function main() {
     if (!fs.existsSync(config.sumatraPath)) {
       throw new Error(`SumatraPDF não encontrado em: ${config.sumatraPath}`);
     }
-    console.log(`✓ SumatraPDF encontrado: ${config.sumatraPath}`);
+    const version = await getWindowsFileVersion(config.sumatraPath);
+    console.log(`✓ SumatraPDF encontrado: ${config.sumatraPath}${version ? ` (versão ${version})` : ""}`);
 
     const printer = await findWindowsPrinter(config.printerName);
     if (!printer) {
@@ -36,6 +41,24 @@ async function main() {
     console.log(`✓ Impressora do Windows encontrada: ${printer.Name}`);
     console.log(`  Driver: ${printer.DriverName || "não informado"}`);
     console.log(`  Porta: ${printer.PortName || "não informada"}`);
+    console.log(`  Status: ${printer.PrinterStatus ?? "não informado"}`);
+
+    if (/Microsoft Print to PDF|OneNote/i.test(printer.Name)) {
+      console.warn("⚠ Esta impressora virtual abre uma janela e não é indicada para impressão automática.");
+    }
+    if (printer.WorkOffline === true) {
+      console.warn("⚠ O Windows marcou esta impressora como offline.");
+    }
+
+    const report = await getSumatraPrinterReport(config.sumatraPath);
+    if (!report.includes(config.printerName)) {
+      throw new Error(
+        `O Windows encontra '${config.printerName}', mas o SumatraPDF não.\n` +
+        "Instale/atualize o SumatraPDF e confirme o nome com SumatraPDF.exe -list-printers.",
+      );
+    }
+    console.log("✓ SumatraPDF também reconhece a impressora");
+    console.log(`  Ajustes: ${config.windowsPrintSettings || "nenhum"}`);
   } else {
     console.log("✓ Modo preview: PDFs serão gerados em output/");
   }
@@ -43,6 +66,9 @@ async function main() {
   await api.heartbeat();
   console.log("✓ API da Vercel aceitou a estação");
   console.log("Tudo pronto.");
+  if (config.printMode === "windows") {
+    console.log("Próximo teste recomendado: npm run print-test");
+  }
 }
 
 main().catch((error) => {

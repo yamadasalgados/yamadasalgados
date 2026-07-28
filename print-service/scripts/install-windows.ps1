@@ -33,6 +33,11 @@ $Settings = New-ScheduledTaskSettingsSet `
   -MultipleInstances IgnoreNew
 
 try {
+  $ExistingTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+  if ($ExistingTask) {
+    Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 700
+  }
   Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger -Principal $Principal -Settings $Settings -Description "Impressão automática dos pedidos Yamada" -Force | Out-Null
   Start-ScheduledTask -TaskName $TaskName
 } catch {

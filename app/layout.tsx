@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { I18nProvider } from "@/app/lib/i18n"; // Ajustado para _old
 import PwaRegister from "@/app/_components/PwaRegister"; // Ajustado para _old
 import PWAClient from "@/app/_components/pwa-client"; // Ajustado para _old
+import GlobalPwaInstallCoach from "@/app/_components/GlobalPwaInstallCoach";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -62,6 +63,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           {/* Inicializadores do PWA vindos da pasta de backup */}
           <PwaRegister />
           <PWAClient />
+          <GlobalPwaInstallCoach />
 
           <div className="flex min-h-screen flex-col">
             <main className="flex-1 flex flex-col">{children}</main>

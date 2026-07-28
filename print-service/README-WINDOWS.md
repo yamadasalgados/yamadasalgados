@@ -49,6 +49,7 @@ Abra o Terminal/PowerShell na pasta `print-service`:
 ```powershell
 npm run printers
 npm run doctor
+npm run print-test
 npm run once
 ```
 
@@ -97,7 +98,8 @@ PRINT_MODE=windows
 PRINTER_NAME=MUNBYN Receipt Printer
 CHROME_PATH=C:\Program Files\Google\Chrome\Application\chrome.exe
 SUMATRA_PATH=C:\Users\SEU_USUARIO\AppData\Local\SumatraPDF\SumatraPDF.exe
-WINDOWS_PRINT_SETTINGS=fit,portrait,monochrome
+WINDOWS_PRINT_SETTINGS=fit
+WINDOWS_PRINT_TIMEOUT_MS=60000
 COPY_DELAY_MS=1000
 ```
 
@@ -117,3 +119,15 @@ Configure no driver da MUNBYN:
 - margens mínimas ou zero, quando disponíveis.
 
 Cada via é enviada como um trabalho separado. `COPY_DELAY_MS` cria uma pequena pausa entre as vias para favorecer o corte automático.
+
+
+## Erro código 1 do SumatraPDF
+
+A versão 1.2 do serviço registra a versão do SumatraPDF, confirma se ele reconhece a impressora e tenta novamente sem opções avançadas quando o código 1 aparece. Para isolar o computador da fila online, execute:
+
+```powershell
+npm run doctor
+npm run print-test
+```
+
+O segundo comando gera e imprime um papel de teste local. Se ele falhar, o log mostra impressora, porta, driver, versão do SumatraPDF e se a impressora aparece em `-list-printers`.

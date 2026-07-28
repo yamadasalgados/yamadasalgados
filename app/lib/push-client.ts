@@ -143,13 +143,21 @@ export async function showLocalPushTest(
   } as const;
   const text = copy[language];
 
-  await registration.showNotification(text.title, {
+  const options: NotificationOptions & {
+    renotify?: boolean;
+    vibrate?: number[];
+  } = {
     body: text.body,
     icon: "/icon-192x192.png",
-    badge: "/icon-192x192.png",
+    badge: "/notification-badge.png",
     tag: `yamada-local-test-${Date.now()}`,
+    renotify: true,
+    silent: false,
+    vibrate: [250, 100, 250, 100, 400],
     data: { url: "/", kind: "local-push-test", badgeCount: 1 },
-  });
+  };
+
+  await registration.showNotification(text.title, options);
 }
 
 function sleep(milliseconds: number): Promise<void> {

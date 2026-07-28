@@ -8,6 +8,7 @@ import {
   Loader2,
   Send,
   Smartphone,
+  X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -150,7 +151,15 @@ function diagnosticMessage(
   return fallback || text.diagnosticError;
 }
 
-export default function SellerPushNotifications({ language }: { language: Language }) {
+export default function SellerPushNotifications({
+  language,
+  compact = false,
+  promptOnce = false,
+}: {
+  language: Language;
+  compact?: boolean;
+  promptOnce?: boolean;
+}) {
   const { user, sellerId } = useSellerSession();
   const text = COPY[language];
   const publicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || "";
@@ -161,6 +170,24 @@ export default function SellerPushNotifications({ language }: { language: Langua
   const [localTestState, setLocalTestState] = useState<TestState>("idle");
   const [serverTestState, setServerTestState] = useState<TestState>("idle");
   const [testMessage, setTestMessage] = useState("");
+  const [promptDismissed, setPromptDismissed] = useState(promptOnce);
+
+  useEffect(() => {
+    if (!promptOnce || !sellerId) {
+      setPromptDismissed(false);
+      return;
+    }
+    setPromptDismissed(
+      window.localStorage.getItem(`yamada:seller-push-prompt:v2:${sellerId}`) === "1",
+    );
+  }, [promptOnce, sellerId]);
+
+  const dismissPrompt = useCallback(() => {
+    if (promptOnce && sellerId) {
+      window.localStorage.setItem(`yamada:seller-push-prompt:v2:${sellerId}`, "1");
+    }
+    setPromptDismissed(true);
+  }, [promptOnce, sellerId]);
 
   const syncSubscription = useCallback(
     async (subscription: PushSubscription): Promise<string> => {
@@ -251,11 +278,12 @@ export default function SellerPushNotifications({ language }: { language: Langua
       }
       await syncSubscription(subscription);
       setState("subscribed");
+      if (promptOnce) dismissPrompt();
     } catch (enableError) {
       setError(enableError instanceof Error ? enableError.message : text.error);
       setState("error");
     }
-  }, [environment.supported, publicKey, syncSubscription, text.error]);
+  }, [dismissPrompt, environment.supported, promptOnce, publicKey, syncSubscription, text.error]);
 
   const disable = useCallback(async () => {
     if (!environment.supported) return;
@@ -345,6 +373,29 @@ export default function SellerPushNotifications({ language }: { language: Langua
     }
   }, [language, publicKey, sellerId, subscriptionId, syncSubscription, text, user]);
 
+  if (state === "checking") return null;
+  if (promptOnce && (promptDismissed || state === "subscribed" || state === "unsupported" || state === "install_required")) {
+    return null;
+  }
+
+  const floatingPromptClass = promptOnce
+    ? "fixed bottom-[calc(env(safe-area-inset-bottom)+5.75rem)] left-3 right-3 z-[85] mx-auto max-w-md shadow-2xl"
+    : "";
+  const baseClass = compact
+    ? `relative space-y-3 rounded-2xl border p-3 ${floatingPromptClass}`
+    : `relative space-y-4 rounded-3xl border p-5 ${floatingPromptClass}`;
+
+  const closeButton = promptOnce ? (
+    <button
+      type="button"
+      onClick={dismissPrompt}
+      className="absolute right-2 top-2 rounded-lg p-1.5 opacity-60 transition hover:bg-black/5 hover:opacity-100 dark:hover:bg-white/10"
+      aria-label="Close"
+    >
+      <X size={15} />
+    </button>
+  ) : null;
+
   const icon = state === "subscribed" ? Bell : state === "denied" ? BellOff : Smartphone;
   const Icon = icon;
   const description =
@@ -359,10 +410,11 @@ export default function SellerPushNotifications({ language }: { language: Langua
             : error || text.body;
 
   return (
-    <section className="space-y-4 rounded-3xl border border-emerald-200 bg-emerald-50/60 p-5 dark:border-emerald-900/50 dark:bg-emerald-950/20">
+    <section className={`${baseClass} border-emerald-200 bg-emerald-50/60 dark:border-emerald-900/50 dark:bg-emerald-950/20`}>
+      {closeButton}
       <div className="flex items-start gap-3">
         <Icon className="mt-0.5 h-5 w-5 shrink-0 text-emerald-700 dark:text-emerald-300" />
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1 pr-6">
           <h2 className="font-black">{text.title}</h2>
           <p className="mt-1 text-xs font-semibold leading-relaxed text-emerald-900/75 dark:text-emerald-200/80">
             {description}
@@ -399,7 +451,7 @@ export default function SellerPushNotifications({ language }: { language: Langua
             {text.disable}
           </button>
 
-          <div className="border-t border-emerald-200 pt-4 dark:border-emerald-900/60">
+          {!promptOnce && <div className="border-t border-emerald-200 pt-4 dark:border-emerald-900/60">
             <p className="text-[11px] font-black uppercase tracking-wide text-emerald-900/65 dark:text-emerald-200/70">{text.diagnostics}</p>
             <p className="mt-1 text-[11px] font-semibold text-emerald-900/65 dark:text-emerald-200/70">
               {text.permission}: {environment.permission} · {environment.isStandalone ? text.standalone : text.browserTab}
@@ -429,7 +481,7 @@ export default function SellerPushNotifications({ language }: { language: Langua
                 {testMessage}
               </p>
             )}
-          </div>
+          </div>}
         </div>
       )}
     </section>

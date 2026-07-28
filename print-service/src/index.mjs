@@ -51,7 +51,7 @@ async function cycle() {
 
 async function main() {
   assertConfig();
-  console.log("Yamada Print Service 1.1.0");
+  console.log("Yamada Print Service 1.2.0");
   console.log(`Sistema: ${process.platform}`);
   console.log(`Modo: ${config.printMode}`);
   if (["cups", "windows"].includes(config.printMode)) {

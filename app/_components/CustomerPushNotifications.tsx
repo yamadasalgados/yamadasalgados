@@ -42,7 +42,7 @@ type State =
 
 type TestState = "idle" | "loading" | "success" | "error";
 
-const PROMPT_DISMISSED_KEY = "yamada:customer-push-prompt-dismissed:v1";
+const PROMPT_DISMISSED_KEY = "yamada:customer-push-prompt-dismissed:v2";
 
 const COPY = {
   pt: {
@@ -378,11 +378,14 @@ export default function CustomerPushNotifications({
   }, [language, publicKey, session.user, subscriptionId, syncSubscription, text]);
 
   if (!session.registered || state === "checking") return null;
-  if (promptOnce && (promptDismissed || state === "subscribed" || state === "unsupported")) return null;
+  if (promptOnce && (promptDismissed || state === "subscribed" || state === "unsupported" || state === "install_required")) return null;
 
+  const floatingPromptClass = promptOnce
+    ? "fixed bottom-[calc(env(safe-area-inset-bottom)+5.75rem)] left-3 right-3 z-[85] mx-auto max-w-md shadow-2xl"
+    : "";
   const baseClass = compact
-    ? "relative rounded-2xl border p-3"
-    : "relative rounded-3xl border p-4 shadow-sm";
+    ? `relative rounded-2xl border p-3 ${floatingPromptClass}`
+    : `relative rounded-3xl border p-4 shadow-sm ${floatingPromptClass}`;
 
   const closeButton = promptOnce ? (
     <button
