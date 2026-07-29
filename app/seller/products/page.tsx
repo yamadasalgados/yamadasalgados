@@ -22,11 +22,12 @@ import MetricStrip from "@/app/_components/MetricStrip";
 import PageHeader from "@/app/_components/PageHeader";
 import { useSellerSession } from "@/app/_components/SellerSessionContext";
 import { db } from "@/app/lib/firebase";
-import { normalizeInventory, normalizeProductBundleConfig, normalizeProductContent, normalizeProductPriceMajor, normalizeProductStorefrontConfig } from "@/app/lib/product-schema";
+import { normalizeInventory, normalizeProductBundleConfig, normalizeProductContent, normalizeProductPriceMinor, normalizeProductStorefrontConfig } from "@/app/lib/product-schema";
 import { normalizeProductShipping } from "@/app/lib/shipping-schema";
-import { formatLeadTimeDays, normalizeProductProductionLeadTime } from "@/app/lib/production-lead-time";
+import { defaultTimeZoneForRegional, formatLeadTimeDays, normalizeProductProductionLeadTime, normalizeTimeZone } from "@/app/lib/production-lead-time";
+import { evaluateProductPrice, formatScheduledPriceDate } from "@/app/lib/scheduled-price";
 import { useI18n } from "@/app/lib/i18n";
-import { formatMoneyMajor } from "@/app/lib/money";
+import { formatMoneyMajor, minorToMajor } from "@/app/lib/money";
 import type {
   RegionalLocale,
   SupportedCurrency,
@@ -65,6 +66,8 @@ type UserDoc = {
   suspended?: boolean;
   currency?: SupportedCurrency | null;
   regionalLocale?: RegionalLocale | null;
+  timeZone?: string | null;
+  operatingCountry?: string | null;
 };
 
 type SellerCategoryDoc = {
@@ -92,6 +95,9 @@ interface ProductCardProps {
   btnDeactivate: string;
   yen: (value: number) => string;
   lang: string;
+  locale: string;
+  timeZone: string;
+  currency: SupportedCurrency;
 }
 
 // --- 🚀 Componente Principal da Página ---
@@ -241,6 +247,15 @@ export default function ProductsCatalogPage() {
         ? "en-US"
         : "ja-JP");
 
+  const timeZone = normalizeTimeZone(
+    profile?.timeZone,
+    defaultTimeZoneForRegional(
+      locale,
+      currency,
+      profile?.operatingCountry,
+    ),
+  );
+
   const yen = useCallback(
     (amount: number) =>
       formatMoneyMajor(
@@ -327,6 +342,12 @@ export default function ProductsCatalogPage() {
               postal: data.postalEligible,
             },
           );
+          const basePriceMinor = normalizeProductPriceMinor(data, currency);
+          const priceEvaluation = evaluateProductPrice({
+            basePriceMinor,
+            scheduledPriceChange: data.scheduledPriceChange,
+            currency,
+          });
           return {
             id: d.id,
             createdAt: data.createdAt,
@@ -340,10 +361,15 @@ export default function ProductsCatalogPage() {
             content: normalizeProductContent(data.content, String(data.name || ""), String(data.description || "")),
             name: String(data.name || ""),
             description: String(data.description || ""),
-            priceMinor: Number(data.priceMinor ?? 0),
+            priceMinor: priceEvaluation.effectivePriceMinor,
+            basePriceMinor,
+            effectivePriceMinor: priceEvaluation.effectivePriceMinor,
+            baseSellPrice: minorToMajor(basePriceMinor, currency),
+            scheduledPriceChange: priceEvaluation.scheduledPriceChange,
+            scheduledPriceStatus: priceEvaluation.status,
             costPriceMinor: typeof data.costPriceMinor === "number" ? data.costPriceMinor : null,
             costPrice: Number(data.costPrice ?? data.shadowCost ?? 0),
-            sellPrice: normalizeProductPriceMajor(data, currency),
+            sellPrice: minorToMajor(priceEvaluation.effectivePriceMinor, currency),
             unitsPerSale: Number(data.unitsPerSale ?? data.quantity ?? 1),
             quantity: Number(data.unitsPerSale ?? data.quantity ?? 1),
             inventory,
@@ -400,6 +426,42 @@ export default function ProductsCatalogPage() {
       }
     );
   }, [authUser, sellerId, profileReady, inactive, t, currency]);
+
+  useEffect(() => {
+    const refreshPrices = () => {
+      const now = Date.now();
+      setOwnProducts((current) => {
+        let changed = false;
+        const next = current.map((product) => {
+          const evaluation = evaluateProductPrice({
+            basePriceMinor: product.basePriceMinor,
+            scheduledPriceChange: product.scheduledPriceChange,
+            currency,
+            now,
+          });
+          if (
+            evaluation.effectivePriceMinor === product.effectivePriceMinor &&
+            evaluation.status === product.scheduledPriceStatus
+          ) {
+            return product;
+          }
+          changed = true;
+          return {
+            ...product,
+            priceMinor: evaluation.effectivePriceMinor,
+            effectivePriceMinor: evaluation.effectivePriceMinor,
+            sellPrice: minorToMajor(evaluation.effectivePriceMinor, currency),
+            scheduledPriceStatus: evaluation.status,
+          };
+        });
+        return changed ? next : current;
+      });
+    };
+
+    refreshPrices();
+    const timer = window.setInterval(refreshPrices, 30_000);
+    return () => window.clearInterval(timer);
+  }, [currency]);
 
   const openCreateProduct = useCallback(() => {
     setSelectedProduct(null);
@@ -1115,6 +1177,9 @@ export default function ProductsCatalogPage() {
                       btnDeactivate={t("products.btn.deactivate")}
                       yen={yen}
                       lang={lang}
+                      locale={locale}
+                      timeZone={timeZone}
+                      currency={currency}
                     />
                   ))}
                 </div>
@@ -1136,6 +1201,7 @@ export default function ProductsCatalogPage() {
           maxProducts={maxProducts}
           plan={plan}
           currency={currency}
+          timeZone={timeZone}
           lang={lang}
           t={t}
           onClose={closeProductModal}
@@ -1172,6 +1238,9 @@ function ProductCard({
   btnDeactivate,
   yen,
   lang,
+  locale,
+  timeZone,
+  currency,
 }: ProductCardProps) {
   const [currentIndex, setCurrentIndex] = useState(0);
 
@@ -1193,6 +1262,15 @@ function ProductCard({
   const madeToOrder = product.status === "made_to_order";
   const reservedStock = Math.max(0, product.inventory.reserved || 0);
   const availableStock = product.inventory.available ?? Math.max(0, product.stockQty - reservedStock);
+  const scheduledPriceDate = formatScheduledPriceDate(
+    product.scheduledPriceChange.startsAtMillis,
+    locale,
+    timeZone,
+  );
+  const scheduledNextPrice =
+    product.scheduledPriceChange.nextPriceMinor === null
+      ? ""
+      : yen(minorToMajor(product.scheduledPriceChange.nextPriceMinor, currency));
 
   const lowStock =
     !madeToOrder &&
@@ -1289,9 +1367,12 @@ function ProductCard({
               {product.name}
             </h4>
 
-            <p className="shrink-0 text-base font-black text-neutral-950 dark:text-white">
-              {yen(product.sellPrice)}
-            </p>
+            <div className="shrink-0 text-right">
+              {product.scheduledPriceStatus === "active" && (
+                <p className="text-[10px] font-bold text-neutral-400 line-through">{yen(product.baseSellPrice)}</p>
+              )}
+              <p className="text-base font-black text-neutral-950 dark:text-white">{yen(product.sellPrice)}</p>
+            </div>
           </div>
 
           <div className={`rounded-xl border px-3 py-2 text-xs font-black ${stockClass}`}>
@@ -1331,6 +1412,34 @@ function ProductCard({
               </span>
             )}
           </div>
+
+          {product.scheduledPriceStatus === "upcoming" && (
+            <div className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-3 text-xs text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-100">
+              <p className="font-black">
+                {lang === "ja" ? "値上げ予定" : lang === "en" ? "Price increase scheduled" : "Aumento programado"}
+              </p>
+              <p className="mt-1 font-semibold">
+                {lang === "ja"
+                  ? `${scheduledPriceDate}から${scheduledNextPrice}`
+                  : lang === "en"
+                    ? `New price ${scheduledNextPrice} from ${scheduledPriceDate}.`
+                    : `Novo preço ${scheduledNextPrice} a partir de ${scheduledPriceDate}.`}
+              </p>
+              {product.scheduledPriceChange.message && (
+                <p className="mt-1 font-medium opacity-80">{product.scheduledPriceChange.message}</p>
+              )}
+            </div>
+          )}
+
+          {product.scheduledPriceStatus === "active" && (
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-800 dark:border-emerald-900/50 dark:bg-emerald-950/20 dark:text-emerald-200">
+              {lang === "ja"
+                ? `価格は${scheduledPriceDate}に自動更新されました。`
+                : lang === "en"
+                  ? `Price updated automatically on ${scheduledPriceDate}.`
+                  : `Preço atualizado automaticamente em ${scheduledPriceDate}.`}
+            </div>
+          )}
 
           {(madeToOrder || product.productionLeadTimeDays > 0) && (
             <div className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-800 dark:border-emerald-900/50 dark:bg-emerald-950/20 dark:text-emerald-200">

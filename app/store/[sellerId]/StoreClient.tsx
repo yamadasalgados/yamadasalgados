@@ -77,6 +77,13 @@ import {
   normalizeProductProductionLeadTime,
   normalizeTimeZone,
 } from "@/app/lib/production-lead-time";
+import {
+  evaluateProductPrice,
+  formatScheduledPriceDate,
+  scheduledPriceCountdown,
+  type ProductScheduledPriceChange,
+  type ScheduledPriceStatus,
+} from "@/app/lib/scheduled-price";
 
 import {
   useI18n,
@@ -95,7 +102,6 @@ import {
 import {
   normalizeInventory,
   normalizeProductBundleConfig,
-  normalizeProductPriceMajor,
   normalizeProductStorefrontConfig,
   normalizeProductPriceMinor,
   resolveLocalizedProductText,
@@ -176,6 +182,10 @@ type Product = {
   extraImageUrls: string[];
   price: number;
   priceMinor: number;
+  basePrice: number;
+  basePriceMinor: number;
+  scheduledPriceChange: ProductScheduledPriceChange;
+  scheduledPriceStatus: ScheduledPriceStatus;
   availabilityStatus: ProductAvailabilityStatus;
   productionLeadTimeDays: number;
   stock?: number;
@@ -859,6 +869,27 @@ function optionalFiniteNumber(
   return undefined;
 }
 
+function scheduledPriceCountdownText(
+  language: Language,
+  startsAtMillis: number | null,
+): string {
+  const countdown = scheduledPriceCountdown(startsAtMillis);
+  if (!countdown || countdown.expired) return "";
+  if (language === "ja") {
+    return countdown.days > 0
+      ? `あと${countdown.days}日${countdown.hours}時間`
+      : `あと${countdown.hours}時間${countdown.minutes}分`;
+  }
+  if (language === "en") {
+    return countdown.days > 0
+      ? `${countdown.days}d ${countdown.hours}h remaining`
+      : `${countdown.hours}h ${countdown.minutes}m remaining`;
+  }
+  return countdown.days > 0
+    ? `Faltam ${countdown.days}d ${countdown.hours}h`
+    : `Faltam ${countdown.hours}h ${countdown.minutes}min`;
+}
+
 function normalizeImageList(
   value: unknown,
 ): string[] {
@@ -912,8 +943,14 @@ function normalizeProduct(
     return null;
   }
 
-  const priceMinor = normalizeProductPriceMinor(raw, currency);
-  const price = normalizeProductPriceMajor(raw, currency);
+  const basePriceMinor = normalizeProductPriceMinor(raw, currency);
+  const priceEvaluation = evaluateProductPrice({
+    basePriceMinor,
+    scheduledPriceChange: raw.scheduledPriceChange,
+    currency,
+  });
+  const priceMinor = priceEvaluation.effectivePriceMinor;
+  const price = minorToMajor(priceMinor, currency);
 
   let stock:
     | number
@@ -1022,6 +1059,10 @@ function normalizeProduct(
     extraImageUrls,
     price,
     priceMinor,
+    basePrice: minorToMajor(basePriceMinor, currency),
+    basePriceMinor,
+    scheduledPriceChange: priceEvaluation.scheduledPriceChange,
+    scheduledPriceStatus: priceEvaluation.status,
     availabilityStatus,
     productionLeadTimeDays: normalizeProductProductionLeadTime(
       raw.productionLeadTime,
@@ -1485,6 +1526,50 @@ export default function StoreClient({
     bundleSelections,
     storeProfile.acceptOrdersWithoutStock,
   ]);
+
+  useEffect(() => {
+    const refreshScheduledPrices = () => {
+      const now = Date.now();
+      setProducts((current) => {
+        let changed = false;
+        const next = current.map((product) => {
+          const evaluation = evaluateProductPrice({
+            basePriceMinor: product.basePriceMinor,
+            scheduledPriceChange: product.scheduledPriceChange,
+            currency: storeProfile.currency,
+            now,
+          });
+          if (
+            evaluation.effectivePriceMinor === product.priceMinor &&
+            evaluation.status === product.scheduledPriceStatus
+          ) {
+            return product;
+          }
+          changed = true;
+          return {
+            ...product,
+            priceMinor: evaluation.effectivePriceMinor,
+            price: minorToMajor(evaluation.effectivePriceMinor, storeProfile.currency),
+            scheduledPriceStatus: evaluation.status,
+          };
+        });
+        return changed ? next : current;
+      });
+    };
+
+    refreshScheduledPrices();
+    const timer = window.setInterval(refreshScheduledPrices, 30_000);
+    return () => window.clearInterval(timer);
+  }, [storeProfile.currency]);
+
+  useEffect(() => {
+    setSelectedProduct((current) =>
+      current ? products.find((product) => product.id === current.id) ?? current : null,
+    );
+    setConfiguringBundle((current) =>
+      current ? products.find((product) => product.id === current.id) ?? current : null,
+    );
+  }, [products]);
 
   useEffect(() => {
     if (!sellerId.trim()) {
@@ -2623,6 +2708,9 @@ const visibleProducts =
         customerClientId:
           customerSession.clientId || undefined,
         quantities,
+        pricing: Object.fromEntries(
+          cartItems.map((item) => [item.id, item.priceMinor]),
+        ),
         bundleSelections: orderBundleSelections,
         rewards: {
           mode: rewardEvaluation.mode,
@@ -2692,6 +2780,25 @@ const visibleProducts =
           error,
         );
 
+      if (errorCode === "PRICE_CHANGED") {
+        setProducts((current) =>
+          current.map((product) => {
+            const evaluation = evaluateProductPrice({
+              basePriceMinor: product.basePriceMinor,
+              scheduledPriceChange: product.scheduledPriceChange,
+              currency: storeProfile.currency,
+            });
+            return {
+              ...product,
+              priceMinor: evaluation.effectivePriceMinor,
+              price: minorToMajor(evaluation.effectivePriceMinor, storeProfile.currency),
+              scheduledPriceStatus: evaluation.status,
+              scheduledPriceChange: evaluation.scheduledPriceChange,
+            };
+          }),
+        );
+      }
+
       const message =
         errorCode === "INSUFFICIENT_POINTS"
           ? language === "ja"
@@ -2711,6 +2818,12 @@ const visibleProducts =
               : "Sua sessão expirou. Entre novamente antes de finalizar o pedido."
           : errorCode === "FULFILLMENT_DATE_UNAVAILABLE"
             ? productionDateError(language, productionSchedule.earliestDate, storeProfile.regionalLocale)
+          : errorCode === "PRICE_CHANGED"
+            ? language === "ja"
+              ? "商品の価格が変更されました。カートの金額を確認して、もう一度お試しください。"
+              : language === "en"
+                ? "One or more product prices changed. Review your cart and try again."
+                : "O preço de um ou mais produtos mudou. Revise o carrinho e tente novamente."
           : errorCode ===
           "PRODUCT_UNAVAILABLE"
           ? text.stockError
@@ -3053,6 +3166,7 @@ const visibleProducts =
             text={text}
             locale={storeProfile.regionalLocale}
             currency={storeProfile.currency}
+            timeZone={storeProfile.timeZone}
             acceptOrdersWithoutStock={storeProfile.acceptOrdersWithoutStock}
             onOpen={(product) => {
               setSelectedProduct(product);
@@ -3073,6 +3187,7 @@ const visibleProducts =
             text={text}
             locale={storeProfile.regionalLocale}
             currency={storeProfile.currency}
+            timeZone={storeProfile.timeZone}
             acceptOrdersWithoutStock={storeProfile.acceptOrdersWithoutStock}
             madeToOrder
             onOpen={(product) => {
@@ -3108,6 +3223,7 @@ const visibleProducts =
             text={text}
             locale={storeProfile.regionalLocale}
             currency={storeProfile.currency}
+            timeZone={storeProfile.timeZone}
             acceptOrdersWithoutStock={storeProfile.acceptOrdersWithoutStock}
             onOpen={(product) => {
               setSelectedProduct(product);
@@ -3128,6 +3244,7 @@ const visibleProducts =
               text={text}
               locale={storeProfile.regionalLocale}
               currency={storeProfile.currency}
+              timeZone={storeProfile.timeZone}
               acceptOrdersWithoutStock={storeProfile.acceptOrdersWithoutStock}
               madeToOrder
               onOpen={(product) => {
@@ -3259,6 +3376,7 @@ const visibleProducts =
           text={text}
           locale={storeProfile.regionalLocale}
           currency={storeProfile.currency}
+          timeZone={storeProfile.timeZone}
           acceptOrdersWithoutStock={storeProfile.acceptOrdersWithoutStock}
           madeToOrder
           onOpen={(product) => {
@@ -3957,6 +4075,7 @@ const visibleProducts =
           }
           locale={storeProfile.regionalLocale}
           currency={storeProfile.currency}
+          timeZone={storeProfile.timeZone}
           text={text}
           language={language}
           onImageIndexChange={
@@ -4183,6 +4302,7 @@ function StoreProductGrid({
   text,
   locale,
   currency,
+  timeZone,
   acceptOrdersWithoutStock,
   madeToOrder = false,
   onOpen,
@@ -4199,6 +4319,7 @@ function StoreProductGrid({
   text: (typeof TEXT)[Language];
   locale: RegionalLocale;
   currency: SupportedCurrency;
+  timeZone: string;
   acceptOrdersWithoutStock: boolean;
   madeToOrder?: boolean;
   onOpen: (product: Product) => void;
@@ -4284,6 +4405,25 @@ function StoreProductGrid({
           const highlightedOfferText = highlightedOffer
             ? offerHeadline(highlightedOffer, language, currency, locale)
             : "";
+          const scheduledPriceDate = formatScheduledPriceDate(
+            product.scheduledPriceChange.startsAtMillis,
+            locale,
+            timeZone,
+          );
+          const scheduledNextPrice =
+            product.scheduledPriceChange.nextPriceMinor === null
+              ? ""
+              : formatMoneyMinor(
+                  product.scheduledPriceChange.nextPriceMinor,
+                  currency,
+                  locale,
+                );
+          const scheduledCountdown = product.scheduledPriceChange.showCountdown
+            ? scheduledPriceCountdownText(
+                language,
+                product.scheduledPriceChange.startsAtMillis,
+              )
+            : "";
 
           return (
             <article
@@ -4351,6 +4491,12 @@ function StoreProductGrid({
                   </span>
                 )}
 
+                {product.scheduledPriceStatus === "upcoming" && (
+                  <span className="absolute bottom-3 left-3 rounded-full bg-amber-500 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-white shadow-lg">
+                    {language === "ja" ? "値上げ予定" : language === "en" ? "Price rising soon" : "Preço sobe em breve"}
+                  </span>
+                )}
+
                 {product.extraImageUrls.length > 0 && (
                   <span className="absolute bottom-3 right-3 rounded-full bg-black/70 px-3 py-1 text-xs font-bold text-white">
                     +{product.extraImageUrls.length}
@@ -4369,15 +4515,43 @@ function StoreProductGrid({
                     ].join(" ")}>{product.category}</p>
                     <h3 className="mt-1 break-words text-sm font-black sm:text-lg">{product.name}</h3>
                   </div>
-                  <p className="shrink-0 text-sm font-black sm:text-lg">
-                    {formatMoneyMajor(product.price, currency, locale)}
-                  </p>
+                  <div className="shrink-0 text-right">
+                    {product.scheduledPriceStatus === "active" && (
+                      <p className="text-[10px] font-bold text-neutral-400 line-through sm:text-xs">
+                        {formatMoneyMajor(product.basePrice, currency, locale)}
+                      </p>
+                    )}
+                    <p className="text-sm font-black sm:text-lg">
+                      {formatMoneyMajor(product.price, currency, locale)}
+                    </p>
+                  </div>
                 </div>
 
                 {product.description && (
                   <p className="mt-3 hidden text-sm text-neutral-600 dark:text-neutral-300 sm:line-clamp-3">
                     {product.description}
                   </p>
+                )}
+
+                {product.scheduledPriceStatus === "upcoming" && (
+                  <div className="mt-3 rounded-xl border border-amber-300 bg-amber-50 px-3 py-3 text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
+                    <p className="text-[10px] font-black uppercase tracking-wider">
+                      {language === "ja" ? "価格改定のお知らせ" : language === "en" ? "Price increase notice" : "Aviso de aumento de preço"}
+                    </p>
+                    <p className="mt-1 text-xs font-black sm:text-sm">
+                      {language === "ja"
+                        ? `${scheduledPriceDate}までは現在価格。新価格：${scheduledNextPrice}`
+                        : language === "en"
+                          ? `Buy at today’s price until ${scheduledPriceDate}. New price: ${scheduledNextPrice}.`
+                          : `Aproveite o preço atual até ${scheduledPriceDate}. Novo preço: ${scheduledNextPrice}.`}
+                    </p>
+                    {product.scheduledPriceChange.message && (
+                      <p className="mt-1 text-xs font-semibold opacity-85">{product.scheduledPriceChange.message}</p>
+                    )}
+                    {scheduledCountdown && (
+                      <p className="mt-2 text-[11px] font-black uppercase tracking-wide">{scheduledCountdown}</p>
+                    )}
+                  </div>
                 )}
 
                 {madeToOrder && (
@@ -5075,6 +5249,7 @@ function ProductModal({
   imageIndex,
   locale,
   currency,
+  timeZone,
   text,
   language,
   onImageIndexChange,
@@ -5085,6 +5260,7 @@ function ProductModal({
   imageIndex: number;
   locale: string;
   currency: SupportedCurrency;
+  timeZone: string;
   text: (typeof TEXT)[Language];
   language: Language;
   onImageIndexChange: (
@@ -5095,6 +5271,25 @@ function ProductModal({
   const currentImage =
     images[imageIndex] ??
     "";
+  const scheduledPriceDate = formatScheduledPriceDate(
+    product.scheduledPriceChange.startsAtMillis,
+    locale,
+    timeZone,
+  );
+  const scheduledNextPrice =
+    product.scheduledPriceChange.nextPriceMinor === null
+      ? ""
+      : formatMoneyMinor(
+          product.scheduledPriceChange.nextPriceMinor,
+          currency,
+          locale,
+        );
+  const scheduledCountdown = product.scheduledPriceChange.showCountdown
+    ? scheduledPriceCountdownText(
+        language,
+        product.scheduledPriceChange.startsAtMillis,
+      )
+    : "";
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4">
@@ -5179,19 +5374,47 @@ function ProductModal({
               {product.name}
             </h3>
 
-            <p className="text-2xl font-black">
-              {formatCurrency(
-                product.price,
-                locale,
-                currency,
+            <div className="text-right">
+              {product.scheduledPriceStatus === "active" && (
+                <p className="text-sm font-bold text-neutral-400 line-through">
+                  {formatCurrency(product.basePrice, locale, currency)}
+                </p>
               )}
-            </p>
+              <p className="text-2xl font-black">
+                {formatCurrency(
+                  product.price,
+                  locale,
+                  currency,
+                )}
+              </p>
+            </div>
           </div>
 
           {product.description && (
             <p className="mt-4 whitespace-pre-wrap text-neutral-600 dark:text-neutral-300">
               {product.description}
             </p>
+          )}
+
+          {product.scheduledPriceStatus === "upcoming" && (
+            <div className="mt-4 rounded-2xl border border-amber-300 bg-amber-50 p-4 text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
+              <p className="text-xs font-black uppercase tracking-wider">
+                {language === "ja" ? "価格改定のお知らせ" : language === "en" ? "Price increase notice" : "Aviso de aumento de preço"}
+              </p>
+              <p className="mt-2 text-sm font-black">
+                {language === "ja"
+                  ? `${scheduledPriceDate}までは現在価格で購入できます。新価格：${scheduledNextPrice}`
+                  : language === "en"
+                    ? `Take advantage of the current price until ${scheduledPriceDate}. New price: ${scheduledNextPrice}.`
+                    : `Aproveite o preço atual até ${scheduledPriceDate}. Depois, o valor será ${scheduledNextPrice}.`}
+              </p>
+              {product.scheduledPriceChange.message && (
+                <p className="mt-2 text-sm font-semibold">{product.scheduledPriceChange.message}</p>
+              )}
+              {scheduledCountdown && (
+                <p className="mt-3 text-xs font-black uppercase tracking-wide">{scheduledCountdown}</p>
+              )}
+            </div>
           )}
 
           {product.availabilityStatus === "made_to_order" && (

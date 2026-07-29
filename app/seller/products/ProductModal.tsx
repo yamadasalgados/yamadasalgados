@@ -28,7 +28,7 @@ import {
 
 import { db } from "@/app/lib/firebase";
 import { normalizeProductInventory } from "@/app/lib/inventory-schema";
-import { majorToMinor } from "@/app/lib/money";
+import { majorToMinor, minorToMajor } from "@/app/lib/money";
 import {
   emptyProductContent,
   normalizeProductBundleConfig,
@@ -38,6 +38,12 @@ import {
   type ProductLanguage,
 } from "@/app/lib/product-schema";
 import { normalizeProductShipping } from "@/app/lib/shipping-schema";
+import {
+  dateTimeLocalToUtcMillis,
+  evaluateProductPrice,
+  normalizeProductScheduledPriceChange,
+  utcMillisToDateTimeLocal,
+} from "@/app/lib/scheduled-price";
 import {
   MAX_PRODUCTION_LEAD_TIME_DAYS,
   normalizeProductProductionLeadTime,
@@ -73,6 +79,7 @@ type ProductModalProps = {
   maxProducts: number;
   plan: PlanId;
   currency: SupportedCurrency;
+  timeZone: string;
   lang: string;
   t: (key: string) => string;
   onClose: () => void;
@@ -85,6 +92,11 @@ type Snapshot = {
   status: ProductStatus;
   costPrice: string;
   sellPrice: string;
+  scheduledPriceEnabled: boolean;
+  scheduledPrice: string;
+  scheduledPriceStartsAt: string;
+  scheduledPriceMessage: string;
+  scheduledPriceShowCountdown: boolean;
   quantity: string;
   stockQty: string;
   lowStockThreshold: string;
@@ -135,6 +147,7 @@ export default function ProductModal({
   maxProducts,
   plan,
   currency,
+  timeZone,
   lang,
   t,
   onClose,
@@ -162,6 +175,11 @@ export default function ProductModal({
   const [status, setStatus] = useState<ProductStatus>("active");
   const [costPrice, setCostPrice] = useState("");
   const [sellPrice, setSellPrice] = useState("");
+  const [scheduledPriceEnabled, setScheduledPriceEnabled] = useState(false);
+  const [scheduledPrice, setScheduledPrice] = useState("");
+  const [scheduledPriceStartsAt, setScheduledPriceStartsAt] = useState("");
+  const [scheduledPriceMessage, setScheduledPriceMessage] = useState("");
+  const [scheduledPriceShowCountdown, setScheduledPriceShowCountdown] = useState(true);
   const [quantity, setQuantity] = useState("1");
   const [stockQty, setStockQty] = useState("0");
   const [lowStockThreshold, setLowStockThreshold] = useState("5");
@@ -219,6 +237,8 @@ export default function ProductModal({
             limit: `このプランでは最大 ${maxProducts} 商品まで登録できます。`,
             invalidCost: "無効な原価です。",
             invalidSale: "無効な販売価格です。",
+            invalidScheduledPrice: "改定後の価格は現在価格より高く設定してください。",
+            invalidScheduledPriceStartsAt: "有効な適用日時を入力してください。",
             invalidUnits: "販売単位は1以上で入力してください。",
             invalidStock: "在庫数は0以上で入力してください。",
             invalidStockBelowReserved: "予約済み在庫を下回る数量には変更できません。",
@@ -248,6 +268,8 @@ export default function ProductModal({
               limit: `This plan allows up to ${maxProducts} products.`,
               invalidCost: "Invalid cost price.",
               invalidSale: "Invalid sale price.",
+              invalidScheduledPrice: "The new price must be higher than the current price.",
+              invalidScheduledPriceStartsAt: "Enter a valid effective date and time.",
               invalidUnits: "Units per sale must be at least 1.",
               invalidStock: "Stock must be zero or greater.",
               invalidStockBelowReserved: "Physical stock cannot be lower than the reserved quantity.",
@@ -276,6 +298,8 @@ export default function ProductModal({
               limit: `Este plano permite até ${maxProducts} produtos.`,
               invalidCost: "Preço de custo inválido.",
               invalidSale: "Preço de venda inválido.",
+              invalidScheduledPrice: "O novo preço precisa ser maior que o preço atual.",
+              invalidScheduledPriceStartsAt: "Informe uma data e hora válidas para a mudança.",
               invalidUnits: "As unidades por venda devem ser pelo menos 1.",
               invalidStock: "O estoque deve ser zero ou maior.",
               invalidStockBelowReserved: "O estoque físico não pode ficar abaixo da quantidade reservada.",
@@ -319,6 +343,11 @@ export default function ProductModal({
         status,
         costPrice,
         sellPrice,
+        scheduledPriceEnabled,
+        scheduledPrice,
+        scheduledPriceStartsAt,
+        scheduledPriceMessage,
+        scheduledPriceShowCountdown,
         quantity,
         stockQty,
         lowStockThreshold,
@@ -348,6 +377,11 @@ export default function ProductModal({
       newCategoryName,
       quantity,
       sellPrice,
+      scheduledPriceEnabled,
+      scheduledPrice,
+      scheduledPriceStartsAt,
+      scheduledPriceMessage,
+      scheduledPriceShowCountdown,
       status,
       stockQty,
       lowStockThreshold,
@@ -397,6 +431,10 @@ export default function ProductModal({
       activeProduct?.category || activeCategories[0] || "";
     const activeBundle = normalizeProductBundleConfig(activeProduct?.bundleConfig);
     const activeStorefront = normalizeProductStorefrontConfig(activeProduct?.storefront);
+    const activeScheduledPrice = normalizeProductScheduledPriceChange(
+      activeProduct?.scheduledPriceChange,
+      currency,
+    );
     const activeProductionLeadTime = normalizeProductProductionLeadTime(
       activeProduct?.productionLeadTime,
       activeProduct?.productionLeadTimeDays,
@@ -424,9 +462,20 @@ export default function ProductModal({
           ? String(activeProduct.costPrice)
           : "",
       sellPrice:
-        activeProduct && activeProduct.sellPrice > 0
-          ? String(activeProduct.sellPrice)
+        activeProduct && (activeProduct.baseSellPrice || activeProduct.sellPrice) > 0
+          ? String(activeProduct.baseSellPrice || activeProduct.sellPrice)
           : "",
+      scheduledPriceEnabled: activeScheduledPrice.enabled,
+      scheduledPrice:
+        activeScheduledPrice.nextPriceMinor !== null
+          ? String(minorToMajor(activeScheduledPrice.nextPriceMinor, currency))
+          : "",
+      scheduledPriceStartsAt: utcMillisToDateTimeLocal(
+        activeScheduledPrice.startsAtMillis,
+        timeZone,
+      ),
+      scheduledPriceMessage: activeScheduledPrice.message,
+      scheduledPriceShowCountdown: activeScheduledPrice.showCountdown,
       quantity: String(activeProduct?.quantity || 1),
       stockQty: String(activeInventory.quantity),
       lowStockThreshold: String(activeInventory.lowStockThreshold),
@@ -453,6 +502,11 @@ export default function ProductModal({
     setStatus(nextState.status);
     setCostPrice(nextState.costPrice);
     setSellPrice(nextState.sellPrice);
+    setScheduledPriceEnabled(nextState.scheduledPriceEnabled);
+    setScheduledPrice(nextState.scheduledPrice);
+    setScheduledPriceStartsAt(nextState.scheduledPriceStartsAt);
+    setScheduledPriceMessage(nextState.scheduledPriceMessage);
+    setScheduledPriceShowCountdown(nextState.scheduledPriceShowCountdown);
     setQuantity(nextState.quantity);
     setStockQty(nextState.stockQty);
     setLowStockThreshold(nextState.lowStockThreshold);
@@ -485,7 +539,7 @@ export default function ProductModal({
     setCategorySaving(false);
 
     initialSnapshotRef.current = buildSnapshot(nextState);
-  }, [revokePreviews]);
+  }, [currency, revokePreviews, timeZone]);
 
   useEffect(() => {
     setMounted(true);
@@ -570,6 +624,10 @@ export default function ProductModal({
     const errors: ProductFormErrors = {};
     const parsedCost = costPrice === "" ? 0 : toNum(costPrice);
     const parsedSale = sellPrice === "" ? 0 : toNum(sellPrice);
+    const parsedScheduledPrice = scheduledPrice === "" ? 0 : toNum(scheduledPrice);
+    const parsedScheduledPriceStartsAt = scheduledPriceEnabled
+      ? dateTimeLocalToUtcMillis(scheduledPriceStartsAt, timeZone)
+      : null;
     const parsedQuantity = toNum(quantity);
     const parsedStock = toNum(stockQty);
     const parsedThreshold = toNum(lowStockThreshold);
@@ -596,6 +654,18 @@ export default function ProductModal({
 
     if (Number.isNaN(parsedSale) || parsedSale <= 0) {
       errors.sellPrice = copy.invalidSale;
+    }
+
+    if (scheduledPriceEnabled) {
+      if (
+        Number.isNaN(parsedScheduledPrice) ||
+        parsedScheduledPrice <= parsedSale
+      ) {
+        errors.scheduledPrice = copy.invalidScheduledPrice;
+      }
+      if (parsedScheduledPriceStartsAt === null) {
+        errors.scheduledPriceStartsAt = copy.invalidScheduledPriceStartsAt;
+      }
     }
 
     if (Number.isNaN(parsedQuantity) || parsedQuantity < 1) {
@@ -677,6 +747,8 @@ export default function ProductModal({
         !(!editing && maxProducts > 0 && ownCount >= maxProducts),
       parsedCost,
       parsedSale,
+      parsedScheduledPrice,
+      parsedScheduledPriceStartsAt,
       parsedQuantity,
       parsedStock,
       parsedThreshold,
@@ -689,6 +761,8 @@ export default function ProductModal({
     copy.imageRequired,
     copy.invalidCost,
     copy.invalidSale,
+    copy.invalidScheduledPrice,
+    copy.invalidScheduledPriceStartsAt,
     copy.invalidStock,
     copy.invalidStockBelowReserved,
     copy.invalidUnits,
@@ -708,6 +782,10 @@ export default function ProductModal({
     plan,
     quantity,
     sellPrice,
+    scheduledPriceEnabled,
+    scheduledPrice,
+    scheduledPriceStartsAt,
+    timeZone,
     stockQty,
     lowStockThreshold,
     pickupEligible,
@@ -885,6 +963,33 @@ export default function ProductModal({
         normalizedContent.en.name ||
         normalizedContent.ja.name ||
         name.trim();
+      const basePriceMinor = majorToMinor(sale, currency);
+      const scheduledPriceStartsAtMillis = scheduledPriceEnabled
+        ? validation.parsedScheduledPriceStartsAt
+        : null;
+      const scheduledPriceNextMinor = scheduledPriceEnabled
+        ? majorToMinor(validation.parsedScheduledPrice, currency)
+        : null;
+      const scheduledPricePayload = {
+        enabled: scheduledPriceEnabled,
+        nextPriceMinor: scheduledPriceNextMinor,
+        startsAt:
+          scheduledPriceStartsAtMillis === null
+            ? null
+            : Timestamp.fromMillis(scheduledPriceStartsAtMillis),
+        startsAtMillis: scheduledPriceStartsAtMillis,
+        message: scheduledPriceMessage.trim().slice(0, 240),
+        showCountdown: scheduledPriceShowCountdown,
+      };
+      const normalizedScheduledPrice = normalizeProductScheduledPriceChange(
+        scheduledPricePayload,
+        currency,
+      );
+      const priceEvaluation = evaluateProductPrice({
+        basePriceMinor,
+        scheduledPriceChange: scheduledPricePayload,
+        currency,
+      });
 
       let payload = {
         schemaVersion: 2 as const,
@@ -899,7 +1004,9 @@ export default function ProductModal({
           normalizedContent[preferredLanguage].shortDescription ||
           normalizedContent.pt.shortDescription ||
           "",
-        priceMinor: majorToMinor(sale, currency),
+        priceMinor: basePriceMinor,
+        scheduledPriceChange: scheduledPricePayload,
+        priceScheduleVersion: 1,
         costPriceMinor: majorToMinor(cost, currency),
         unitsPerSale: units,
         inventory: {
@@ -1001,6 +1108,13 @@ export default function ProductModal({
         savedProduct = {
           ...product,
           ...payload,
+          priceMinor: priceEvaluation.effectivePriceMinor,
+          basePriceMinor,
+          effectivePriceMinor: priceEvaluation.effectivePriceMinor,
+          baseSellPrice: sale,
+          sellPrice: minorToMajor(priceEvaluation.effectivePriceMinor, currency),
+          scheduledPriceChange: normalizedScheduledPrice,
+          scheduledPriceStatus: priceEvaluation.status,
           updatedAt: localTimestamp,
         };
       } else {
@@ -1026,10 +1140,15 @@ export default function ProductModal({
           content: normalizedContent,
           name: fallbackName,
           description: payload.description,
-          priceMinor: payload.priceMinor,
+          priceMinor: priceEvaluation.effectivePriceMinor,
+          basePriceMinor,
+          effectivePriceMinor: priceEvaluation.effectivePriceMinor,
+          baseSellPrice: sale,
+          scheduledPriceChange: normalizedScheduledPrice,
+          scheduledPriceStatus: priceEvaluation.status,
           costPriceMinor: payload.costPriceMinor,
           costPrice: cost,
-          sellPrice: sale,
+          sellPrice: minorToMajor(priceEvaluation.effectivePriceMinor, currency),
           unitsPerSale: units,
           quantity: units,
           inventory: payload.inventory,
@@ -1055,7 +1174,18 @@ export default function ProductModal({
         category: savedProduct.category,
         status: savedProduct.status,
         costPrice: String(savedProduct.costPrice || ""),
-        sellPrice: String(savedProduct.sellPrice || ""),
+        sellPrice: String(savedProduct.baseSellPrice || savedProduct.sellPrice || ""),
+        scheduledPriceEnabled: savedProduct.scheduledPriceChange.enabled,
+        scheduledPrice:
+          savedProduct.scheduledPriceChange.nextPriceMinor !== null
+            ? String(minorToMajor(savedProduct.scheduledPriceChange.nextPriceMinor, currency))
+            : "",
+        scheduledPriceStartsAt: utcMillisToDateTimeLocal(
+          savedProduct.scheduledPriceChange.startsAtMillis,
+          timeZone,
+        ),
+        scheduledPriceMessage: savedProduct.scheduledPriceChange.message,
+        scheduledPriceShowCountdown: savedProduct.scheduledPriceChange.showCountdown,
         quantity: String(savedProduct.quantity || 1),
         stockQty: String(savedProduct.stockQty || 0),
         lowStockThreshold: String(savedProduct.lowStockThreshold || 0),
@@ -1080,6 +1210,21 @@ export default function ProductModal({
       initialSnapshotRef.current = finalSnapshot;
       setExistingImageUrl(savedProduct.imageUrl);
       setExistingExtraUrls(savedProduct.extraImageUrls || []);
+      setSellPrice(String(savedProduct.baseSellPrice || savedProduct.sellPrice || ""));
+      setScheduledPriceEnabled(savedProduct.scheduledPriceChange.enabled);
+      setScheduledPrice(
+        savedProduct.scheduledPriceChange.nextPriceMinor !== null
+          ? String(minorToMajor(savedProduct.scheduledPriceChange.nextPriceMinor, currency))
+          : "",
+      );
+      setScheduledPriceStartsAt(
+        utcMillisToDateTimeLocal(
+          savedProduct.scheduledPriceChange.startsAtMillis,
+          timeZone,
+        ),
+      );
+      setScheduledPriceMessage(savedProduct.scheduledPriceChange.message);
+      setScheduledPriceShowCountdown(savedProduct.scheduledPriceChange.showCountdown);
       setPickupEligible(savedProduct.shipping.fulfillment.pickup);
       setLocalDeliveryEligible(savedProduct.shipping.fulfillment.localDelivery);
       setPostalEligible(savedProduct.shipping.fulfillment.postal);
@@ -1151,6 +1296,10 @@ export default function ProductModal({
     localDeliveryEligible,
     postalEligible,
     productionLeadTimeDays,
+    scheduledPriceEnabled,
+    scheduledPriceMessage,
+    scheduledPriceShowCountdown,
+    timeZone,
     storefrontSubgroup,
     storefrontSubgroupOrder,
     storefrontProductOrder,
@@ -1266,7 +1415,29 @@ export default function ProductModal({
                 setSellPrice={(value) => {
                   setSellPrice(value);
                   clearFieldError("sellPrice");
+                  clearFieldError("scheduledPrice");
                 }}
+                timeZone={timeZone}
+                scheduledPriceEnabled={scheduledPriceEnabled}
+                setScheduledPriceEnabled={(value) => {
+                  setScheduledPriceEnabled(value);
+                  clearFieldError("scheduledPrice");
+                  clearFieldError("scheduledPriceStartsAt");
+                }}
+                scheduledPrice={scheduledPrice}
+                setScheduledPrice={(value) => {
+                  setScheduledPrice(value);
+                  clearFieldError("scheduledPrice");
+                }}
+                scheduledPriceStartsAt={scheduledPriceStartsAt}
+                setScheduledPriceStartsAt={(value) => {
+                  setScheduledPriceStartsAt(value);
+                  clearFieldError("scheduledPriceStartsAt");
+                }}
+                scheduledPriceMessage={scheduledPriceMessage}
+                setScheduledPriceMessage={setScheduledPriceMessage}
+                scheduledPriceShowCountdown={scheduledPriceShowCountdown}
+                setScheduledPriceShowCountdown={setScheduledPriceShowCountdown}
                 quantity={quantity}
                 setQuantity={(value) => {
                   setQuantity(value);

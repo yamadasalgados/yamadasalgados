@@ -3,6 +3,7 @@
 import type { RefObject } from "react";
 import type { ProductContent, ProductLanguage } from "@/app/lib/product-schema";
 import type { SupportedCurrency } from "@/app/types/regional";
+import { dateTimeLocalToUtcMillis, formatScheduledPriceDate } from "@/app/lib/scheduled-price";
 import type { ProductDoc, ProductFormErrors, ProductStatus } from "./product-types";
 
 type Props = {
@@ -29,6 +30,17 @@ type Props = {
   setCostPrice: (value: string) => void;
   sellPrice: string;
   setSellPrice: (value: string) => void;
+  timeZone: string;
+  scheduledPriceEnabled: boolean;
+  setScheduledPriceEnabled: (value: boolean) => void;
+  scheduledPrice: string;
+  setScheduledPrice: (value: string) => void;
+  scheduledPriceStartsAt: string;
+  setScheduledPriceStartsAt: (value: string) => void;
+  scheduledPriceMessage: string;
+  setScheduledPriceMessage: (value: string) => void;
+  scheduledPriceShowCountdown: boolean;
+  setScheduledPriceShowCountdown: (value: boolean) => void;
   quantity: string;
   setQuantity: (value: string) => void;
   reservedStock: number;
@@ -94,7 +106,10 @@ export default function ProductForm(props: Props) {
     categories, category, setCategory, creatingCategory, setCreatingCategory,
     newCategoryName, setNewCategoryName, onCreateCategory, legacyName,
     setLegacyName, content, setContent, costPrice, setCostPrice, sellPrice,
-    setSellPrice, quantity, setQuantity, reservedStock, stockQty, setStockQty,
+    setSellPrice, timeZone, scheduledPriceEnabled, setScheduledPriceEnabled,
+    scheduledPrice, setScheduledPrice, scheduledPriceStartsAt, setScheduledPriceStartsAt,
+    scheduledPriceMessage, setScheduledPriceMessage, scheduledPriceShowCountdown,
+    setScheduledPriceShowCountdown, quantity, setQuantity, reservedStock, stockQty, setStockQty,
     lowStockThreshold, setLowStockThreshold, inventoryTracked,
     setInventoryTracked, pickupEligible, setPickupEligible,
     localDeliveryEligible, setLocalDeliveryEligible, postalEligible, setPostalEligible,
@@ -179,6 +194,55 @@ export default function ProductForm(props: Props) {
           help: "Aplicado quando o item é sob encomenda ou a quantidade pedida ultrapassa o estoque. O checkout calcula automaticamente a primeira data disponível.",
           madeToOrderHelp: "Produtos sob encomenda precisam ter pelo menos 1 dia de produção.",
         };
+
+  const scheduledPriceCopy = lang === "ja"
+    ? {
+        title: "価格改定の予約",
+        help: "値上げ日時までは現在価格と告知を表示し、日時を過ぎると注文時の価格を自動で切り替えます。",
+        toggle: "値上げを予約する",
+        nextPrice: "改定後の価格",
+        startsAt: "適用日時",
+        message: "お客様へのメッセージ（任意）",
+        messagePlaceholder: "例：今の価格で購入できる最後のチャンスです。",
+        countdown: "カウントダウンを表示",
+        timezone: "販売者タイムゾーン",
+        active: "この日時はすでに過ぎています。注文では改定後の価格が使われます。",
+        upcoming: "この日時まで現在価格が使われます。",
+      }
+    : lang === "en"
+      ? {
+          title: "Scheduled price increase",
+          help: "The current price and warning stay visible until the selected time. Checkout switches to the new price automatically afterwards.",
+          toggle: "Schedule a price increase",
+          nextPrice: "New price",
+          startsAt: "Effective date and time",
+          message: "Customer message (optional)",
+          messagePlaceholder: "Example: Last chance to buy at the current price.",
+          countdown: "Show countdown",
+          timezone: "Seller time zone",
+          active: "This time has passed. Checkout is already using the new price.",
+          upcoming: "The current price remains valid until this time.",
+        }
+      : {
+          title: "Aumento de preço programado",
+          help: "Até a data escolhida, a loja mostra o preço atual e o aviso. Depois, o checkout passa a cobrar automaticamente o novo preço.",
+          toggle: "Programar aumento de preço",
+          nextPrice: "Novo preço",
+          startsAt: "Data e hora da mudança",
+          message: "Mensagem para o cliente (opcional)",
+          messagePlaceholder: "Ex.: Última chance para comprar pelo preço atual.",
+          countdown: "Mostrar contagem regressiva",
+          timezone: "Fuso horário do seller",
+          active: "Esse horário já passou. O checkout já está usando o novo preço.",
+          upcoming: "O preço atual continua válido até esse horário.",
+        };
+
+  const scheduledStartsAtMillis = scheduledPriceStartsAt
+    ? dateTimeLocalToUtcMillis(scheduledPriceStartsAt, timeZone)
+    : null;
+  const scheduledDateLabel = scheduledStartsAtMillis === null
+    ? ""
+    : formatScheduledPriceDate(scheduledStartsAtMillis, lang === "pt" ? "pt-BR" : lang === "ja" ? "ja-JP" : "en-US", timeZone);
 
   const updateContent = (language: ProductLanguage, field: keyof ProductContent[ProductLanguage], value: string) => {
     setContent({ ...content, [language]: { ...content[language], [field]: value } });
@@ -283,6 +347,49 @@ export default function ProductForm(props: Props) {
 
     <div className="space-y-1"><label className="text-xs font-black uppercase tracking-wider">{costLabel}</label><input value={costPrice} onChange={(e) => setCostPrice(e.target.value)} inputMode="decimal" disabled={disabled} className={fieldClass(Boolean(errors.costPrice))} /><FieldError message={errors.costPrice} /></div>
     <div className="space-y-1"><label className="text-xs font-black uppercase tracking-wider">{saleLabel}</label><input value={sellPrice} onChange={(e) => setSellPrice(e.target.value)} inputMode="decimal" disabled={disabled} className={fieldClass(Boolean(errors.sellPrice))} /><FieldError message={errors.sellPrice} /></div>
+
+    <section className="space-y-4 rounded-2xl border border-amber-200 bg-amber-50/70 p-4 dark:border-amber-900/50 dark:bg-amber-950/20 sm:col-span-2">
+      <label className="flex cursor-pointer items-start justify-between gap-4">
+        <div>
+          <p className="text-sm font-black">{scheduledPriceCopy.title}</p>
+          <p className="mt-1 text-xs font-semibold text-amber-900/75 dark:text-amber-200/75">{scheduledPriceCopy.help}</p>
+        </div>
+        <input type="checkbox" checked={scheduledPriceEnabled} onChange={(event) => setScheduledPriceEnabled(event.target.checked)} disabled={disabled} className="mt-1 h-5 w-5 accent-amber-600" />
+      </label>
+
+      {scheduledPriceEnabled && (
+        <div className="space-y-4 border-t border-amber-200 pt-4 dark:border-amber-900/50">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1">
+              <label className="text-xs font-black uppercase tracking-wider">{scheduledPriceCopy.nextPrice}</label>
+              <input value={scheduledPrice} onChange={(event) => setScheduledPrice(event.target.value)} inputMode="decimal" disabled={disabled} className={fieldClass(Boolean(errors.scheduledPrice))} />
+              <FieldError message={errors.scheduledPrice} />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-black uppercase tracking-wider">{scheduledPriceCopy.startsAt}</label>
+              <input type="datetime-local" value={scheduledPriceStartsAt} onChange={(event) => setScheduledPriceStartsAt(event.target.value)} disabled={disabled} className={fieldClass(Boolean(errors.scheduledPriceStartsAt))} />
+              <FieldError message={errors.scheduledPriceStartsAt} />
+            </div>
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-xs font-black uppercase tracking-wider">{scheduledPriceCopy.message}</label>
+            <textarea value={scheduledPriceMessage} onChange={(event) => setScheduledPriceMessage(event.target.value.slice(0, 240))} rows={2} maxLength={240} placeholder={scheduledPriceCopy.messagePlaceholder} disabled={disabled} className={fieldClass()} />
+            <p className="text-right text-[10px] font-bold text-neutral-400">{scheduledPriceMessage.length}/240</p>
+          </div>
+
+          <label className="flex items-center gap-3 rounded-xl border border-amber-200 bg-white px-3 py-3 text-sm font-bold dark:border-amber-900/50 dark:bg-neutral-950/60">
+            <input type="checkbox" checked={scheduledPriceShowCountdown} onChange={(event) => setScheduledPriceShowCountdown(event.target.checked)} disabled={disabled} className="h-5 w-5 accent-amber-600" />
+            <span>{scheduledPriceCopy.countdown}</span>
+          </label>
+
+          <div className="rounded-xl bg-amber-100/70 px-3 py-2 text-xs font-bold text-amber-900 dark:bg-amber-950/50 dark:text-amber-200">
+            <p>{scheduledPriceCopy.timezone}: <span className="font-black">{timeZone}</span></p>
+            {scheduledDateLabel && <p className="mt-1">{scheduledStartsAtMillis !== null && scheduledStartsAtMillis <= Date.now() ? scheduledPriceCopy.active : scheduledPriceCopy.upcoming} {scheduledDateLabel}</p>}
+          </div>
+        </div>
+      )}
+    </section>
     <div className="space-y-1"><label className="text-xs font-black uppercase tracking-wider">{copy.units}</label><input value={quantity} onChange={(e) => setQuantity(e.target.value)} inputMode="numeric" disabled={disabled} className={fieldClass(Boolean(errors.quantity))} /><FieldError message={errors.quantity} /></div>
     <div className="space-y-1">
       <label className="text-xs font-black uppercase tracking-wider">{copy.stock}</label>

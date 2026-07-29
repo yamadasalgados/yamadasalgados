@@ -2,6 +2,7 @@ import type { Timestamp } from "firebase/firestore";
 import type { ProductBundleConfig, ProductContent, ProductStorefrontConfig } from "@/app/lib/product-schema";
 import type { ProductShipping } from "@/app/lib/shipping-schema";
 import type { ProductProductionLeadTime } from "@/app/lib/production-lead-time";
+import type { ProductScheduledPriceChange, ScheduledPriceStatus } from "@/app/lib/scheduled-price";
 
 export type CategoryId = string;
 export type ProductStatus = "active" | "made_to_order" | "hidden" | "inactive";
@@ -29,6 +30,11 @@ export type ProductDoc = {
   name: string;
   description?: string;
   priceMinor: number;
+  basePriceMinor: number;
+  effectivePriceMinor: number;
+  baseSellPrice: number;
+  scheduledPriceChange: ProductScheduledPriceChange;
+  scheduledPriceStatus: ScheduledPriceStatus;
   costPriceMinor: number | null;
   costPrice: number;
   sellPrice: number;
@@ -56,6 +62,8 @@ export type ProductFormField =
   | "category"
   | "costPrice"
   | "sellPrice"
+  | "scheduledPrice"
+  | "scheduledPriceStartsAt"
   | "quantity"
   | "stockQty"
   | "lowStockThreshold"

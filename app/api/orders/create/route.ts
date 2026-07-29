@@ -18,6 +18,7 @@ import {
   type ProductProductionLeadTime,
 } from "@/app/lib/production-lead-time";
 import { normalizeProductBundleConfig } from "@/app/lib/product-schema";
+import { evaluateProductPrice, type ProductScheduledPriceChange, type ScheduledPriceStatus } from "@/app/lib/scheduled-price";
 import {
   evaluateRewardSelection,
   rewardProductPointCost,
@@ -54,6 +55,7 @@ type PublicOrderRequest = {
   selectedOfferId?: unknown;
   customerClientId?: unknown;
   quantities?: unknown;
+  pricing?: unknown;
   bundleSelections?: unknown;
   rewards?: unknown;
   customer?: unknown;
@@ -69,6 +71,7 @@ type CleanOrderRequest = {
   selectedOfferId: string;
   customerClientId: string;
   quantities: Record<string, number>;
+  pricing: Record<string, number>;
   bundleSelections: Record<string, {
     kitQuantity: number;
     selections: Record<string, number>;
@@ -111,6 +114,7 @@ type OrderErrorCode =
   | "OFFER_UNAVAILABLE"
   | "SHIPPING_UNAVAILABLE"
   | "FULFILLMENT_DATE_UNAVAILABLE"
+  | "PRICE_CHANGED"
   | "IDEMPOTENCY_CONFLICT"
   | "TOO_MANY_REQUESTS"
   | "AUTH_REQUIRED"
@@ -133,6 +137,9 @@ type ProductLine = {
   productId: string;
   quantity: number;
   priceMinor: number;
+  basePriceMinor: number;
+  scheduledPriceStatus: ScheduledPriceStatus;
+  scheduledPriceChange: ProductScheduledPriceChange;
   name: string;
   imageUrl: string;
   category: string;
@@ -310,6 +317,20 @@ function cleanBundleSelections(value: unknown): CleanOrderRequest["bundleSelecti
   return result;
 }
 
+function cleanPricing(value: unknown): Record<string, number> {
+  const raw = record(value);
+  const result: Record<string, number> = {};
+
+  for (const [rawProductId, rawPrice] of Object.entries(raw)) {
+    const productId = cleanString(rawProductId, 160);
+    if (!productId || productId.includes("/")) continue;
+    const priceMinor = cleanInteger(rawPrice, 0, 2_000_000_000);
+    result[productId] = priceMinor;
+  }
+
+  return result;
+}
+
 function cleanRequest(value: unknown): CleanOrderRequest {
   const raw = record(value) as PublicOrderRequest;
   const source = cleanSource(raw.source);
@@ -321,6 +342,7 @@ function cleanRequest(value: unknown): CleanOrderRequest {
   const shipping = record(delivery.shipping);
   const rewards = record(raw.rewards);
   const { quantities, totalItems } = cleanQuantities(raw.quantities);
+  const pricing = cleanPricing(raw.pricing);
   const bundleSelections = cleanBundleSelections(raw.bundleSelections);
 
   if (!sellerId || sellerId.includes("/")) {
@@ -394,6 +416,7 @@ function cleanRequest(value: unknown): CleanOrderRequest {
     selectedOfferId: cleanString(raw.selectedOfferId, 160),
     customerClientId: cleanString(raw.customerClientId, 200),
     quantities,
+    pricing,
     bundleSelections,
     totalItems,
     rewards: {
@@ -529,6 +552,7 @@ function normalizeProductLine(params: {
   language: Language;
   defaultLanguage: Language;
   source: OrderSource;
+  nowMillis: number;
 }): ProductLine {
   const {
     productId,
@@ -539,6 +563,7 @@ function normalizeProductLine(params: {
     language,
     defaultLanguage,
     source,
+    nowMillis,
   } = params;
 
   const explicitAvailabilityMode = cleanString(
@@ -584,10 +609,18 @@ function normalizeProductLine(params: {
     );
   }
 
-  const priceMinor =
+  const basePriceMinor =
     typeof raw.priceMinor === "number" && Number.isFinite(raw.priceMinor)
       ? Math.max(0, Math.round(raw.priceMinor))
       : majorToMinor(raw.sellPrice ?? raw.price ?? raw.shadowSell, currency);
+  const priceEvaluation = evaluateProductPrice({
+    basePriceMinor,
+    scheduledPriceChange:
+      catalogRaw.scheduledPriceChange ?? raw.scheduledPriceChange,
+    currency,
+    now: nowMillis,
+  });
+  const priceMinor = priceEvaluation.effectivePriceMinor;
 
   if (priceMinor <= 0) {
     throw new OrderError(
@@ -649,6 +682,9 @@ function normalizeProductLine(params: {
     productId,
     quantity,
     priceMinor,
+    basePriceMinor,
+    scheduledPriceStatus: priceEvaluation.status,
+    scheduledPriceChange: priceEvaluation.scheduledPriceChange,
     name: resolveLocalizedName(raw, language, defaultLanguage, fallbackName),
     imageUrl: cleanString(raw.imageUrl ?? raw.image, 2000),
     category: cleanString(raw.category ?? raw.categoryName, 160),
@@ -969,6 +1005,7 @@ export async function POST(request: NextRequest) {
       customerClientId: clean.customerClientId,
       customerUid: customerIdentity?.uid || "",
       quantities: clean.quantities,
+      pricing: clean.pricing,
       bundleSelections: clean.bundleSelections,
       rewards: clean.rewards,
       customer: clean.customer,
@@ -1174,7 +1211,20 @@ export async function POST(request: NextRequest) {
             language: clean.language,
             defaultLanguage,
             source: clean.source,
+            nowMillis,
           }),
+        );
+      }
+
+      const changedPriceLines = lines.filter((line) => {
+        const submittedPrice = clean.pricing[line.productId];
+        return typeof submittedPrice === "number" && submittedPrice !== line.priceMinor;
+      });
+      if (changedPriceLines.length > 0) {
+        throw new OrderError(
+          "PRICE_CHANGED",
+          "O preço de um ou mais produtos mudou. Revise o carrinho e tente novamente.",
+          409,
         );
       }
 
@@ -1632,6 +1682,20 @@ export async function POST(request: NextRequest) {
           quantity: line.quantity,
           unitPriceMinor: line.priceMinor,
           unitPrice: minorToMajor(line.priceMinor, currency),
+          baseUnitPriceMinor: line.basePriceMinor,
+          baseUnitPrice: minorToMajor(line.basePriceMinor, currency),
+          priceSource:
+            line.scheduledPriceStatus === "active"
+              ? "scheduled_increase"
+              : "base_price",
+          scheduledPriceStatus: line.scheduledPriceStatus,
+          scheduledPriceChange: {
+            enabled: line.scheduledPriceChange.enabled,
+            nextPriceMinor: line.scheduledPriceChange.nextPriceMinor,
+            startsAtMillis: line.scheduledPriceChange.startsAtMillis,
+            message: line.scheduledPriceChange.message || null,
+            showCountdown: line.scheduledPriceChange.showCountdown,
+          },
           subtotalMinor: line.priceMinor * line.quantity,
           subtotal: minorToMajor(line.priceMinor * line.quantity, currency),
           imageUrl: line.imageUrl,
@@ -1712,6 +1776,17 @@ export async function POST(request: NextRequest) {
         quantities,
         items,
         totalItems: clean.totalItems,
+        pricingSchedule: {
+          schemaVersion: 1,
+          evaluatedAt: now,
+          evaluatedAtMillis: nowMillis,
+          scheduledProductIds: lines
+            .filter((line) => line.scheduledPriceStatus === "upcoming" || line.scheduledPriceStatus === "active")
+            .map((line) => line.productId),
+          appliedProductIds: lines
+            .filter((line) => line.scheduledPriceStatus === "active")
+            .map((line) => line.productId),
+        },
         totalSelectedUnits: Array.from(bundleSnapshots.values()).reduce((sum, bundle) => sum + bundle.totalUnits, 0),
         subtotalMinor,
         discountMinor,

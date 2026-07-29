@@ -13,6 +13,7 @@ export type PublicOrderErrorCode =
   | "OFFER_UNAVAILABLE"
   | "SHIPPING_UNAVAILABLE"
   | "FULFILLMENT_DATE_UNAVAILABLE"
+  | "PRICE_CHANGED"
   | "IDEMPOTENCY_CONFLICT"
   | "TOO_MANY_REQUESTS"
   | "NETWORK_ERROR"
@@ -29,6 +30,7 @@ export type CreatePublicOrderInput = {
   selectedOfferId?: string;
   customerClientId?: string;
   quantities: Record<string, number>;
+  pricing?: Record<string, number>;
   bundleSelections?: Record<string, {
     kitQuantity: number;
     selections: Array<{ productId: string; quantity: number }>;
@@ -191,6 +193,7 @@ function isKnownErrorCode(value: unknown): value is PublicOrderErrorCode {
     value === "OFFER_UNAVAILABLE" ||
     value === "SHIPPING_UNAVAILABLE" ||
     value === "FULFILLMENT_DATE_UNAVAILABLE" ||
+    value === "PRICE_CHANGED" ||
     value === "IDEMPOTENCY_CONFLICT" ||
     value === "TOO_MANY_REQUESTS" ||
     value === "NETWORK_ERROR" ||
