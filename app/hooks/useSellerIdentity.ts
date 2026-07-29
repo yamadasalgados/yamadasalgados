@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { doc, onSnapshot } from "firebase/firestore";
 
-import { db } from "@/app/lib/firebase";
+import {
+  fetchPublicSellerProfile,
+} from "@/app/lib/public-seller-client";
 import {
   EMPTY_SELLER_IDENTITY,
   normalizeSellerIdentity,
@@ -22,20 +23,21 @@ export function useSellerIdentity(sellerId: string): SellerIdentity {
       return;
     }
 
-    return onSnapshot(
-      doc(db, "sellers", normalizedSellerId),
-      (snapshot) => {
-        setIdentity(
-          snapshot.exists()
-            ? normalizeSellerIdentity(snapshot.data())
-            : EMPTY_SELLER_IDENTITY,
-        );
-      },
-      (error) => {
+    const controller = new AbortController();
+
+    void fetchPublicSellerProfile(normalizedSellerId, {
+      signal: controller.signal,
+    })
+      .then((profile) => {
+        setIdentity(normalizeSellerIdentity(profile));
+      })
+      .catch((error) => {
+        if (controller.signal.aborted) return;
         console.warn("[useSellerIdentity] profile load failed:", error);
         setIdentity(EMPTY_SELLER_IDENTITY);
-      },
-    );
+      });
+
+    return () => controller.abort();
   }, [sellerId]);
 
   return identity;

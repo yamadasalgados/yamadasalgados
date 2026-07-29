@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 
 import { getAdminAuth, getAdminDb } from "@/app/lib/firebaseAdmin";
+import { isAdminOrActiveSellerOwnerRecord } from "@/app/lib/seller-authorization";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -64,13 +65,14 @@ async function authorizeSeller(request: NextRequest, sellerId: string) {
   );
   const userData = userSnapshot.data() ?? {};
   const sellerData = sellerSnapshot.data() ?? {};
-  const adminUser = userData.role === "admin" && userData.accountStatus === "active";
-  const owner =
-    decoded.uid === sellerId ||
-    userData.sellerId === sellerId ||
-    sellerData.ownerUid === decoded.uid;
+  const authorized = isAdminOrActiveSellerOwnerRecord({
+    uid: decoded.uid,
+    sellerId,
+    userData,
+    sellerData,
+  });
 
-  if (!adminUser && !owner) {
+  if (!authorized) {
     throw new SellerPushError("FORBIDDEN", "Você não pode ativar notificações para esta loja.", 403);
   }
 

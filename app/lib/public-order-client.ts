@@ -88,6 +88,7 @@ export type CreatePublicOrderResult = {
   rewardRecipientType: "customer" | "event_presenter" | "none";
   rewardRecipientName: string | null;
   rewardMode: PublicOrderRewardMode;
+  chatAccessToken: string | null;
   replayed: boolean;
 };
 

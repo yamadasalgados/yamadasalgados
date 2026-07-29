@@ -2,6 +2,7 @@ import * as admin from "firebase-admin";
 import { NextRequest, NextResponse } from "next/server";
 
 import { getAdminAuth, getAdminDb } from "@/app/lib/firebaseAdmin";
+import { isAdminOrOperationalSellerOwnerRecord } from "@/app/lib/seller-authorization";
 import { normalizeProductInventory } from "@/app/lib/inventory-schema";
 
 export const runtime = "nodejs";
@@ -143,14 +144,14 @@ async function authorizeSeller(params: {
   );
   const userData = userSnapshot.data() ?? {};
   const sellerData = sellerSnapshot.data() ?? {};
-  const adminUser =
-    userData.role === "admin" && userData.accountStatus === "active";
-  const owner =
-    decoded.uid === sellerId ||
-    userData.sellerId === sellerId ||
-    sellerData.ownerUid === decoded.uid;
+  const authorized = isAdminOrOperationalSellerOwnerRecord({
+    uid: decoded.uid,
+    sellerId,
+    userData,
+    sellerData,
+  });
 
-  if (!adminUser && !owner) {
+  if (!authorized) {
     throw new StatusError("FORBIDDEN", "Você não pode alterar este pedido.", 403);
   }
 

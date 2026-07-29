@@ -19,6 +19,10 @@ service cloud.firestore {
       return /databases/$(database)/documents/sellers/$(sellerId);
     }
 
+    function eventPath(sellerId, eventId) {
+      return /databases/$(database)/documents/sellers/$(sellerId)/events/$(eventId);
+    }
+
     function currentUserExists() {
       return isSignedIn()
         && exists(userPath(request.auth.uid));
@@ -41,16 +45,68 @@ service cloud.firestore {
         && currentUserData().accountStatus == "active";
     }
 
-    function isSellerOwner(sellerId) {
-      return isSignedIn() && (
-        request.auth.uid == sellerId
-        || currentSellerId() == sellerId
-        || (
-          exists(sellerPath(sellerId))
-          && get(sellerPath(sellerId)).data.ownerUid
+    function accessIsCurrentlyActive(access) {
+      return access.status == "active"
+        && (
+          access.mode == "lifetime"
+          || (
+            access.mode == "subscription"
+            && access.currentPeriodEnd is timestamp
+            && access.currentPeriodEnd > request.time
+          )
+        );
+    }
+
+    function sellerDocumentIsActive(sellerId) {
+      return exists(sellerPath(sellerId))
+        && get(sellerPath(sellerId)).data.accountStatus == "active";
+    }
+
+    function isSellerPrincipal(sellerId) {
+      return currentUserExists()
+        && currentUserData().role == "seller"
+        && currentUserData().accountStatus == "active"
+        && exists(sellerPath(sellerId))
+        && (
+          currentSellerId() == sellerId
+          || get(sellerPath(sellerId)).data.ownerUid
             == request.auth.uid
-        )
-      );
+        );
+    }
+
+    function isSellerOwner(sellerId) {
+      return isSellerPrincipal(sellerId)
+        && sellerDocumentIsActive(sellerId);
+    }
+
+    function sellerCanOperate(sellerId) {
+      return isSellerOwner(sellerId)
+        && get(sellerPath(sellerId)).data.onboarding is map
+        && get(sellerPath(sellerId)).data.onboarding.complete == true
+        && get(sellerPath(sellerId)).data.access is map
+        && accessIsCurrentlyActive(
+          get(sellerPath(sellerId)).data.access
+        );
+    }
+
+    function sellerIsPubliclyAvailable(sellerId) {
+      return sellerDocumentIsActive(sellerId)
+        && get(sellerPath(sellerId)).data.onboarding is map
+        && get(sellerPath(sellerId)).data.onboarding.complete == true
+        && get(sellerPath(sellerId)).data.access is map
+        && accessIsCurrentlyActive(
+          get(sellerPath(sellerId)).data.access
+        );
+    }
+
+    function eventIsPubliclyAvailable(sellerId, eventId) {
+      return sellerIsPubliclyAvailable(sellerId)
+        && exists(eventPath(sellerId, eventId))
+        && get(eventPath(sellerId, eventId)).data.status == "active"
+        && (
+          !get(eventPath(sellerId, eventId)).data.keys().hasAny(["isActive"])
+          || get(eventPath(sellerId, eventId)).data.isActive != false
+        );
     }
 
     // =========================================================
@@ -183,18 +239,6 @@ service cloud.firestore {
           : plan == "business"
             ? 3
             : -1;
-    }
-
-    function accessIsCurrentlyActive(access) {
-      return access.status == "active"
-        && (
-          access.mode == "lifetime"
-          || (
-            access.mode == "subscription"
-            && access.currentPeriodEnd is timestamp
-            && access.currentPeriodEnd > request.time
-          )
-        );
     }
 
     function expectedRequestType(
@@ -695,8 +739,11 @@ service cloud.firestore {
         ]);
       }
 
-      // O documento contém os dados necessários para a loja pública.
-      allow read: if true;
+      // O documento raiz contém ownership, assinatura e limites privados.
+      // A vitrine pública recebe apenas um DTO sanitizado via /api/public/sellers.
+      allow read:
+        if isAdmin()
+        || isSellerPrincipal(sellerId);
 
       allow create:
         if isAdmin()
@@ -821,35 +868,56 @@ service cloud.firestore {
       // =======================================================
 
       match /categories/{categoryId} {
+        // Categorias são administrativas; a loja deriva as vitrines dos
+        // produtos públicos e não precisa listar esta coleção.
         allow read:
-          if true;
+          if isAdmin()
+          || isSellerOwner(sellerId);
 
         allow create, update, delete:
           if isAdmin()
-          || isSellerOwner(sellerId);
+          || sellerCanOperate(sellerId);
       }
 
       match /products/{productId} {
         allow read:
-          if true;
+          if isAdmin()
+          || isSellerOwner(sellerId)
+          || (
+            sellerIsPubliclyAvailable(sellerId)
+            && resource.data.status in [
+              "active",
+              "made_to_order"
+            ]
+          );
 
         allow create, update, delete:
           if isAdmin()
-          || isSellerOwner(sellerId);
+          || sellerCanOperate(sellerId);
       }
 
       match /offers/{offerId} {
-        // A loja pública precisa ler somente as ofertas do seller.
-        allow read: if true;
+        allow read:
+          if isAdmin()
+          || isSellerOwner(sellerId)
+          || (
+            sellerIsPubliclyAvailable(sellerId)
+            && resource.data.status == "active"
+          );
 
         allow create, update, delete:
           if isAdmin()
-          || isSellerOwner(sellerId);
+          || sellerCanOperate(sellerId);
       }
 
       match /settings/{settingId} {
-        // A loja pública lê somente a configuração de envio postal.
-        allow read: if settingId == "shipping";
+        allow read:
+          if isAdmin()
+          || isSellerOwner(sellerId)
+          || (
+            settingId == "shipping"
+            && sellerIsPubliclyAvailable(sellerId)
+          );
 
         allow create, update, delete:
           if isAdmin()
@@ -892,7 +960,7 @@ service cloud.firestore {
         allow update:
           if isAdmin()
           || (
-            isSellerOwner(sellerId)
+            sellerCanOperate(sellerId)
             && validSellerOrderMetadataUpdate()
           );
 
@@ -905,40 +973,47 @@ service cloud.firestore {
       // =======================================================
 
       match /events/{eventId} {
-        allow read: if true;
+        allow read:
+          if isAdmin()
+          || isSellerOwner(sellerId)
+          || eventIsPubliclyAvailable(sellerId, eventId);
 
         allow create, update, delete:
           if isAdmin()
-          || isSellerOwner(sellerId);
+          || sellerCanOperate(sellerId);
 
         match /products/{productId} {
-          allow read: if true;
+          allow read:
+            if isAdmin()
+            || isSellerOwner(sellerId)
+            || eventIsPubliclyAvailable(sellerId, eventId);
           allow create, update, delete:
             if isAdmin()
-            || isSellerOwner(sellerId);
+            || sellerCanOperate(sellerId);
         }
 
         match /items/{itemId} {
-          allow read: if true;
+          allow read:
+            if isAdmin()
+            || isSellerOwner(sellerId)
+            || eventIsPubliclyAvailable(sellerId, eventId);
           allow create, update, delete:
             if isAdmin()
-            || isSellerOwner(sellerId);
+            || sellerCanOperate(sellerId);
         }
 
-        // Snapshot das ofertas selecionadas para este evento.
-        // A página pública lê estes documentos; apenas seller/admin escreve.
         match /offers/{offerId} {
-          allow read: if true;
+          allow read:
+            if isAdmin()
+            || isSellerOwner(sellerId)
+            || eventIsPubliclyAvailable(sellerId, eventId);
           allow create, update, delete:
             if isAdmin()
-            || isSellerOwner(sellerId);
+            || sellerCanOperate(sellerId);
         }
 
         match /orders/{orderId} {
-          /*
-           * Pedidos de eventos também passam pelo backend unificado.
-           * A criação direta pelo navegador permanece bloqueada.
-           */
+          // O backend unificado é o único criador de pedidos.
           allow create: if false;
 
           allow read:
@@ -948,7 +1023,7 @@ service cloud.firestore {
           allow update:
             if isAdmin()
             || (
-              isSellerOwner(sellerId)
+              sellerCanOperate(sellerId)
               && validSellerOrderMetadataUpdate()
             );
 
@@ -956,15 +1031,63 @@ service cloud.firestore {
             if isAdmin();
 
           match /messages/{messageId} {
-            allow read, create: if true;
-            allow update:
+            // Clientes usam /api/public/event-chat com token secreto do pedido.
+            // O SDK do navegador nunca recebe acesso público à subcoleção.
+            allow read:
               if isAdmin()
               || isSellerOwner(sellerId);
+
+            allow create:
+              if isAdmin()
+              || (
+                sellerCanOperate(sellerId)
+                && request.resource.data.keys().hasOnly([
+                  "schemaVersion",
+                  "text",
+                  "senderId",
+                  "senderRole",
+                  "createdAt",
+                  "createdBy"
+                ])
+                && request.resource.data.text is string
+                && request.resource.data.text.size() > 0
+                && request.resource.data.text.size() <= 1500
+                && request.resource.data.senderRole == "seller"
+                && request.resource.data.senderId in [
+                  request.auth.uid,
+                  sellerId
+                ]
+                && request.resource.data.createdAt == request.time
+              );
+
+            allow update:
+              if isAdmin()
+              || (
+                isSellerOwner(sellerId)
+                && request.resource.data
+                  .diff(resource.data)
+                  .affectedKeys()
+                  .hasOnly(["sellerReadAt"])
+                && request.resource.data.sellerReadAt == request.time
+              );
+
             allow delete:
               if isAdmin();
           }
         }
       }
+    }
+
+    // =========================================================
+    // CUSTOMERS / REWARDS — BACKEND ONLY
+    // =========================================================
+
+    /*
+     * Perfis, índices de pedidos, carteiras e transações de pontos são
+     * acessados exclusivamente pelas APIs autenticadas com Firebase Admin.
+     */
+    match /customers/{document=**} {
+      allow read, write: if false;
     }
 
     // =========================================================

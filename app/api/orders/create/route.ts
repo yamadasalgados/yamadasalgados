@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 
 import * as admin from "firebase-admin";
 import { NextRequest, NextResponse } from "next/server";
@@ -902,6 +902,7 @@ function resultResponse(params: {
   rewardRecipientType: "customer" | "event_presenter" | "none";
   rewardRecipientName: string;
   rewardMode: RewardRedemptionMode;
+  chatAccessToken: string;
   replayed: boolean;
 }) {
   return {
@@ -928,6 +929,7 @@ function resultResponse(params: {
     rewardRecipientType: params.rewardRecipientType,
     rewardRecipientName: params.rewardRecipientName || null,
     rewardMode: params.rewardMode,
+    chatAccessToken: params.chatAccessToken || null,
     replayed: params.replayed,
   };
 }
@@ -1032,6 +1034,12 @@ export async function POST(request: NextRequest) {
     const customerOrderRef = customerRef
       ? customerRef.collection("orders").doc(sha256(orderRef.path))
       : null;
+    const chatAccessToken = clean.source === "event"
+      ? randomBytes(32).toString("base64url")
+      : "";
+    const chatAccessTokenHash = chatAccessToken
+      ? createHash("sha256").update(chatAccessToken).digest("hex")
+      : "";
     const notificationStateRef = sellerRef.collection("notificationState").doc("orders");
 
     const transactionResult = await db.runTransaction(async (transaction) => {
@@ -1123,6 +1131,7 @@ export async function POST(request: NextRequest) {
                 : "none",
           rewardRecipientName: cleanString(markerData.rewardRecipientName, 120),
           rewardMode: cleanRewardMode(markerData.rewardMode),
+          chatAccessToken: cleanString(markerData.chatAccessToken, 256),
           replayed: true,
         });
       }
@@ -1849,6 +1858,14 @@ export async function POST(request: NextRequest) {
         customerRegistered: Boolean(customerIdentity),
         customerAuthProvider: customerIdentity?.provider || null,
         customerOrderRefId: customerOrderRef?.id || null,
+        chatAccess: clean.source === "event"
+          ? {
+              schemaVersion: 1,
+              tokenHash: chatAccessTokenHash,
+              createdAt: now,
+              revokedAt: null,
+            }
+          : null,
         quantities,
         items,
         totalItems: clean.totalItems,
@@ -2325,6 +2342,7 @@ export async function POST(request: NextRequest) {
         orderStatus: initialOrderStatus,
         customerOrderRefId: customerOrderRef?.id || null,
         customerRegistered: Boolean(customerIdentity),
+        chatAccessToken: chatAccessToken || null,
         status: "completed",
         createdAt: now,
         expiresAt: admin.firestore.Timestamp.fromMillis(
@@ -2351,6 +2369,7 @@ export async function POST(request: NextRequest) {
         rewardRecipientType: earnRecipientType,
         rewardRecipientName: earnRecipientName,
         rewardMode: rewardEvaluation.mode,
+        chatAccessToken,
         replayed: false,
       });
     });

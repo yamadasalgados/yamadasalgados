@@ -23,17 +23,12 @@ import {
 } from "@/app/lib/customer-storage";
 
 import {
-  addDoc,
   collection,
   doc,
   getDoc,
   getDocs,
-  limit,
-  onSnapshot,
-  orderBy,
   query,
-  serverTimestamp,
-  type Timestamp,
+  where,
 } from "firebase/firestore";
 import { Gift } from "lucide-react";
 import {
@@ -56,6 +51,11 @@ import {
 } from "@/app/lib/money";
 import { normalizeProductInventory } from "@/app/lib/inventory-schema";
 import { normalizeSellerOrderSettings } from "@/app/lib/order-settings-schema";
+import { fetchPublicSellerProfile } from "@/app/lib/public-seller-client";
+import {
+  loadPublicEventChat,
+  sendPublicEventChatMessage,
+} from "@/app/lib/event-chat-client";
 import {
   evaluateProductPrice,
   formatScheduledPriceDate,
@@ -110,7 +110,7 @@ type EventData = {
   allowPickup?: boolean;
   currency: SupportedCurrency;
   regionalLocale: RegionalLocale;
-  defaultLanguage: "pt" | "en" | "ja";
+  defaultLanguage: UiLanguage;
   timeZone: string;
   rewardRecipientMode: "customer" | "event_presenter";
   rewardRecipientUid: string;
@@ -142,24 +142,76 @@ type ChatMessage = {
   text: string;
   senderId: string;
   senderRole: "seller" | "customer";
-  createdAt?: Timestamp;
+  createdAt: string;
 };
 
 const MAIN_CLASS = "p-4 space-y-6 max-w-3xl mx-auto animate-fade-in";
 
-const normalizeStringArray = (value: any): string[] =>
-  Array.isArray(value)
-    ? value
-        .filter((v) => typeof v === "string")
-        .map((s) => s.trim())
-        .filter(Boolean)
-    : [];
+type UnknownRecord = Record<string, unknown>;
+type UiLanguage = "pt" | "en" | "ja";
 
-const safeNumber = (v: any) => {
-  if (typeof v === "number" && Number.isFinite(v)) return v;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : 0;
-};
+function isRecord(value: unknown): value is UnknownRecord {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function asRecord(value: unknown): UnknownRecord {
+  return isRecord(value) ? value : {};
+}
+
+function asTrimmedString(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .filter((entry): entry is string => typeof entry === "string")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function safeNumber(value: unknown): number {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function normalizeSupportedCurrency(
+  value: unknown,
+  fallback: SupportedCurrency = "JPY",
+): SupportedCurrency {
+  return value === "BRL" || value === "USD" || value === "JPY"
+    ? value
+    : fallback;
+}
+
+function defaultLocaleForCurrency(
+  currency: SupportedCurrency,
+): RegionalLocale {
+  if (currency === "BRL") return "pt-BR";
+  if (currency === "USD") return "en-US";
+  return "ja-JP";
+}
+
+function normalizeRegionalLocaleValue(
+  value: unknown,
+  fallback: RegionalLocale,
+): RegionalLocale {
+  return value === "pt-BR" || value === "en-US" || value === "ja-JP"
+    ? value
+    : fallback;
+}
+
+function normalizeUiLanguage(
+  value: unknown,
+  fallback: UiLanguage = "pt",
+): UiLanguage {
+  return value === "pt" || value === "en" || value === "ja"
+    ? value
+    : fallback;
+}
 
 function uniq(arr: string[]) {
   return Array.from(new Set(arr.filter(Boolean)));
@@ -212,9 +264,9 @@ function eventProductionDateError(
   return `A data escolhida é anterior ao prazo de produção. A primeira data disponível é ${date}.`;
 }
 
-function normalizeCategoryDynamic(v: any): CategoryName | undefined {
-  if (typeof v !== "string") return undefined;
-  const s = v.trim();
+function normalizeCategoryDynamic(value: unknown): CategoryName | undefined {
+  if (typeof value !== "string") return undefined;
+  const s = value.trim();
   return s ? s : undefined;
 }
 
@@ -386,7 +438,10 @@ async function fetchEventPublishedProducts(
   // O evento preserva preço e condição comercial, mas o estoque disponível
   // vem sempre do catálogo atual do seller para considerar reservas abertas.
   const catalogSnap = await getDocs(
-    collection(db, "sellers", sellerId, "products"),
+    query(
+      collection(db, "sellers", sellerId, "products"),
+      where("status", "in", ["active", "made_to_order"]),
+    ),
   );
   catalogSnap.docs.forEach((catalogDoc) => {
     const published = result[catalogDoc.id];
@@ -560,6 +615,7 @@ const uiLocale =
   }, []);
 
   const [lastOrderId, setLastOrderId] = useState("");
+  const [lastChatAccessToken, setLastChatAccessToken] = useState("");
   const [lastCustomerOrderRefId, setLastCustomerOrderRefId] = useState("");
   const [rewardSelection, setRewardSelection] = useState<RewardRedemptionSelection>({ ...EMPTY_REWARD_SELECTION });
   const [lastPointsToEarn, setLastPointsToEarn] = useState(0);
@@ -806,16 +862,18 @@ const uiLocale =
   const subtotalAmount = minorToMajor(subtotalMinor, currency);
   const totalAmount = minorToMajor(totalAmountMinor, currency);
 
-  const fmtChatTime = useCallback((ts?: Timestamp) => {
-    if (!ts) return "";
+  const fmtChatTime = useCallback((value?: string) => {
+    if (!value) return "";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "";
     return new Intl.DateTimeFormat(locale, {
-      timeZone: "Asia/Tokyo",
+      timeZone: event?.timeZone || "Asia/Tokyo",
       day: "2-digit",
       month: "2-digit",
       hour: "2-digit",
       minute: "2-digit",
-    }).format(ts.toDate());
-}, [locale]);
+    }).format(date);
+  }, [event?.timeZone, locale]);
 
   const resetOrderForm = useCallback(() => {
     setFormError("");
@@ -1080,24 +1138,59 @@ const uiLocale =
           return;
         }
 
-        const data = snap.data() as any;
-        const sellerSnapshot = await getDoc(doc(db, "sellers", sellerId));
-        const sellerData = sellerSnapshot.exists() ? sellerSnapshot.data() as any : {};
+        const data = asRecord(snap.data());
+        const sellerData = await fetchPublicSellerProfile(sellerId);
+
+        if (!alive) return;
+
         setSellerIdentity(normalizeSellerIdentity(sellerData));
+
+        const sellerOrderSettings = asRecord(sellerData.orderSettings);
         setAcceptOrdersWithoutStock(
           normalizeSellerOrderSettings(
             sellerData.orderSettings,
-            sellerData.acceptOrdersWithoutStock,
+            sellerOrderSettings.acceptOrdersWithoutStock,
           ).acceptOrdersWithoutStock,
         );
-        const sellerRegional =
-          sellerData.regional && typeof sellerData.regional === "object"
-            ? sellerData.regional
-            : {};
-        const storedSellerId =
-          typeof data.sellerId === "string"
-            ? data.sellerId.trim()
-            : "";
+
+        const sellerRegional = asRecord(sellerData.regional);
+        const sellerCurrency = normalizeSupportedCurrency(
+          sellerRegional.currency,
+          "JPY",
+        );
+        const sellerLocale = normalizeRegionalLocaleValue(
+          sellerRegional.locale,
+          defaultLocaleForCurrency(sellerCurrency),
+        );
+        const eventCurrency = normalizeSupportedCurrency(
+          data.currency,
+          sellerCurrency,
+        );
+        const eventLocale = normalizeRegionalLocaleValue(
+          data.regionalLocale,
+          sellerLocale,
+        );
+        const sellerLanguage = normalizeUiLanguage(
+          sellerData.storefrontLanguage,
+          "pt",
+        );
+        const eventDefaultLanguage = normalizeUiLanguage(
+          data.defaultLanguage,
+          sellerLanguage,
+        );
+        const operatingCountry =
+          asTrimmedString(data.operatingCountry) ||
+          asTrimmedString(sellerRegional.operatingCountry);
+        const eventTimeZone = normalizeTimeZone(
+          asTrimmedString(data.timeZone) ||
+            asTrimmedString(sellerRegional.timeZone),
+          defaultTimeZoneForRegional(
+            eventLocale,
+            eventCurrency,
+            operatingCountry,
+          ),
+        );
+        const storedSellerId = asTrimmedString(data.sellerId);
 
         // O caminho é a fonte de verdade. Um sellerId divergente no
         // documento indica dado inconsistente e não deve ser aceito.
@@ -1148,32 +1241,10 @@ const uiLocale =
           allowDelivery: data.allowDelivery !== false,
           allowPickup: data.allowPickup !== false,
           offerIds: normalizeStringArray(data.offerIds),
-          currency:
-            data.currency === "BRL" || data.currency === "USD" || data.currency === "JPY"
-              ? data.currency
-              : sellerRegional.currency === "BRL" || sellerRegional.currency === "USD"
-                ? sellerRegional.currency
-                : "JPY",
-          regionalLocale:
-            data.regionalLocale === "pt-BR" || data.regionalLocale === "en-US" || data.regionalLocale === "ja-JP"
-              ? data.regionalLocale
-              : sellerRegional.locale === "pt-BR" || sellerRegional.locale === "en-US"
-                ? sellerRegional.locale
-                : "ja-JP",
-          defaultLanguage:
-            data.defaultLanguage === "en" || data.defaultLanguage === "ja" || data.defaultLanguage === "pt"
-              ? data.defaultLanguage
-              : sellerData.storefrontLanguage === "en" || sellerData.storefrontLanguage === "ja"
-                ? sellerData.storefrontLanguage
-                : "pt",
-          timeZone: normalizeTimeZone(
-            data.timeZone ?? sellerRegional.timeZone ?? sellerData.timeZone,
-            defaultTimeZoneForRegional(
-              data.regionalLocale ?? sellerRegional.locale ?? sellerData.regionalLocale,
-              data.currency ?? sellerRegional.currency ?? sellerData.currency,
-              data.operatingCountry ?? sellerRegional.operatingCountry ?? sellerData.operatingCountry,
-            ),
-          ),
+          currency: eventCurrency,
+          regionalLocale: eventLocale,
+          defaultLanguage: eventDefaultLanguage,
+          timeZone: eventTimeZone,
           rewardRecipientMode,
           rewardRecipientUid:
             rewardRecipientMode === "event_presenter"
@@ -1258,27 +1329,49 @@ const uiLocale =
   }, [sellerId, id, tr]);
 
   useEffect(() => {
-    if (!sellerId || !id || !lastOrderId) return;
+    if (!sellerId || !id || !lastOrderId || !lastChatAccessToken) return;
 
-    setChatLoading(true);
+    let active = true;
+    let controller: AbortController | null = null;
 
-    return onSnapshot(
-      query(
-        collection(db, "sellers", sellerId, "events", id, "orders", lastOrderId, "messages"),
-        orderBy("createdAt", "asc"),
-        limit(200)
-      ),
-      (snap) => {
-        setMessages(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as ChatMessage));
-        setChatLoading(false);
+    const refreshChat = async (initial = false) => {
+      controller?.abort();
+      const currentController = new AbortController();
+      controller = currentController;
+      if (initial) setChatLoading(true);
+
+      try {
+        const nextMessages = await loadPublicEventChat(
+          {
+            sellerId,
+            eventId: id,
+            orderId: lastOrderId,
+            token: lastChatAccessToken,
+          },
+          currentController.signal,
+        );
+        if (!active) return;
+        setMessages(nextMessages);
         setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: "smooth" }), 40);
-      },
-      (err) => {
-        console.error("[EventClient] Chat listener error:", err);
-        setChatLoading(false);
+      } catch (error) {
+        if (!active || currentController.signal.aborted) return;
+        console.error("[EventClient] Chat load error:", error);
+      } finally {
+        if (active && initial) setChatLoading(false);
       }
-    );
-  }, [sellerId, id, lastOrderId]);
+    };
+
+    void refreshChat(true);
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") void refreshChat(false);
+    }, 4_000);
+
+    return () => {
+      active = false;
+      controller?.abort();
+      window.clearInterval(timer);
+    };
+  }, [sellerId, id, lastOrderId, lastChatAccessToken]);
 
   const canSubmit = useMemo(() => {
     if (submitting) return false;
@@ -1367,6 +1460,7 @@ const uiLocale =
     });
 
     setLastOrderId(result.orderId);
+    setLastChatAccessToken(result.chatAccessToken || "");
     setLastCustomerOrderRefId(result.customerOrderRefId || "");
     setLastPointsToEarn(result.pointsToEarn || 0);
     setLastPointsAssignedToPresenter(result.pointsAssignedToPresenter || 0);
@@ -1542,21 +1636,46 @@ const uiLocale =
   ]);
 
   const handleSendChat = useCallback(async () => {
-    if (!event) return;
-    if (!chatText.trim()) return;
-    if (!lastOrderId) return;
+    if (!event || !lastOrderId || !lastChatAccessToken) return;
+    const text = chatText.trim();
+    if (!text) return;
 
-    const txt = chatText.trim();
     setChatText("");
-
-    await addDoc(collection(db, "sellers", sellerId, "events", id, "orders", lastOrderId, "messages"), {
-      text: txt,
-      senderId: customerId,
-      senderRole: "customer",
-      createdAt: serverTimestamp(),
-      customerName,
-    });
-  }, [event, chatText, sellerId, id, lastOrderId, customerId, customerName]);
+    try {
+      const message = await sendPublicEventChatMessage(
+        {
+          sellerId,
+          eventId: id,
+          orderId: lastOrderId,
+          token: lastChatAccessToken,
+        },
+        text,
+      );
+      setMessages((current) =>
+        current.some((item) => item.id === message.id)
+          ? current
+          : [...current, message],
+      );
+      setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: "smooth" }), 40);
+    } catch (error) {
+      console.error("[EventClient] Chat send error:", error);
+      setChatText(text);
+      showFormError(
+        error instanceof Error
+          ? error.message
+          : tr("event.chat.send_error", "Não foi possível enviar a mensagem."),
+      );
+    }
+  }, [
+    event,
+    chatText,
+    sellerId,
+    id,
+    lastOrderId,
+    lastChatAccessToken,
+    showFormError,
+    tr,
+  ]);
 
   if (loading) {
     return (
@@ -2480,7 +2599,7 @@ function EventOffersSection({
   evaluation: OfferEvaluation | null;
   productsData: Record<string, ProductImageData>;
   language: "pt" | "en" | "ja";
-  defaultLanguage: "pt" | "en" | "ja";
+  defaultLanguage: UiLanguage;
   currency: SupportedCurrency;
   locale: RegionalLocale | string;
   eventClosed: boolean;

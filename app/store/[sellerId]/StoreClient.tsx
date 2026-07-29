@@ -18,6 +18,8 @@ import {
   collection,
   doc,
   onSnapshot,
+  query,
+  where,
 } from "firebase/firestore";
 
 import {
@@ -63,11 +65,11 @@ import {
 } from "@/app/lib/public-order-client";
 
 import {
-  accessIsActive,
-} from "@/app/lib/access-control";
-import {
   normalizeSellerOrderSettings,
 } from "@/app/lib/order-settings-schema";
+import {
+  fetchPublicSellerProfile,
+} from "@/app/lib/public-seller-client";
 import {
   compareDateKeys,
   defaultTimeZoneForRegional,
@@ -1149,7 +1151,9 @@ function normalizeStoreProfile(
       ),
     ),
     available:
-      accessIsActive(raw),
+      typeof raw.available === "boolean"
+        ? raw.available
+        : false,
     acceptOrdersWithoutStock: normalizeSellerOrderSettings(
       raw.orderSettings,
       raw.acceptOrdersWithoutStock,
@@ -1599,27 +1603,34 @@ export default function StoreClient({
       }
     };
 
-    const sellerReference =
-      doc(
-        db,
-        "sellers",
-        sellerId,
-      );
-
     const productsReference =
-      collection(
-        db,
-        "sellers",
-        sellerId,
-        "products",
+      query(
+        collection(
+          db,
+          "sellers",
+          sellerId,
+          "products",
+        ),
+        where(
+          "status",
+          "in",
+          ["active", "made_to_order"],
+        ),
       );
 
     const offersReference =
-      collection(
-        db,
-        "sellers",
-        sellerId,
-        "offers",
+      query(
+        collection(
+          db,
+          "sellers",
+          sellerId,
+          "offers",
+        ),
+        where(
+          "status",
+          "==",
+          "active",
+        ),
       );
 
     const shippingReference = doc(
@@ -1630,49 +1641,34 @@ export default function StoreClient({
       "shipping",
     );
 
-    const unsubscribeSeller =
-      onSnapshot(
-        sellerReference,
-        (snapshot) => {
-          sellerResolved = true;
+    const sellerController = new AbortController();
 
-          if (!snapshot.exists()) {
-            setLoadError(
-              text.storeUnavailableBody,
-            );
-            finishLoading();
-            return;
-          }
-
-          const nextProfile =
-            normalizeStoreProfile(
-              snapshot.data(),
-            );
-
-          setStoreProfile(
-            nextProfile,
-          );
-
-          setLoadError(
-            nextProfile.available
-              ? ""
-              : text.storeUnavailableBody,
-          );
-
-          finishLoading();
-        },
-        (error) => {
-          console.warn(
-            "[StoreClient] Falha ao carregar dados da loja:",
-            error,
-          );
-          sellerResolved = true;
-          setLoadError(
-            text.storeUnavailableBody,
-          );
-          finishLoading();
-        },
-      );
+    void fetchPublicSellerProfile(
+      sellerId,
+      { signal: sellerController.signal },
+    )
+      .then((profile) => {
+        if (sellerController.signal.aborted) return;
+        sellerResolved = true;
+        const nextProfile = normalizeStoreProfile(profile);
+        setStoreProfile(nextProfile);
+        setLoadError(
+          nextProfile.available
+            ? ""
+            : text.storeUnavailableBody,
+        );
+        finishLoading();
+      })
+      .catch((error) => {
+        if (sellerController.signal.aborted) return;
+        console.warn(
+          "[StoreClient] Falha ao carregar dados públicos da loja:",
+          error,
+        );
+        sellerResolved = true;
+        setLoadError(text.storeUnavailableBody);
+        finishLoading();
+      });
 
     const unsubscribeProducts =
       onSnapshot(
@@ -1792,7 +1788,7 @@ export default function StoreClient({
     );
 
     return () => {
-      unsubscribeSeller();
+      sellerController.abort();
       unsubscribeProducts();
       unsubscribeOffers();
       unsubscribeShipping();

@@ -6,8 +6,6 @@ import { useParams } from "next/navigation";
 import { db } from "@/app/lib/firebase";
 import {
   collection,
-  doc,
-  getDoc,
   getDocs,
   limit,
   orderBy,
@@ -24,8 +22,8 @@ import {
   normalizeSellerRegionalProfile,
 } from "@/app/lib/seller-regional-profile";
 import {
-  accessIsActive,
-} from "@/app/lib/access-control";
+  fetchPublicSellerProfile,
+} from "@/app/lib/public-seller-client";
 import type {
   OperatingCountry,
 } from "@/app/types/regional";
@@ -51,6 +49,8 @@ type SellerProfile = {
   messengerId?: string;
   pickupLink?: string;
   pickupNote?: string;
+  available?: boolean;
+  regional?: unknown;
 };
 
 function fmtDateShort(
@@ -147,10 +147,7 @@ export default function ClientRegionPage() {
 
   const sellerAvailable =
     useMemo(
-      () =>
-        seller
-          ? accessIsActive(seller)
-          : false,
+      () => seller?.available === true,
       [seller],
     );
 
@@ -163,22 +160,14 @@ export default function ClientRegionPage() {
 
     const fetchSeller = async () => {
       try {
-        const snapshot =
-          await getDoc(
-            doc(
-              db,
-              "sellers",
-              sellerId,
-            ),
+        const profile =
+          await fetchPublicSellerProfile(
+            sellerId,
           );
 
         if (!alive) return;
 
-        setSeller(
-          snapshot.exists()
-            ? snapshot.data() as SellerProfile
-            : null,
-        );
+        setSeller(profile as SellerProfile);
       } catch (error) {
         console.warn(
           "[ClientRegionPage] Seller read failed:",
