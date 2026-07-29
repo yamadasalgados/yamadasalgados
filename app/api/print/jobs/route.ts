@@ -2,7 +2,10 @@ import * as admin from "firebase-admin";
 import { NextRequest, NextResponse } from "next/server";
 
 import { getAdminDb } from "@/app/lib/firebaseAdmin";
+import { qrByteLength } from "@/app/lib/qr-code";
 import { DEFAULT_PUBLIC_STORE_NAME, PRINT_SERVICE_NAME } from "@/app/lib/platform-brand";
+import { normalizeReceiptSettings, type ReceiptCopySettings } from "@/app/lib/receipt-settings";
+import { normalizeSellerIdentity } from "@/app/lib/seller-identity";
 import {
   PrintApiError,
   asRecord,
@@ -110,12 +113,15 @@ function normalizeOrderPayload(params: {
   return {
     orderId,
     orderPath,
+    eventId: cleanString(order.eventId, 160),
+    customerOrderRefId: cleanString(order.customerOrderRefId, 160),
     shortId: orderId.slice(-8).toUpperCase(),
     source,
     storeName,
     eventTitle: source === "event" ? eventTitle : "",
     customerName: cleanString(order.customerName, 200),
     customerPhone: cleanString(order.customerPhone, 100),
+    paymentMethod: cleanString(order.paymentMethod, 100),
     deliveryMode: cleanString(order.deliveryMode, 40) || "pickup",
     deliveryDate: cleanString(order.deliveryDate, 80),
     deliveryTime: cleanString(order.deliveryTimeSlot, 80),
@@ -135,21 +141,142 @@ function normalizeOrderPayload(params: {
   };
 }
 
+function normalizeOrigin(value: string): string {
+  const trimmed = value.trim().replace(/\/+$/, "");
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.protocol === "https:" || parsed.protocol === "http:" ? parsed.origin : "";
+  } catch {
+    return "";
+  }
+}
+
+function requestOrigin(request: NextRequest): string {
+  const configured = normalizeOrigin(
+    process.env.NEXT_PUBLIC_APP_URL ||
+      process.env.APP_BASE_URL ||
+      (process.env.VERCEL_PROJECT_PRODUCTION_URL
+        ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
+        : ""),
+  );
+  if (configured) return configured;
+
+  const requestUrlOrigin = normalizeOrigin(request.nextUrl.origin);
+  if (requestUrlOrigin) return requestUrlOrigin;
+
+  const forwardedHost = cleanString(request.headers.get("x-forwarded-host"), 255);
+  const forwardedProto = cleanString(request.headers.get("x-forwarded-proto"), 20) || "https";
+  return forwardedHost ? normalizeOrigin(`${forwardedProto}://${forwardedHost}`) : "";
+}
+
+function absoluteAppUrl(origin: string, path: string): string {
+  return `${origin}${path.startsWith("/") ? path : `/${path}`}`;
+}
+
+function qrDestinationUrl(params: {
+  settings: ReceiptCopySettings;
+  origin: string;
+  sellerId: string;
+  source: "store" | "event";
+  eventId: string;
+  orderId: string;
+  customerOrderRefId: string;
+}): string {
+  const { settings, origin, sellerId, source, eventId, orderId, customerOrderRefId } = params;
+  const storeUrl = absoluteAppUrl(origin, `/store/${encodeURIComponent(sellerId)}`);
+
+  if (settings.qrDestination === "custom") return settings.qrCustomUrl || storeUrl;
+  if (settings.qrDestination === "store" || orderId === "test") return storeUrl;
+  if (settings.qrDestination === "customer_tracking") {
+    return customerOrderRefId
+      ? absoluteAppUrl(origin, `/customer/orders/${encodeURIComponent(customerOrderRefId)}`)
+      : storeUrl;
+  }
+  if (source === "event" && eventId) {
+    return absoluteAppUrl(
+      origin,
+      `/seller/events/${encodeURIComponent(eventId)}/orders/${encodeURIComponent(orderId)}`,
+    );
+  }
+  return absoluteAppUrl(origin, `/seller/store-orders/${encodeURIComponent(orderId)}`);
+}
+
+function receiptCopyPayload(params: {
+  settings: ReceiptCopySettings;
+  identity: ReturnType<typeof normalizeSellerIdentity>;
+  origin: string;
+  sellerId: string;
+  source: "store" | "event";
+  eventId: string;
+  orderId: string;
+  customerOrderRefId: string;
+}) {
+  const requestedTargetUrl = params.settings.qrEnabled
+    ? qrDestinationUrl(params)
+    : "";
+  const storeFallbackUrl = absoluteAppUrl(
+    params.origin,
+    `/store/${encodeURIComponent(params.sellerId)}`,
+  );
+  const targetUrl = !requestedTargetUrl
+    ? ""
+    : qrByteLength(requestedTargetUrl) <= 260
+      ? requestedTargetUrl
+      : qrByteLength(storeFallbackUrl) <= 260
+        ? storeFallbackUrl
+        : "";
+  return {
+    showLogo: params.settings.showLogo,
+    logoUrl: params.identity.logoUrl,
+    showHeaderText: params.settings.showHeaderText,
+    headerText: params.identity.receipt.headerText,
+    showFooterText: params.settings.showFooterText,
+    footerText: params.identity.receipt.footerText,
+    checkboxEnabled: params.settings.checkboxEnabled,
+    checkboxStyle: params.settings.checkboxStyle,
+    qrEnabled: params.settings.qrEnabled && Boolean(targetUrl),
+    qrDestination: params.settings.qrDestination,
+    qrLabel: params.settings.qrLabel,
+    qrTargetUrl: targetUrl,
+    qrImageUrl: targetUrl
+      ? absoluteAppUrl(
+          params.origin,
+          `/api/qr?size=320&value=${encodeURIComponent(targetUrl)}`,
+        )
+      : "",
+  };
+}
+
 async function buildClaimPayload(params: {
   sellerId: string;
   jobId: string;
   job: Record<string, unknown>;
+  origin: string;
 }) {
-  const { sellerId, jobId, job } = params;
+  const { sellerId, jobId, job, origin } = params;
   const db = getAdminDb();
   const sellerRef = db.collection("sellers").doc(sellerId);
-  const sellerSnapshot = await sellerRef.get();
+  const [sellerSnapshot, receiptSnapshot] = await Promise.all([
+    sellerRef.get(),
+    sellerRef.collection("settings").doc("receipt").get(),
+  ]);
   const sellerData = sellerSnapshot.data() ?? {};
-  const storeName = cleanString(sellerData.storeName ?? sellerData.displayName, 160) || DEFAULT_PUBLIC_STORE_NAME;
+  const identity = normalizeSellerIdentity(sellerData);
+  const receiptSettings = normalizeReceiptSettings(receiptSnapshot.data());
+  const storeName = identity.storeName || cleanString(sellerData.displayName, 160) || DEFAULT_PUBLIC_STORE_NAME;
   const copies = printCopies(job.copies);
 
   if (job.type === "test") {
     const testPayload = asRecord(job.testPayload);
+    const common = {
+      identity,
+      origin,
+      sellerId,
+      source: "store" as const,
+      eventId: "",
+      orderId: "test",
+      customerOrderRefId: "",
+    };
     return {
       jobId,
       type: "test",
@@ -157,6 +284,10 @@ async function buildClaimPayload(params: {
       test: {
         storeName: cleanString(testPayload.storeName, 160) || storeName,
         message: cleanString(testPayload.message, 500) || PRINT_SERVICE_NAME,
+      },
+      receipt: {
+        production: receiptCopyPayload({ ...common, settings: receiptSettings.production }),
+        customer: receiptCopyPayload({ ...common, settings: receiptSettings.customer }),
       },
     };
   }
@@ -181,17 +312,32 @@ async function buildClaimPayload(params: {
     eventTitle = cleanString(eventData.title ?? eventData.name, 200);
   }
 
+  const normalizedOrder = normalizeOrderPayload({
+    orderId: orderSnapshot.id,
+    orderPath,
+    order,
+    storeName,
+    eventTitle,
+  });
+  const common = {
+    identity,
+    origin,
+    sellerId,
+    source: normalizedOrder.source as "store" | "event",
+    eventId: normalizedOrder.eventId,
+    orderId: normalizedOrder.orderId,
+    customerOrderRefId: normalizedOrder.customerOrderRefId,
+  };
+
   return {
     jobId,
     type: "order",
     copies,
-    order: normalizeOrderPayload({
-      orderId: orderSnapshot.id,
-      orderPath,
-      order,
-      storeName,
-      eventTitle,
-    }),
+    order: normalizedOrder,
+    receipt: {
+      production: receiptCopyPayload({ ...common, settings: receiptSettings.production }),
+      customer: receiptCopyPayload({ ...common, settings: receiptSettings.customer }),
+    },
   };
 }
 
@@ -323,6 +469,7 @@ export async function POST(request: NextRequest) {
             sellerId,
             jobId: claimed.id,
             job: claimed.data,
+            origin: requestOrigin(request),
           });
           return NextResponse.json({
             ok: true,

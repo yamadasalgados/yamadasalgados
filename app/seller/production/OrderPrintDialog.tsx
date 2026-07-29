@@ -16,6 +16,13 @@ import {
 import {
   formatMoneyMajor,
 } from "@/app/lib/money";
+import { auth } from "@/app/lib/firebase";
+import {
+  DEFAULT_RECEIPT_SETTINGS,
+  receiptCheckboxGlyph,
+  type ReceiptCopySettings,
+  type ReceiptSettings,
+} from "@/app/lib/receipt-settings";
 import {
   getDeliveryModeLabel,
 } from "@/app/lib/store-order-ui";
@@ -33,7 +40,13 @@ type Props = {
   open: boolean;
   order: StoreOrder | null;
   lang: string;
+  sellerId: string;
   storeName: string;
+  logoUrl: string;
+  receiptHeaderText: string;
+  receiptFooterText: string;
+  source: "store" | "event";
+  eventId: string;
   sourceLabel: string;
   onClose: () => void;
 };
@@ -242,11 +255,13 @@ function TicketItems({
   currencyLocale,
   operational,
   copy,
+  receipt,
 }: {
   order: StoreOrder;
   currencyLocale: string;
   operational: boolean;
   copy: (typeof COPY)[keyof typeof COPY];
+  receipt: ReceiptCopySettings;
 }) {
   return (
     <div className="space-y-2">
@@ -266,6 +281,11 @@ function TicketItems({
             <div className="flex items-start justify-between gap-2 text-[12px] leading-4">
               <div className="min-w-0 flex-1">
                 <div className="flex items-start gap-1.5">
+                  {receipt.checkboxEnabled && (
+                    <span className="shrink-0 font-black">
+                      {receiptCheckboxGlyph(receipt.checkboxStyle)}
+                    </span>
+                  )}
                   <span className="shrink-0 font-black">
                     {item.qty}x
                   </span>
@@ -321,11 +341,77 @@ function TicketItems({
   );
 }
 
+
+function receiptQrTarget({
+  settings,
+  sellerId,
+  source,
+  eventId,
+  order,
+}: {
+  settings: ReceiptCopySettings;
+  sellerId: string;
+  source: "store" | "event";
+  eventId: string;
+  order: StoreOrder;
+}): string {
+  if (!settings.qrEnabled || typeof window === "undefined" || !sellerId) return "";
+  const origin = window.location.origin.replace(/\/+$/, "");
+  const storeUrl = `${origin}/store/${encodeURIComponent(sellerId)}`;
+
+  let target = storeUrl;
+  if (settings.qrDestination === "custom") target = settings.qrCustomUrl || storeUrl;
+  else if (settings.qrDestination === "customer_tracking") {
+    target = order.customerOrderRefId
+      ? `${origin}/customer/orders/${encodeURIComponent(order.customerOrderRefId)}`
+      : storeUrl;
+  } else if (settings.qrDestination === "seller_order") {
+    target = source === "event" && eventId
+      ? `${origin}/seller/events/${encodeURIComponent(eventId)}/orders/${encodeURIComponent(order.id)}`
+      : `${origin}/seller/store-orders/${encodeURIComponent(order.id)}`;
+  }
+
+  return new TextEncoder().encode(target).length <= 260 ? target : storeUrl;
+}
+
+function ReceiptQrBlock({
+  settings,
+  target,
+}: {
+  settings: ReceiptCopySettings;
+  target: string;
+}) {
+  if (!settings.qrEnabled || !target) return null;
+  const imageUrl = `/api/qr?size=320&value=${encodeURIComponent(target)}`;
+
+  return (
+    <div className="mt-3 break-inside-avoid text-center">
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={imageUrl}
+        alt="QR Code"
+        className="mx-auto h-[112px] w-[112px] object-contain"
+      />
+      {settings.qrLabel && (
+        <p className="mx-auto mt-1 max-w-[220px] text-[9px] font-black leading-3">
+          {settings.qrLabel}
+        </p>
+      )}
+    </div>
+  );
+}
+
 export default function OrderPrintDialog({
   open,
   order,
   lang,
+  sellerId,
   storeName,
+  logoUrl,
+  receiptHeaderText,
+  receiptFooterText,
+  source,
+  eventId,
   sourceLabel,
   onClose,
 }: Props) {
@@ -336,6 +422,8 @@ export default function OrderPrintDialog({
     useState<PrintMode>("both");
   const [printedAt, setPrintedAt] =
     useState(() => new Date());
+  const [receiptSettings, setReceiptSettings] =
+    useState<ReceiptSettings>(DEFAULT_RECEIPT_SETTINGS);
 
   const formattedPrintedAt = useMemo(
     () =>
@@ -345,6 +433,38 @@ export default function OrderPrintDialog({
       }).format(printedAt),
     [locale, printedAt],
   );
+
+  useEffect(() => {
+    if (!open || !sellerId) return;
+    let active = true;
+    setReceiptSettings(DEFAULT_RECEIPT_SETTINGS);
+
+    void (async () => {
+      const currentUser = auth.currentUser;
+      if (!currentUser) return;
+      const token = await currentUser.getIdToken(true);
+      const response = await fetch(
+        `/api/print/receipt-settings?sellerId=${encodeURIComponent(sellerId)}`,
+        {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: "no-store",
+        },
+      );
+      const payload = await response.json() as {
+        ok?: boolean;
+        settings?: ReceiptSettings;
+      };
+      if (active && response.ok && payload.ok && payload.settings) {
+        setReceiptSettings(payload.settings);
+      }
+    })().catch((settingsError) => {
+      console.warn("[OrderPrintDialog] Falha ao carregar recibo personalizado:", settingsError);
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [open, sellerId]);
 
   useEffect(() => {
     if (!open) return;
@@ -411,6 +531,22 @@ export default function OrderPrintDialog({
   const businessName =
     storeName.trim() ||
     (lang === "ja" ? "店舗" : lang === "en" ? "Store" : "Loja");
+  const productionReceipt = receiptSettings.production;
+  const customerReceipt = receiptSettings.customer;
+  const productionQrTarget = receiptQrTarget({
+    settings: productionReceipt,
+    sellerId,
+    source,
+    eventId,
+    order,
+  });
+  const customerQrTarget = receiptQrTarget({
+    settings: customerReceipt,
+    sellerId,
+    source,
+    eventId,
+    order,
+  });
 
   return (
     <div
@@ -455,13 +591,26 @@ export default function OrderPrintDialog({
           >
             <article className="yamada-print-ticket yamada-print-production mx-auto w-full max-w-[320px] bg-white p-4 font-mono text-black shadow-lg print:shadow-none">
               <div className="text-center">
-                <ChefHat className="mx-auto h-7 w-7" />
+                {productionReceipt.showLogo && logoUrl ? (
+                  <img
+                    src={logoUrl}
+                    alt={businessName}
+                    className="mx-auto mb-1 max-h-14 max-w-[80%] object-contain grayscale contrast-125"
+                  />
+                ) : (
+                  <ChefHat className="mx-auto h-7 w-7" />
+                )}
                 <p className="mt-1 text-[16px] font-black tracking-wider">
                   {copy.productionCopy.toUpperCase()}
                 </p>
                 <p className="mt-1 text-[11px] font-bold">
                   {businessName}
                 </p>
+                {productionReceipt.showHeaderText && receiptHeaderText && (
+                  <p className="mt-1 whitespace-pre-wrap text-[9px] font-bold leading-3">
+                    {receiptHeaderText}
+                  </p>
+                )}
               </div>
 
               <TicketDivider />
@@ -505,6 +654,7 @@ export default function OrderPrintDialog({
                 currencyLocale={locale}
                 operational
                 copy={copy}
+                receipt={productionReceipt}
               />
 
               {(order.note || address) && (
@@ -526,6 +676,12 @@ export default function OrderPrintDialog({
                 </>
               )}
 
+              <ReceiptQrBlock settings={productionReceipt} target={productionQrTarget} />
+              {productionReceipt.showFooterText && receiptFooterText && (
+                <p className="mt-3 whitespace-pre-wrap text-center text-[9px] font-bold leading-3">
+                  {receiptFooterText}
+                </p>
+              )}
               <TicketDivider />
               <p className="text-center text-[9px]">
                 {copy.printedAt}: {formattedPrintedAt}
@@ -534,10 +690,23 @@ export default function OrderPrintDialog({
 
             <article className="yamada-print-ticket yamada-print-customer mx-auto w-full max-w-[320px] bg-white p-4 font-mono text-black shadow-lg print:shadow-none">
               <div className="text-center">
-                <ReceiptText className="mx-auto h-7 w-7" />
+                {customerReceipt.showLogo && logoUrl ? (
+                  <img
+                    src={logoUrl}
+                    alt={businessName}
+                    className="mx-auto mb-1 max-h-14 max-w-[80%] object-contain grayscale contrast-125"
+                  />
+                ) : (
+                  <ReceiptText className="mx-auto h-7 w-7" />
+                )}
                 <p className="mt-1 text-[16px] font-black tracking-wider">
                   {businessName}
                 </p>
+                {customerReceipt.showHeaderText && receiptHeaderText && (
+                  <p className="mt-1 whitespace-pre-wrap text-[9px] font-bold leading-3">
+                    {receiptHeaderText}
+                  </p>
+                )}
                 <p className="mt-1 text-[10px] font-bold uppercase">
                   {copy.customerCopy}
                 </p>
@@ -586,6 +755,7 @@ export default function OrderPrintDialog({
                 currencyLocale={locale}
                 operational={false}
                 copy={copy}
+                receipt={customerReceipt}
               />
 
               <TicketDivider />
@@ -652,6 +822,12 @@ export default function OrderPrintDialog({
               <p className="text-center text-[11px] font-black">
                 {copy.thankYou}
               </p>
+              <ReceiptQrBlock settings={customerReceipt} target={customerQrTarget} />
+              {customerReceipt.showFooterText && receiptFooterText && (
+                <p className="mt-3 whitespace-pre-wrap text-center text-[9px] font-bold leading-3">
+                  {receiptFooterText}
+                </p>
+              )}
               <p className="mt-2 text-center text-[9px]">
                 {copy.printedAt}: {formattedPrintedAt}
               </p>

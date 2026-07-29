@@ -870,6 +870,9 @@ export function parseStoreOrder(
 
   return {
     id,
+    orderSource: data.orderSource === "event" ? "event" : "store",
+    eventId: toSafeString(data.eventId) || undefined,
+    customerOrderRefId: toSafeString(data.customerOrderRefId) || undefined,
 
     customerName:
       toSafeString(

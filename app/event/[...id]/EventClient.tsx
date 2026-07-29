@@ -1481,8 +1481,13 @@ const uiLocale =
                 {sellerInitials(sellerIdentity.storeName)}
               </span>
             )}
-            <span className="min-w-0 truncate text-sm font-black">
-              {sellerIdentity.storeName}
+            <span className="min-w-0">
+              <span className="block truncate text-sm font-black">
+                {sellerIdentity.storeName}
+              </span>
+              <span className="block text-[10px] font-black uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
+                {tr("event.header.visit_store", "Conheça a loja")}
+              </span>
             </span>
           </Link>
         )}
@@ -1959,7 +1964,7 @@ const uiLocale =
                   href={`/store/${encodeURIComponent(sellerId)}`}
                   className="inline-flex min-h-10 items-center justify-center rounded-xl border border-emerald-300 px-4 py-2 text-xs font-black text-emerald-800 dark:border-emerald-800 dark:text-emerald-200"
                 >
-                  {tr("event.order.visit_store", "Visitar loja")}
+                  {tr("event.order.visit_store", "Conheça a loja")}
                 </Link>
               </div>
             </div>

@@ -39,6 +39,7 @@ import { useSellerSession } from "@/app/_components/SellerSessionContext";
 import PageHeader from "@/app/_components/PageHeader";
 import FeedbackBanner from "@/app/_components/FeedbackBanner";
 import PrinterSettingsCard from "@/app/seller/settings/PrinterSettingsCard";
+import ReceiptSettingsCard from "@/app/seller/settings/ReceiptSettingsCard";
 import FulfillmentSettingsCard from "@/app/seller/settings/FulfillmentSettingsCard";
 import SellerPushNotifications from "@/app/_components/SellerPushNotifications";
 import SellerIdentitySettingsCard from "@/app/seller/settings/SellerIdentitySettingsCard";
@@ -434,6 +435,8 @@ export default function SellerSettingsPage() {
         <SellerPushNotifications language={lang === "en" || lang === "ja" ? lang : "pt"} />
 
         <PrinterSettingsCard lang={lang} />
+
+        <ReceiptSettingsCard lang={lang} />
 
         <FulfillmentSettingsCard
           sellerId={sellerId}

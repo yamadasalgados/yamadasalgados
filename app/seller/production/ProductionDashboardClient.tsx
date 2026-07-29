@@ -43,6 +43,11 @@ import {
   db,
 } from "@/app/lib/firebase";
 import {
+  EMPTY_SELLER_IDENTITY,
+  normalizeSellerIdentity,
+  type SellerIdentity,
+} from "@/app/lib/seller-identity";
+import {
   SellerOrderStatusError,
   updateSellerOrderStatus,
   type SellerOrderStatus,
@@ -595,12 +600,15 @@ export default function ProductionDashboardClient() {
     useState("");
   const [storeName, setStoreName] =
     useState("");
+  const [sellerIdentity, setSellerIdentity] =
+    useState<SellerIdentity>(EMPTY_SELLER_IDENTITY);
   const [printOrder, setPrintOrder] =
     useState<UnifiedOrder | null>(null);
 
   useEffect(() => {
     if (!sellerId) {
       setStoreName("");
+      setSellerIdentity(EMPTY_SELLER_IDENTITY);
       return;
     }
 
@@ -613,6 +621,8 @@ export default function ProductionDashboardClient() {
         if (!alive || !snapshot.exists()) return;
 
         const data = snapshot.data();
+        const identity = normalizeSellerIdentity(data);
+        setSellerIdentity(identity);
         const resolvedName = [
           data.storeName,
           data.businessName,
@@ -1853,7 +1863,13 @@ export default function ProductionDashboardClient() {
         open={printOrder !== null}
         order={printOrder?.order ?? null}
         lang={lang}
+        sellerId={sellerId || ""}
         storeName={storeName}
+        logoUrl={sellerIdentity.logoUrl}
+        receiptHeaderText={sellerIdentity.receipt.headerText}
+        receiptFooterText={sellerIdentity.receipt.footerText}
+        source={printOrder?.source ?? "store"}
+        eventId={printOrder?.eventId ?? ""}
         sourceLabel={
           printOrder
             ? printOrder.source === "store"

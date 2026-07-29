@@ -155,6 +155,9 @@ export interface StoreOrderHistory {
 
 export interface StoreOrder {
   id: string;
+  orderSource?: "store" | "event";
+  eventId?: string;
+  customerOrderRefId?: string;
 
   customerName?: string;
   customerPhone?: string;

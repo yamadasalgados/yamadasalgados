@@ -2,8 +2,8 @@ import process from "node:process";
 
 import { config } from "./config.mjs";
 
-const VERSION = "2.0.0";
-const capabilities = ["preview", "windows", "cups", "tcp-escpos-raster", "paper-58", "paper-80"];
+const VERSION = "2.1.0";
+const capabilities = ["preview", "windows", "cups", "tcp-escpos-raster", "paper-58", "paper-80", "custom-receipts-qr"];
 
 async function request(action, extra = {}) {
   const response = await fetch(`${config.baseUrl}/api/print/jobs`, {
