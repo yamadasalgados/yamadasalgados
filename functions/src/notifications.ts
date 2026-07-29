@@ -9,9 +9,9 @@ const db = admin.firestore();
 
 const vapidPublic = defineString("VAPID_PUBLIC");
 const vapidPrivate = defineSecret("VAPID_PRIVATE");
-const adminEmail = defineString("ADMIN_EMAIL", {
-  default: "mailto:admin@yamada.app",
-});
+const vapidSubject = defineString("VAPID_SUBJECT", { default: "" });
+// ADMIN_EMAIL continua aceito para não quebrar ambientes já configurados.
+const adminEmail = defineString("ADMIN_EMAIL", { default: "" });
 
 type Language = "pt" | "en" | "ja";
 type CustomerNoticeKind = "production" | "ready" | "delivered" | "cancelled";
@@ -42,6 +42,17 @@ function cleanString(value: unknown, maxLength: number): string {
 
 function languageOf(value: unknown): Language {
   return value === "en" || value === "ja" ? value : "pt";
+}
+
+function normalizeVapidSubject(value: unknown): string {
+  const subject = cleanString(value, 500);
+  if (/^https?:\/\//i.test(subject) || /^mailto:/i.test(subject)) {
+    return subject;
+  }
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(subject)) {
+    return `mailto:${subject}`;
+  }
+  return "mailto:noreply@example.com";
 }
 
 function nonNegativeInteger(value: unknown): number {
@@ -75,7 +86,7 @@ let configuredFingerprint = "";
 function ensurePushConfigured(): boolean {
   const publicKey = vapidPublic.value().trim();
   const privateKey = vapidPrivate.value().trim();
-  const subject = adminEmail.value().trim() || "mailto:admin@yamada.app";
+  const subject = normalizeVapidSubject(vapidSubject.value() || adminEmail.value());
   if (!publicKey || !privateKey) {
     console.error("[push] VAPID_PUBLIC ou VAPID_PRIVATE não configurado.");
     return false;
@@ -563,7 +574,7 @@ export const notifySellerEventOrderCreated = onDocumentCreated(
 function pushTestCopy(language: Language, targetType: "customer" | "seller") {
   if (language === "ja") {
     return {
-      title: "Yamada 通知テスト 🔔",
+      title: "通知接続テスト 🔔",
       body:
         targetType === "seller"
           ? "新規注文通知の接続は正常です。"
@@ -572,7 +583,7 @@ function pushTestCopy(language: Language, targetType: "customer" | "seller") {
   }
   if (language === "en") {
     return {
-      title: "Yamada notification test 🔔",
+      title: "Notification connection test 🔔",
       body:
         targetType === "seller"
           ? "The new-order notification connection is working."
@@ -580,7 +591,7 @@ function pushTestCopy(language: Language, targetType: "customer" | "seller") {
     };
   }
   return {
-    title: "Teste de notificação Yamada 🔔",
+    title: "Teste de conexão das notificações 🔔",
     body:
       targetType === "seller"
         ? "A conexão dos avisos de novos pedidos está funcionando."

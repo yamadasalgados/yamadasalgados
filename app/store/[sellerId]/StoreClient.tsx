@@ -36,6 +36,7 @@ import {
   ShoppingBag,
   ShoppingCart,
   Store,
+  Truck,
   X,
 } from "lucide-react";
 
@@ -46,6 +47,7 @@ import {
 import RewardsCheckoutPanel from "@/app/_components/RewardsCheckoutPanel";
 import useCustomerSession from "@/app/hooks/useCustomerSession";
 import useCustomerRewards from "@/app/hooks/useCustomerRewards";
+import { useDocumentBranding } from "@/app/hooks/useDocumentBranding";
 import {
   readLocalDraft,
   readStoredCustomerProfile,
@@ -66,6 +68,15 @@ import {
 import {
   normalizeSellerOrderSettings,
 } from "@/app/lib/order-settings-schema";
+import {
+  compareDateKeys,
+  defaultTimeZoneForRegional,
+  earliestFulfillmentDate,
+  formatDateKey,
+  formatLeadTimeDays,
+  normalizeProductProductionLeadTime,
+  normalizeTimeZone,
+} from "@/app/lib/production-lead-time";
 
 import {
   useI18n,
@@ -101,6 +112,8 @@ import {
 } from "@/app/lib/offer-schema";
 import {
   DEFAULT_SELLER_SHIPPING_SETTINGS,
+  evaluateLocalDelivery,
+  evaluatePickup,
   evaluatePostalShipping,
   formatWeightGrams,
   normalizeProductShipping,
@@ -108,6 +121,10 @@ import {
   type ProductShipping,
   type SellerShippingSettings,
 } from "@/app/lib/shipping-schema";
+import {
+  normalizeSellerIdentity,
+  sellerInitials,
+} from "@/app/lib/seller-identity";
 import {
   isSupportedCurrency,
   type RegionalLocale,
@@ -140,9 +157,12 @@ type StoreProfile = {
   description: string;
   logoUrl: string;
   bannerUrl: string;
+  primaryColor: string;
+  accentColor: string;
   pickupNote: string;
   currency: SupportedCurrency;
   regionalLocale: RegionalLocale;
+  timeZone: string;
   available: boolean;
   acceptOrdersWithoutStock: boolean;
 };
@@ -157,6 +177,7 @@ type Product = {
   price: number;
   priceMinor: number;
   availabilityStatus: ProductAvailabilityStatus;
+  productionLeadTimeDays: number;
   stock?: number;
   stockField?:
     | "stockQty"
@@ -203,6 +224,7 @@ type DeliveryForm = {
   time: string;
   address: string;
   locationLink: string;
+  regionId: string;
   note: string;
   recipientName: string;
   postalCode: string;
@@ -211,6 +233,40 @@ type DeliveryForm = {
   addressLine1: string;
   addressLine2: string;
 };
+
+function productionLeadTimeNotice(
+  language: Language,
+  days: number,
+): string {
+  const leadTime = formatLeadTimeDays(days, language);
+  if (language === "ja") return `製造期間：${leadTime}`;
+  if (language === "en") return `Production lead time: ${leadTime}`;
+  return `Prazo de produção: ${leadTime}`;
+}
+
+function productionScheduleNotice(
+  language: Language,
+  days: number,
+  dateKey: string,
+  locale: string,
+): string {
+  const leadTime = formatLeadTimeDays(days, language);
+  const date = formatDateKey(dateKey, locale);
+  if (language === "ja") return `この注文の製造には最大${leadTime}かかります。最短受取日：${date}`;
+  if (language === "en") return `This order needs up to ${leadTime} for production. Earliest available date: ${date}.`;
+  return `Este pedido precisa de até ${leadTime} para produção. Primeira data disponível: ${date}.`;
+}
+
+function productionDateError(
+  language: Language,
+  dateKey: string,
+  locale: string,
+): string {
+  const date = formatDateKey(dateKey, locale);
+  if (language === "ja") return `選択した日は製造期間より前です。最短受取日は${date}です。`;
+  if (language === "en") return `The selected date is earlier than the production lead time. The earliest available date is ${date}.`;
+  return `A data escolhida é anterior ao prazo de produção. A primeira data disponível é ${date}.`;
+}
 
 function storedProfileFromCheckout(customer: CustomerForm, delivery: DeliveryForm) {
   return {
@@ -967,12 +1023,22 @@ function normalizeProduct(
     price,
     priceMinor,
     availabilityStatus,
+    productionLeadTimeDays: normalizeProductProductionLeadTime(
+      raw.productionLeadTime,
+      raw.productionLeadTimeDays,
+      { madeToOrder: availabilityStatus === "made_to_order" },
+    ).days,
     stock,
     stockField,
     shipping: normalizeProductShipping(
       raw.shipping,
       raw.postalEligible,
       raw.shippingWeightGrams,
+      raw.fulfillmentOptions ?? {
+        pickup: raw.pickupEligible,
+        localDelivery: raw.localDeliveryEligible,
+        postal: raw.postalEligible,
+      },
     ),
     bundleConfig: normalizeProductBundleConfig(raw.bundleConfig),
     storefront: normalizeProductStorefrontConfig(
@@ -990,6 +1056,7 @@ function normalizeStoreProfile(
 ): StoreProfile {
   const raw =
     asRecord(rawValue);
+  const identity = normalizeSellerIdentity(raw);
   const regional =
     asRecord(raw.regional);
   const currencyCandidate =
@@ -1017,30 +1084,12 @@ function normalizeStoreProfile(
           : "ja-JP";
 
   return {
-    name:
-      asString(raw.storeName) ||
-      asString(
-        raw.businessName,
-      ) ||
-      asString(raw.name) ||
-      "Yamada",
-    description:
-      asString(
-        raw.storeDescription,
-      ) ||
-      asString(
-        raw.description,
-      ),
-    logoUrl:
-      asString(raw.logoUrl) ||
-      asString(raw.photoUrl),
-    bannerUrl:
-      asString(
-        raw.bannerUrl,
-      ) ||
-      asString(
-        raw.coverUrl,
-      ),
+    name: identity.storeName || asString(raw.name) || "Loja",
+    description: identity.storeDescription,
+    logoUrl: identity.logoUrl,
+    bannerUrl: identity.bannerUrl,
+    primaryColor: identity.primaryColor,
+    accentColor: identity.accentColor,
     pickupNote:
       asString(
         raw.pickupNote,
@@ -1050,6 +1099,14 @@ function normalizeStoreProfile(
       ),
     currency,
     regionalLocale,
+    timeZone: normalizeTimeZone(
+      regional.timeZone ?? raw.timeZone,
+      defaultTimeZoneForRegional(
+        regionalLocale,
+        currency,
+        regional.operatingCountry ?? raw.operatingCountry,
+      ),
+    ),
     available:
       accessIsActive(raw),
     acceptOrdersWithoutStock: normalizeSellerOrderSettings(
@@ -1132,16 +1189,24 @@ export default function StoreClient({
 
   const [storeProfile, setStoreProfile] =
     useState<StoreProfile>({
-      name: "Yamada",
+      name: language === "ja" ? "店舗" : language === "en" ? "Store" : "Loja",
       description: "",
       logoUrl: "",
       bannerUrl: "",
+      primaryColor: "#f97316",
+      accentColor: "#111827",
       pickupNote: "",
       currency: "JPY",
       regionalLocale: "ja-JP",
+      timeZone: "Asia/Tokyo",
       available: false,
       acceptOrdersWithoutStock: true,
     });
+
+  useDocumentBranding({
+    title: storeProfile.name,
+    themeColor: storeProfile.primaryColor,
+  });
 
   const [shippingSettings, setShippingSettings] =
     useState<SellerShippingSettings>(DEFAULT_SELLER_SHIPPING_SETTINGS);
@@ -1167,6 +1232,8 @@ export default function StoreClient({
   const [search, setSearch] =
     useState("");
   const [searchOpen, setSearchOpen] = useState(false);
+  const [fulfillmentFilter, setFulfillmentFilter] =
+    useState<"pickup" | "delivery" | "postal" | null>(null);
 
   const [
     selectedCategory,
@@ -1206,6 +1273,7 @@ export default function StoreClient({
       time: "",
       address: "",
       locationLink: "",
+      regionId: "",
       note: "",
       recipientName: "",
       postalCode: "",
@@ -1733,6 +1801,37 @@ const categorySummaries =
     products,
   ]);
 
+  const fulfillmentVitrines = useMemo(() => {
+    const publicProducts = products.filter((product) => product.publiclyVisible);
+    const options = [
+      {
+        value: "pickup" as const,
+        label:
+          shippingSettings.pickup.label ||
+          (language === "ja" ? "店頭受取商品" : language === "en" ? "Pickup products" : "Produtos para retirada"),
+        enabled: shippingSettings.pickup.enabled,
+        count: publicProducts.filter((product) => product.shipping.fulfillment.pickup).length,
+      },
+      {
+        value: "delivery" as const,
+        label:
+          shippingSettings.localDelivery.label ||
+          (language === "ja" ? "地域配達商品" : language === "en" ? "Local delivery products" : "Produtos para delivery"),
+        enabled: shippingSettings.localDelivery.enabled,
+        count: publicProducts.filter((product) => product.shipping.fulfillment.localDelivery).length,
+      },
+      {
+        value: "postal" as const,
+        label:
+          shippingSettings.postal.label ||
+          (language === "ja" ? "郵送対応商品" : language === "en" ? "Postal products" : "Produtos enviados por correio"),
+        enabled: shippingSettings.postal.enabled,
+        count: publicProducts.filter((product) => product.shipping.fulfillment.postal).length,
+      },
+    ];
+    return options.filter((option) => option.enabled && option.count > 0);
+  }, [language, products, shippingSettings]);
+
 const visibleProducts =
   useMemo(() => {
     const normalizedSearch =
@@ -1753,6 +1852,16 @@ const visibleProducts =
           product.category !==
             selectedCategory
         ) {
+          return false;
+        }
+
+        if (fulfillmentFilter === "pickup" && !product.shipping.fulfillment.pickup) {
+          return false;
+        }
+        if (fulfillmentFilter === "delivery" && !product.shipping.fulfillment.localDelivery) {
+          return false;
+        }
+        if (fulfillmentFilter === "postal" && !product.shipping.fulfillment.postal) {
           return false;
         }
 
@@ -1779,6 +1888,7 @@ const visibleProducts =
     products,
     search,
     selectedCategory,
+    fulfillmentFilter,
   ]);
 
   const visibleNormalProducts = useMemo(
@@ -1910,6 +2020,44 @@ const visibleProducts =
     [stockConfirmationItems, text.stockConfirmationCart],
   );
 
+  const productionSchedule = useMemo(() => {
+    const requiredItems = cartItems.filter((item) =>
+      item.availabilityStatus === "made_to_order" ||
+      (
+        storeProfile.acceptOrdersWithoutStock &&
+        typeof item.stock === "number" &&
+        item.qty > item.stock
+      ),
+    );
+    const maxLeadTimeDays = requiredItems.reduce(
+      (maximum, item) => Math.max(maximum, item.productionLeadTimeDays),
+      0,
+    );
+    const earliestDate = earliestFulfillmentDate({
+      timeZone: storeProfile.timeZone,
+      leadTimeDays: maxLeadTimeDays,
+    });
+    return {
+      required: requiredItems.length > 0,
+      maxLeadTimeDays,
+      earliestDate,
+      productIds: requiredItems
+        .filter((item) => item.productionLeadTimeDays === maxLeadTimeDays)
+        .map((item) => item.id),
+    };
+  }, [cartItems, storeProfile.acceptOrdersWithoutStock, storeProfile.timeZone]);
+
+  useEffect(() => {
+    if (
+      !productionSchedule.required ||
+      !delivery.date ||
+      compareDateKeys(delivery.date, productionSchedule.earliestDate) >= 0
+    ) {
+      return;
+    }
+    setDelivery((current) => ({ ...current, date: "" }));
+  }, [delivery.date, productionSchedule.earliestDate, productionSchedule.required]);
+
   const totalItems =
     useMemo(
       () =>
@@ -2037,10 +2185,40 @@ const visibleProducts =
     storeProfile.currency,
   );
 
+  const fulfillmentProducts = useMemo(
+    () =>
+      cartItems.map((item) => ({
+        quantity: item.qty,
+        shipping: item.shipping,
+      })),
+    [cartItems],
+  );
+
+  const pickupEvaluation = useMemo(
+    () =>
+      evaluatePickup({
+        settings: shippingSettings,
+        products: fulfillmentProducts,
+        subtotalMinor,
+      }),
+    [fulfillmentProducts, shippingSettings, subtotalMinor],
+  );
+
+  const deliveryEvaluation = useMemo(
+    () =>
+      evaluateLocalDelivery({
+        settings: shippingSettings,
+        products: fulfillmentProducts,
+        subtotalMinor,
+        regionId: delivery.regionId || null,
+      }),
+    [delivery.regionId, fulfillmentProducts, shippingSettings, subtotalMinor],
+  );
+
   const postalBlockedItems = useMemo(
     () =>
       cartItems.filter(
-        (item) => !item.shipping.postalEligible,
+        (item) => !item.shipping.fulfillment.postal,
       ),
     [cartItems],
   );
@@ -2049,18 +2227,52 @@ const visibleProducts =
     () =>
       evaluatePostalShipping({
         settings: shippingSettings,
-        products: cartItems.map((item) => ({
-          quantity: item.qty,
-          shipping: item.shipping,
-        })),
+        products: fulfillmentProducts,
+        subtotalMinor,
       }),
-    [cartItems, shippingSettings],
+    [fulfillmentProducts, shippingSettings, subtotalMinor],
   );
 
+  const checkoutFulfillmentOptions = useMemo(
+    () => [
+      {
+        value: "pickup" as const,
+        label: shippingSettings.pickup.label || text.pickup,
+        description: shippingSettings.pickup.description,
+        disabled: !pickupEvaluation.available,
+      },
+      {
+        value: "delivery" as const,
+        label: shippingSettings.localDelivery.label || text.delivery,
+        description: shippingSettings.localDelivery.description,
+        disabled: !deliveryEvaluation.available,
+      },
+      {
+        value: "postal" as const,
+        label: shippingSettings.postal.label || text.postal,
+        description: shippingSettings.postal.description,
+        disabled: !postalEvaluation.available,
+      },
+    ].filter((option) => {
+      if (option.value === "pickup") return shippingSettings.pickup.enabled;
+      if (option.value === "delivery") return shippingSettings.localDelivery.enabled;
+      return shippingSettings.postal.enabled;
+    }),
+    [deliveryEvaluation.available, pickupEvaluation.available, postalEvaluation.available, shippingSettings, text.delivery, text.pickup, text.postal],
+  );
+
+  const selectedFulfillmentEvaluation =
+    delivery.mode === "pickup"
+      ? pickupEvaluation
+      : delivery.mode === "delivery"
+        ? deliveryEvaluation
+        : null;
   const shippingFeeMinor =
     delivery.mode === "postal" && postalEvaluation.available
       ? postalEvaluation.shippingFeeMinor ?? 0
-      : 0;
+      : selectedFulfillmentEvaluation?.available
+        ? selectedFulfillmentEvaluation.feeMinor
+        : 0;
 
   const shippingFee = minorToMajor(
     shippingFeeMinor,
@@ -2070,6 +2282,47 @@ const visibleProducts =
   const total = Math.max(
     0,
     productsTotal + shippingFee,
+  );
+
+  const fulfillmentUnavailableMessage = useCallback(
+    (mode: "pickup" | "delivery") => {
+      const evaluation = mode === "pickup" ? pickupEvaluation : deliveryEvaluation;
+      if (evaluation.available && evaluation.quoteStatus !== "region_required") return "";
+      if (evaluation.quoteStatus === "region_required") {
+        return language === "ja"
+          ? "配達地域を選択してください。"
+          : language === "en"
+            ? "Select a delivery region."
+            : "Selecione uma região de delivery.";
+      }
+      if (evaluation.reason === "product_not_eligible") {
+        return language === "ja"
+          ? "カート内にこの受取方法を利用できない商品があります。"
+          : language === "en"
+            ? "Some cart products do not support this fulfillment method."
+            : "Há produtos no carrinho que não aceitam esta forma de recebimento.";
+      }
+      if (evaluation.reason === "minimum_order") {
+        const minimum = evaluation.minimumOrderMinor === null
+          ? ""
+          : formatMoneyMinor(
+              evaluation.minimumOrderMinor,
+              storeProfile.currency,
+              storeProfile.regionalLocale,
+            );
+        return language === "ja"
+          ? `最低注文金額に達していません${minimum ? `（${minimum}）` : ""}。`
+          : language === "en"
+            ? `The minimum order value has not been reached${minimum ? ` (${minimum})` : ""}.`
+            : `O pedido não atingiu o valor mínimo${minimum ? ` de ${minimum}` : ""}.`;
+      }
+      return language === "ja"
+        ? "この受取方法は現在利用できません。"
+        : language === "en"
+          ? "This fulfillment method is currently unavailable."
+          : "Esta forma de recebimento não está disponível no momento.";
+    },
+    [deliveryEvaluation, language, pickupEvaluation, storeProfile.currency, storeProfile.regionalLocale],
   );
 
   const postalUnavailableMessage = useMemo(() => {
@@ -2082,6 +2335,21 @@ const visibleProducts =
         : text.postalUnavailable;
     }
 
+    if (postalEvaluation.reason === "minimum_order") {
+      const minimum = postalEvaluation.minimumOrderMinor === null
+        ? ""
+        : formatMoneyMinor(
+            postalEvaluation.minimumOrderMinor,
+            storeProfile.currency,
+            storeProfile.regionalLocale,
+          );
+      return language === "ja"
+        ? `郵送の最低注文金額に達していません${minimum ? `（${minimum}）` : ""}。`
+        : language === "en"
+          ? `The postal minimum order value has not been reached${minimum ? ` (${minimum})` : ""}.`
+          : `O pedido não atingiu o mínimo para correio${minimum ? ` de ${minimum}` : ""}.`;
+    }
+
     if (postalEvaluation.reason === "weight_missing") {
       return text.postalWeightMissing;
     }
@@ -2091,7 +2359,21 @@ const visibleProducts =
     }
 
     return text.postalUnavailable;
-  }, [postalBlockedItems, postalEvaluation, text]);
+  }, [language, postalBlockedItems, postalEvaluation, storeProfile.currency, storeProfile.regionalLocale, text]);
+
+  useEffect(() => {
+    if (cartItems.length === 0) return;
+    const current = checkoutFulfillmentOptions.find(
+      (option) => option.value === delivery.mode,
+    );
+    if (current && !current.disabled) return;
+    const fallback = checkoutFulfillmentOptions.find((option) => !option.disabled);
+    if (!fallback) return;
+    setDelivery((currentDelivery) => ({
+      ...currentDelivery,
+      mode: fallback.value,
+    }));
+  }, [cartItems.length, checkoutFulfillmentOptions, delivery.mode]);
 
   const setQuantity =
     useCallback(
@@ -2203,6 +2485,15 @@ const visibleProducts =
     }
 
     setFormError("");
+    if (productionSchedule.required) {
+      setDelivery((current) => ({
+        ...current,
+        date:
+          current.date && compareDateKeys(current.date, productionSchedule.earliestDate) >= 0
+            ? current.date
+            : productionSchedule.earliestDate,
+      }));
+    }
     setStep("delivery");
     goToTop();
   }
@@ -2241,6 +2532,40 @@ const visibleProducts =
       );
       goToTop();
       return;
+    }
+
+    if (
+      productionSchedule.required &&
+      delivery.date &&
+      compareDateKeys(delivery.date, productionSchedule.earliestDate) < 0
+    ) {
+      setFormError(
+        productionDateError(language, productionSchedule.earliestDate, storeProfile.regionalLocale),
+      );
+      goToTop();
+      return;
+    }
+
+    if (delivery.mode === "pickup" && !pickupEvaluation.available) {
+      setFormError(fulfillmentUnavailableMessage("pickup"));
+      return;
+    }
+
+    if (delivery.mode === "delivery") {
+      if (!deliveryEvaluation.available || deliveryEvaluation.quoteStatus === "region_required") {
+        setFormError(fulfillmentUnavailableMessage("delivery"));
+        return;
+      }
+      if (!delivery.address.trim()) {
+        setFormError(
+          language === "ja"
+            ? "配達先住所を入力してください。"
+            : language === "en"
+              ? "Enter the delivery address."
+              : "Informe o endereço para delivery.",
+        );
+        return;
+      }
     }
 
     if (delivery.mode === "postal") {
@@ -2321,6 +2646,9 @@ const visibleProducts =
           locationLink:
             delivery.locationLink ||
             undefined,
+          regionId:
+            delivery.regionId ||
+            undefined,
           note:
             delivery.note || undefined,
           shipping:
@@ -2381,6 +2709,8 @@ const visibleProducts =
             : language === "en"
               ? "Your session expired. Sign in again before placing the order."
               : "Sua sessão expirou. Entre novamente antes de finalizar o pedido."
+          : errorCode === "FULFILLMENT_DATE_UNAVAILABLE"
+            ? productionDateError(language, productionSchedule.earliestDate, storeProfile.regionalLocale)
           : errorCode ===
           "PRODUCT_UNAVAILABLE"
           ? text.stockError
@@ -2389,7 +2719,13 @@ const visibleProducts =
             ? text.offerUnavailable
             : errorCode ===
                 "SHIPPING_UNAVAILABLE"
-              ? postalUnavailableMessage || text.postalUnavailable
+              ? error instanceof Error && error.message
+                ? error.message
+                : delivery.mode === "postal"
+                  ? postalUnavailableMessage || text.postalUnavailable
+                  : delivery.mode === "delivery"
+                    ? fulfillmentUnavailableMessage("delivery")
+                    : fulfillmentUnavailableMessage("pickup")
               : errorCode ===
                     "SELLER_UNAVAILABLE" ||
                   errorCode ===
@@ -2415,6 +2751,7 @@ const visibleProducts =
       time: "",
       address: "",
       locationLink: "",
+      regionId: "",
       note: "",
       recipientName: "",
       postalCode: "",
@@ -2433,6 +2770,7 @@ const visibleProducts =
     setFormError("");
     setSearch("");
     setSelectedCategory(null);
+    setFulfillmentFilter(null);
     setSelectedOfferId("");
     setStep("products");
     goToTop();
@@ -2613,15 +2951,20 @@ const visibleProducts =
     >
       <div className="mx-auto w-full max-w-6xl px-4 py-3 sm:px-6 sm:py-5 lg:px-8">
 
+        {step === "products" && !selectedCategory && !fulfillmentFilter && !search.trim() && (
+          <StoreIdentityHero profile={storeProfile} />
+        )}
+
 {step === "products" && (
   <>
     <section className="sticky top-0 z-20 -mx-4 border-b border-neutral-200 bg-neutral-50/95 px-4 py-3 backdrop-blur dark:border-neutral-800 dark:bg-neutral-950/95 sm:static sm:mx-0 sm:rounded-2xl sm:border sm:bg-white sm:px-4 sm:dark:bg-neutral-900">
       <div className="flex items-center gap-2">
-        {(selectedCategory || search.trim()) && (
+        {(selectedCategory || fulfillmentFilter || search.trim()) && (
           <button
             type="button"
             onClick={() => {
               setSelectedCategory(null);
+              setFulfillmentFilter(null);
               setSearch("");
               setSearchOpen(false);
               window.scrollTo({
@@ -2640,7 +2983,9 @@ const visibleProducts =
           <p className="truncate text-sm font-black">
             {search.trim()
               ? text.searchResults
-              : selectedCategory ?? text.categoriesTitle}
+              : selectedCategory ??
+                fulfillmentVitrines.find((option) => option.value === fulfillmentFilter)?.label ??
+                text.categoriesTitle}
           </p>
         </div>
 
@@ -2668,6 +3013,7 @@ const visibleProducts =
             onChange={(event) => {
               setSearch(event.target.value);
               setSelectedCategory(null);
+              setFulfillmentFilter(null);
             }}
             placeholder={text.search}
             className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-neutral-400"
@@ -2738,35 +3084,102 @@ const visibleProducts =
           />
         </>
       )
-    ) : selectedCategory ? (
-      visibleNormalProducts.length === 0 ? (
+    ) : selectedCategory || fulfillmentFilter ? (
+      visibleNormalProducts.length === 0 &&
+      visibleMadeToOrderProducts.length === 0 ? (
         <EmptyState
           icon={<Package size={40} />}
           message={text.emptyProducts}
         />
       ) : (
-        <StoreProductGrid
-          title={selectedCategory}
-          help=""
-          products={visibleNormalProducts}
-          cart={cart}
-          bundleSelections={bundleSelections}
-          offers={offers}
-          language={language}
-          text={text}
-          locale={storeProfile.regionalLocale}
-          currency={storeProfile.currency}
-          acceptOrdersWithoutStock={storeProfile.acceptOrdersWithoutStock}
-          onOpen={(product) => {
-            setSelectedProduct(product);
-            setSelectedImageIndex(0);
-          }}
-          onSetQuantity={setQuantity}
-          onConfigureBundle={setConfiguringBundle}
-        />
+        <>
+          <StoreProductGrid
+            title={
+              selectedCategory ??
+              fulfillmentVitrines.find((option) => option.value === fulfillmentFilter)?.label ??
+              text.productsTitle
+            }
+            help=""
+            products={visibleNormalProducts}
+            cart={cart}
+            bundleSelections={bundleSelections}
+            offers={offers}
+            language={language}
+            text={text}
+            locale={storeProfile.regionalLocale}
+            currency={storeProfile.currency}
+            acceptOrdersWithoutStock={storeProfile.acceptOrdersWithoutStock}
+            onOpen={(product) => {
+              setSelectedProduct(product);
+              setSelectedImageIndex(0);
+            }}
+            onSetQuantity={setQuantity}
+            onConfigureBundle={setConfiguringBundle}
+          />
+          {fulfillmentFilter && (
+            <StoreProductGrid
+              title={text.madeToOrderTitle}
+              help={text.madeToOrderHelp}
+              products={visibleMadeToOrderProducts}
+              cart={cart}
+              bundleSelections={bundleSelections}
+              offers={offers}
+              language={language}
+              text={text}
+              locale={storeProfile.regionalLocale}
+              currency={storeProfile.currency}
+              acceptOrdersWithoutStock={storeProfile.acceptOrdersWithoutStock}
+              madeToOrder
+              onOpen={(product) => {
+                setSelectedProduct(product);
+                setSelectedImageIndex(0);
+              }}
+              onSetQuantity={setQuantity}
+              onConfigureBundle={setConfiguringBundle}
+            />
+          )}
+        </>
       )
     ) : (
       <>
+        {fulfillmentVitrines.length > 0 && (
+          <section className="mt-6">
+            <h2 className="text-xl font-black sm:text-2xl">
+              {language === "ja"
+                ? "受取方法から選ぶ"
+                : language === "en"
+                  ? "Shop by fulfillment"
+                  : "Comprar por forma de recebimento"}
+            </h2>
+            <div className="mt-4 grid gap-3 sm:grid-cols-3">
+              {fulfillmentVitrines.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => {
+                    setFulfillmentFilter(option.value);
+                    setSelectedCategory(null);
+                    setSearch("");
+                    setSearchOpen(false);
+                    window.scrollTo({ top: 0, behavior: "smooth" });
+                  }}
+                  className="flex items-center gap-3 rounded-2xl border border-neutral-200 bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md dark:border-neutral-700 dark:bg-neutral-900"
+                >
+                  <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-orange-100 text-orange-700 dark:bg-orange-950/40 dark:text-orange-200">
+                    {option.value === "postal" ? <Mail size={21} /> : option.value === "delivery" ? <Truck size={21} /> : <Store size={21} />}
+                  </span>
+                  <span>
+                    <span className="block text-sm font-black">{option.label}</span>
+                    <span className="mt-1 block text-xs font-semibold text-neutral-500">
+                      {option.count} {option.count === 1 ? text.categoryProduct : text.categoryProducts}
+                    </span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          </section>
+        )}
+
         <section className="mt-6">
           <h2 className="text-2xl font-black sm:text-3xl">
             {text.chooseCategory}
@@ -2789,6 +3202,7 @@ const visibleProducts =
                   type="button"
                   onClick={() => {
                     setSelectedCategory(categoryItem.name);
+                    setFulfillmentFilter(null);
                     setSearch("");
                     setSearchOpen(false);
                     window.scrollTo({
@@ -2982,32 +3396,7 @@ const visibleProducts =
             </div>
 
             <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              {[
-                {
-                  value: "pickup" as const,
-                  label: text.pickup,
-                  disabled: false,
-                },
-                {
-                  value: "delivery" as const,
-                  label: text.delivery,
-                  disabled: false,
-                },
-                {
-                  value: "none" as const,
-                  label: text.arrange,
-                  disabled: false,
-                },
-                ...(shippingSettings.postalEnabled
-                  ? [
-                      {
-                        value: "postal" as const,
-                        label: text.postal,
-                        disabled: !postalEvaluation.available,
-                      },
-                    ]
-                  : []),
-              ].map((option) => (
+              {checkoutFulfillmentOptions.map((option) => (
                 <button
                   key={option.value}
                   type="button"
@@ -3026,9 +3415,14 @@ const visibleProducts =
                   ].join(" ")}
                 >
                   <span className="flex items-center gap-2">
-                    {option.value === "postal" && <Mail size={17} />}
+                    {option.value === "postal" ? <Mail size={17} /> : option.value === "delivery" ? <Truck size={17} /> : <Store size={17} />}
                     {option.label}
                   </span>
+                  {option.description && (
+                    <span className="mt-1 block text-[11px] font-semibold opacity-70">
+                      {option.description}
+                    </span>
+                  )}
                 </button>
               ))}
             </div>
@@ -3038,6 +3432,76 @@ const visibleProducts =
                 {postalUnavailableMessage}
               </p>
             )}
+
+            {(delivery.mode === "pickup" || delivery.mode === "delivery") &&
+              selectedFulfillmentEvaluation && (
+                <div className="mt-4 rounded-2xl border border-neutral-200 bg-neutral-50 p-4 text-sm dark:border-neutral-700 dark:bg-neutral-950/40">
+                  {(!selectedFulfillmentEvaluation.available ||
+                    selectedFulfillmentEvaluation.quoteStatus === "region_required") && (
+                    <p className="font-bold text-amber-700 dark:text-amber-300">
+                      {fulfillmentUnavailableMessage(delivery.mode)}
+                    </p>
+                  )}
+                  {selectedFulfillmentEvaluation.available &&
+                    selectedFulfillmentEvaluation.quoteStatus !== "region_required" && (
+                      <>
+                        {selectedFulfillmentEvaluation.feeMinor > 0 && (
+                          <p className="font-black">
+                            {text.shippingFee}: {formatMoneyMinor(
+                              selectedFulfillmentEvaluation.feeMinor,
+                              storeProfile.currency,
+                              storeProfile.regionalLocale,
+                            )}
+                          </p>
+                        )}
+                        {selectedFulfillmentEvaluation.instructions && (
+                          <p className="mt-2 whitespace-pre-wrap text-xs font-semibold text-neutral-600 dark:text-neutral-300">
+                            {selectedFulfillmentEvaluation.instructions}
+                          </p>
+                        )}
+                      </>
+                    )}
+                </div>
+              )}
+
+            {delivery.mode === "delivery" &&
+              shippingSettings.localDelivery.regions.some((region) => region.enabled) && (
+                <label className="mt-4 block space-y-2">
+                  <span className="text-sm font-black">
+                    {language === "ja"
+                      ? "配達地域"
+                      : language === "en"
+                        ? "Delivery region"
+                        : "Região de delivery"}
+                  </span>
+                  <select
+                    value={delivery.regionId}
+                    required
+                    onChange={(event) =>
+                      setDelivery((current) => ({
+                        ...current,
+                        regionId: event.target.value,
+                      }))
+                    }
+                    className="w-full rounded-xl border border-neutral-200 bg-white px-4 py-3 text-sm font-semibold dark:border-neutral-700 dark:bg-neutral-950"
+                  >
+                    <option value="">
+                      {language === "ja"
+                        ? "地域を選択"
+                        : language === "en"
+                          ? "Select a region"
+                          : "Selecione uma região"}
+                    </option>
+                    {shippingSettings.localDelivery.regions
+                      .filter((region) => region.enabled)
+                      .map((region) => (
+                        <option key={region.id} value={region.id}>
+                          {region.name}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+              )}
 
             {delivery.mode ===
               "pickup" &&
@@ -3057,12 +3521,24 @@ const visibleProducts =
                 </div>
               )}
 
+            {productionSchedule.required && (
+              <div className="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm font-bold leading-relaxed text-emerald-900 dark:border-emerald-900/50 dark:bg-emerald-950/20 dark:text-emerald-200">
+                {productionScheduleNotice(
+                  language,
+                  productionSchedule.maxLeadTimeDays,
+                  productionSchedule.earliestDate,
+                  storeProfile.regionalLocale,
+                )}
+              </div>
+            )}
+
             {delivery.mode !== "postal" && (
               <div className="mt-6 grid gap-4 sm:grid-cols-2">
                 <Field
                   label={text.date}
                   value={delivery.date}
                   type="date"
+                  min={productionSchedule.required ? productionSchedule.earliestDate : undefined}
                   onChange={(value) =>
                     setDelivery((current) => ({
                       ...current,
@@ -3167,13 +3643,13 @@ const visibleProducts =
                     </p>
                   )}
 
-                  {shippingSettings.instructions && (
+                  {shippingSettings.postal.instructions && (
                     <div className="mt-3 border-t border-sky-200 pt-3 dark:border-sky-900/60">
                       <p className="text-[10px] font-black uppercase tracking-wider opacity-70">
                         {text.postalInstructions}
                       </p>
                       <p className="mt-1 whitespace-pre-wrap text-xs">
-                        {shippingSettings.instructions}
+                        {shippingSettings.postal.instructions}
                       </p>
                     </div>
                   )}
@@ -3310,13 +3786,15 @@ const visibleProducts =
               subtotal={subtotal}
               discount={discount + rewardsDiscount}
               shippingFee={shippingFee}
-              showShipping={delivery.mode === "postal"}
+              showShipping={shippingFeeMinor > 0 || delivery.mode === "postal"}
               shippingLabel={
-                postalEvaluation.quoteStatus === "collect"
-                  ? text.shippingCollect
-                  : postalEvaluation.quoteStatus === "pending"
-                    ? text.shippingArrange
-                    : text.shippingFee
+                delivery.mode === "postal"
+                  ? postalEvaluation.quoteStatus === "collect"
+                    ? text.shippingCollect
+                    : postalEvaluation.quoteStatus === "pending"
+                      ? text.shippingArrange
+                      : text.shippingFee
+                  : selectedFulfillmentEvaluation?.label || text.shippingFee
               }
               total={total}
               locale={storeProfile.regionalLocale}
@@ -3480,6 +3958,7 @@ const visibleProducts =
           locale={storeProfile.regionalLocale}
           currency={storeProfile.currency}
           text={text}
+          language={language}
           onImageIndexChange={
             setSelectedImageIndex
           }
@@ -3597,6 +4076,7 @@ function Field({
   inputMode,
   required = false,
   leadingIcon,
+  min,
 }: {
   label: string;
   value: string;
@@ -3611,6 +4091,7 @@ function Field({
     | "numeric";
   required?: boolean;
   leadingIcon?: ReactNode;
+  min?: string;
 }) {
   return (
     <label className="block">
@@ -3640,6 +4121,7 @@ function Field({
           }
           inputMode={inputMode}
           required={required}
+          min={min}
           className="w-full bg-transparent outline-none"
         />
       </span>
@@ -3901,14 +4383,14 @@ function StoreProductGrid({
                 {madeToOrder && (
                   <p className="mt-3 rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-xs font-bold text-violet-700 dark:border-violet-900/50 dark:bg-violet-950/20 dark:text-violet-300">
                     {configurableBundle
-                      ? `${text.kitTarget}: ${product.bundleConfig.totalUnits}`
-                      : text.madeToOrderNotice}
+                      ? `${text.kitTarget}: ${product.bundleConfig.totalUnits} · ${productionLeadTimeNotice(language, product.productionLeadTimeDays)}`
+                      : `${text.madeToOrderNotice} · ${productionLeadTimeNotice(language, product.productionLeadTimeDays)}`}
                   </p>
                 )}
 
                 {needsConfirmation && (
                   <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold leading-relaxed text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-200">
-                    {text.stockConfirmationNotice}
+                    {text.stockConfirmationNotice} {productionLeadTimeNotice(language, product.productionLeadTimeDays)}
                   </p>
                 )}
 
@@ -4146,6 +4628,62 @@ function BundleConfiguratorDialog({
         </footer>
       </section>
     </div>
+  );
+}
+
+function StoreIdentityHero({ profile }: { profile: StoreProfile }) {
+  return (
+    <section
+      className="mb-4 overflow-hidden rounded-3xl border bg-white shadow-sm dark:bg-neutral-900"
+      style={{ borderColor: `${profile.primaryColor}66` }}
+    >
+      {profile.bannerUrl && (
+        <div className="h-28 overflow-hidden bg-neutral-100 sm:h-36 dark:bg-neutral-800">
+          <img
+            src={profile.bannerUrl}
+            alt=""
+            className="h-full w-full object-cover"
+          />
+        </div>
+      )}
+      <div className="flex items-start gap-4 p-4 sm:p-5">
+        {profile.logoUrl ? (
+          <img
+            src={profile.logoUrl}
+            alt={profile.name}
+            className="h-16 w-16 shrink-0 rounded-2xl border-2 border-white object-cover shadow-md dark:border-neutral-800"
+          />
+        ) : (
+          <span
+            className="flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl text-lg font-black text-white shadow-md"
+            style={{ backgroundColor: profile.primaryColor }}
+            aria-hidden="true"
+          >
+            {sellerInitials(profile.name)}
+          </span>
+        )}
+        <div className="min-w-0 flex-1">
+          <h1 className="break-words text-xl font-black sm:text-2xl">
+            {profile.name}
+          </h1>
+          {profile.description && (
+            <p className="mt-1 line-clamp-3 whitespace-pre-wrap text-sm font-medium leading-relaxed text-neutral-500 dark:text-neutral-400">
+              {profile.description}
+            </p>
+          )}
+          <div className="mt-3 flex gap-1.5" aria-hidden="true">
+            <span
+              className="h-1.5 w-14 rounded-full"
+              style={{ backgroundColor: profile.primaryColor }}
+            />
+            <span
+              className="h-1.5 w-8 rounded-full"
+              style={{ backgroundColor: profile.accentColor }}
+            />
+          </div>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -4538,6 +5076,7 @@ function ProductModal({
   locale,
   currency,
   text,
+  language,
   onImageIndexChange,
   onClose,
 }: {
@@ -4547,6 +5086,7 @@ function ProductModal({
   locale: string;
   currency: SupportedCurrency;
   text: (typeof TEXT)[Language];
+  language: Language;
   onImageIndexChange: (
     value: number,
   ) => void;
@@ -4651,6 +5191,12 @@ function ProductModal({
           {product.description && (
             <p className="mt-4 whitespace-pre-wrap text-neutral-600 dark:text-neutral-300">
               {product.description}
+            </p>
+          )}
+
+          {product.availabilityStatus === "made_to_order" && (
+            <p className="mt-4 rounded-2xl border border-violet-200 bg-violet-50 p-4 text-sm font-bold text-violet-800 dark:border-violet-900/50 dark:bg-violet-950/20 dark:text-violet-200">
+              {productionLeadTimeNotice(language, product.productionLeadTimeDays)}
             </p>
           )}
         </div>

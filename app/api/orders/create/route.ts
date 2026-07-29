@@ -4,10 +4,19 @@ import * as admin from "firebase-admin";
 import { NextRequest, NextResponse } from "next/server";
 
 import { getAdminAuth, getAdminDb } from "@/app/lib/firebaseAdmin";
-import { normalizePrintSettings } from "@/app/lib/print-server";
+import { normalizePrintSettings, profileQueueKey, publicPrintProfile } from "@/app/lib/print-server";
 import { normalizeCustomerAddress } from "@/app/lib/customer-profile";
 import { normalizeProductInventory } from "@/app/lib/inventory-schema";
 import { normalizeSellerOrderSettings } from "@/app/lib/order-settings-schema";
+import {
+  compareDateKeys,
+  defaultTimeZoneForRegional,
+  earliestFulfillmentDate,
+  isValidDateKey,
+  normalizeProductProductionLeadTime,
+  normalizeTimeZone,
+  type ProductProductionLeadTime,
+} from "@/app/lib/production-lead-time";
 import { normalizeProductBundleConfig } from "@/app/lib/product-schema";
 import {
   evaluateRewardSelection,
@@ -15,9 +24,13 @@ import {
   type RewardRedemptionMode,
 } from "@/app/lib/reward-schema";
 import {
+  DEFAULT_SELLER_SHIPPING_SETTINGS,
+  evaluateLocalDelivery,
+  evaluatePickup,
   evaluatePostalShipping,
   normalizeProductShipping,
   normalizeSellerShippingSettings,
+  type ProductShipping,
 } from "@/app/lib/shipping-schema";
 
 export const runtime = "nodejs";
@@ -77,6 +90,7 @@ type CleanOrderRequest = {
     time: string;
     address: string;
     locationLink: string;
+    regionId: string;
     note: string;
     shipping: {
       recipientName: string;
@@ -96,6 +110,7 @@ type OrderErrorCode =
   | "PRODUCT_UNAVAILABLE"
   | "OFFER_UNAVAILABLE"
   | "SHIPPING_UNAVAILABLE"
+  | "FULFILLMENT_DATE_UNAVAILABLE"
   | "IDEMPOTENCY_CONFLICT"
   | "TOO_MANY_REQUESTS"
   | "AUTH_REQUIRED"
@@ -132,11 +147,10 @@ type ProductLine = {
   stockReserved: number;
   stockShortage: number;
   productionRequired: number;
+  productionLeadTime: ProductProductionLeadTime;
+  productionLeadTimeDays: number;
   stockState: "available" | "insufficient" | "not_tracked" | "made_to_order";
-  shipping: {
-    postalEligible: boolean;
-    weightGrams: number | null;
-  };
+  shipping: ProductShipping;
 };
 
 type EventOffer = {
@@ -339,6 +353,14 @@ function cleanRequest(value: unknown): CleanOrderRequest {
   }
 
   const deliveryMode = cleanDeliveryMode(delivery.mode);
+  const deliveryDate = cleanString(delivery.date, 80);
+  if (deliveryDate && !isValidDateKey(deliveryDate)) {
+    throw new OrderError(
+      "INVALID_REQUEST",
+      "A data informada é inválida.",
+    );
+  }
+
   if (source === "event" && deliveryMode === "postal") {
     throw new OrderError(
       "SHIPPING_UNAVAILABLE",
@@ -386,10 +408,11 @@ function cleanRequest(value: unknown): CleanOrderRequest {
     },
     delivery: {
       mode: deliveryMode,
-      date: cleanString(delivery.date, 80),
+      date: deliveryDate,
       time: cleanString(delivery.time, 100),
       address: cleanString(delivery.address, 1000),
       locationLink: cleanString(delivery.locationLink, 2000),
+      regionId: cleanString(delivery.regionId, 120),
       note: cleanString(delivery.note, 1500),
       shipping: {
         recipientName: cleanString(shipping.recipientName, 120),
@@ -608,6 +631,18 @@ function normalizeProductLine(params: {
     catalogRaw.shipping ?? raw.shipping,
     catalogRaw.postalEligible ?? raw.postalEligible,
     catalogRaw.shippingWeightGrams ?? raw.shippingWeightGrams,
+    catalogRaw.fulfillmentOptions ??
+      raw.fulfillmentOptions ?? {
+        pickup: catalogRaw.pickupEligible ?? raw.pickupEligible,
+        localDelivery:
+          catalogRaw.localDeliveryEligible ?? raw.localDeliveryEligible,
+        postal: catalogRaw.postalEligible ?? raw.postalEligible,
+      },
+  );
+  const productionLeadTime = normalizeProductProductionLeadTime(
+    catalogRaw.productionLeadTime ?? raw.productionLeadTime,
+    catalogRaw.productionLeadTimeDays ?? raw.productionLeadTimeDays,
+    { madeToOrder },
   );
 
   return {
@@ -628,6 +663,8 @@ function normalizeProductLine(params: {
     stockReserved,
     stockShortage,
     productionRequired,
+    productionLeadTime,
+    productionLeadTimeDays: productionLeadTime.days,
     stockState,
     shipping,
   };
@@ -918,7 +955,7 @@ export async function POST(request: NextRequest) {
         : sellerRef.collection("offers").doc(clean.selectedOfferId)
       : null;
     const shippingSettingsRef =
-      clean.source === "store" && clean.delivery.mode === "postal"
+      clean.source === "store"
         ? sellerRef.collection("settings").doc("shipping")
         : null;
     const printingSettingsRef = sellerRef.collection("settings").doc("printing");
@@ -952,7 +989,6 @@ export async function POST(request: NextRequest) {
     const customerOrderRef = customerRef
       ? customerRef.collection("orders").doc(sha256(orderRef.path))
       : null;
-    const printJobRef = sellerRef.collection("printJobs").doc(`order_${orderRef.id}`);
     const notificationStateRef = sellerRef.collection("notificationState").doc("orders");
 
     const transactionResult = await db.runTransaction(async (transaction) => {
@@ -1088,6 +1124,14 @@ export async function POST(request: NextRequest) {
       }
 
       const sellerRegional = record(sellerData.regional);
+      const sellerTimeZone = normalizeTimeZone(
+        eventData.timeZone ?? sellerRegional.timeZone ?? sellerData.timeZone,
+        defaultTimeZoneForRegional(
+          eventData.regionalLocale ?? sellerRegional.locale ?? sellerData.regionalLocale,
+          eventData.currency ?? sellerRegional.currency ?? sellerData.currency,
+          eventData.operatingCountry ?? sellerRegional.operatingCountry ?? sellerData.operatingCountry,
+        ),
+      );
       const currency = cleanCurrency(
         clean.source === "event"
           ? eventData.currency ?? sellerRegional.currency
@@ -1238,6 +1282,32 @@ export async function POST(request: NextRequest) {
         );
       }
 
+      const productionLines = lines.filter((line) => line.productionRequired > 0);
+      const maxProductionLeadTimeDays = productionLines.reduce(
+        (maximum, line) => Math.max(maximum, line.productionLeadTimeDays),
+        0,
+      );
+      const earliestOrderFulfillmentDate = earliestFulfillmentDate({
+        now: nowMillis,
+        timeZone: sellerTimeZone,
+        leadTimeDays: maxProductionLeadTimeDays,
+      });
+      const productionScheduleProductIds = productionLines
+        .filter((line) => line.productionLeadTimeDays === maxProductionLeadTimeDays)
+        .map((line) => line.productId);
+
+      if (
+        productionLines.length > 0 &&
+        isValidDateKey(clean.delivery.date) &&
+        compareDateKeys(clean.delivery.date, earliestOrderFulfillmentDate) < 0
+      ) {
+        throw new OrderError(
+          "FULFILLMENT_DATE_UNAVAILABLE",
+          `A primeira data disponível para este pedido é ${earliestOrderFulfillmentDate}.`,
+          409,
+        );
+      }
+
       const subtotalMinor = lines.reduce(
         (sum, line) => sum + line.priceMinor * line.quantity,
         0,
@@ -1377,68 +1447,156 @@ export async function POST(request: NextRequest) {
 
       let shippingFeeMinor = 0;
       let shippingSnapshot: Record<string, unknown> | null = null;
+      let fulfillmentSnapshot: Record<string, unknown> | null = null;
 
-      if (clean.delivery.mode === "postal") {
-        if (!shippingSettingsSnapshot?.exists) {
-          throw new OrderError(
-            "SHIPPING_UNAVAILABLE",
-            "O envio por correio não está configurado.",
-            409,
-          );
-        }
-
+      if (clean.source === "store" && clean.delivery.mode !== "none") {
         const shippingSettings = normalizeSellerShippingSettings(
-          shippingSettingsSnapshot.data() ?? {},
+          shippingSettingsSnapshot?.exists
+            ? shippingSettingsSnapshot.data() ?? {}
+            : DEFAULT_SELLER_SHIPPING_SETTINGS,
         );
-        const shippingEvaluation = evaluatePostalShipping({
-          settings: shippingSettings,
-          products: lines.map((line) => ({
-            quantity: line.quantity,
-            shipping: line.shipping,
-          })),
-        });
+        const productsForFulfillment = lines.map((line) => ({
+          quantity: line.quantity,
+          shipping: line.shipping,
+        }));
 
-        if (!shippingEvaluation.available) {
-          const message =
-            shippingEvaluation.reason === "product_not_eligible"
-              ? "Um dos produtos não pode ser enviado por correio."
-              : shippingEvaluation.reason === "weight_missing"
-                ? "Um dos produtos não possui peso para calcular o frete."
-                : shippingEvaluation.reason === "weight_limit_exceeded"
-                  ? "O peso do pedido excede as faixas de frete configuradas."
-                  : "O envio por correio não está disponível.";
+        if (clean.delivery.mode === "pickup") {
+          const evaluation = evaluatePickup({
+            settings: shippingSettings,
+            products: productsForFulfillment,
+            subtotalMinor,
+          });
+          if (!evaluation.available) {
+            throw new OrderError(
+              "SHIPPING_UNAVAILABLE",
+              evaluation.reason === "product_not_eligible"
+                ? "Um dos produtos não está disponível para retirada."
+                : evaluation.reason === "minimum_order"
+                  ? "O pedido não atingiu o valor mínimo para retirada."
+                  : "A retirada não está disponível.",
+              409,
+            );
+          }
+          shippingFeeMinor = evaluation.feeMinor;
+          fulfillmentSnapshot = {
+            schemaVersion: 1,
+            method: "pickup",
+            label: evaluation.label || "Retirada",
+            description: evaluation.description,
+            instructions: evaluation.instructions,
+            feeMinor: evaluation.feeMinor,
+            fee: minorToMajor(evaluation.feeMinor, currency),
+            quoteStatus: evaluation.quoteStatus,
+            minimumOrderMinor: evaluation.minimumOrderMinor,
+            freeAboveMinor: evaluation.freeAboveMinor,
+            estimatedDaysMin: evaluation.estimatedDaysMin,
+            estimatedDaysMax: evaluation.estimatedDaysMax,
+          };
+        } else if (clean.delivery.mode === "delivery") {
+          const evaluation = evaluateLocalDelivery({
+            settings: shippingSettings,
+            products: productsForFulfillment,
+            subtotalMinor,
+            regionId: clean.delivery.regionId || null,
+          });
+          if (!evaluation.available || evaluation.quoteStatus === "region_required") {
+            throw new OrderError(
+              "SHIPPING_UNAVAILABLE",
+              evaluation.quoteStatus === "region_required"
+                ? "Selecione uma região de delivery."
+                : evaluation.reason === "product_not_eligible"
+                  ? "Um dos produtos não está disponível para delivery."
+                  : evaluation.reason === "minimum_order"
+                    ? "O pedido não atingiu o valor mínimo para delivery."
+                    : "O delivery não está disponível para a região selecionada.",
+              409,
+            );
+          }
+          if (!clean.delivery.address) {
+            throw new OrderError(
+              "INVALID_REQUEST",
+              "Informe o endereço para delivery.",
+            );
+          }
+          shippingFeeMinor = evaluation.feeMinor;
+          fulfillmentSnapshot = {
+            schemaVersion: 1,
+            method: "delivery",
+            label: evaluation.label || "Delivery local",
+            description: evaluation.description,
+            instructions: evaluation.instructions,
+            feeMinor: evaluation.feeMinor,
+            fee: minorToMajor(evaluation.feeMinor, currency),
+            quoteStatus: evaluation.quoteStatus,
+            minimumOrderMinor: evaluation.minimumOrderMinor,
+            freeAboveMinor: evaluation.freeAboveMinor,
+            estimatedDaysMin: evaluation.estimatedDaysMin,
+            estimatedDaysMax: evaluation.estimatedDaysMax,
+            regionId: evaluation.appliedRegion?.id ?? null,
+            regionName: evaluation.appliedRegion?.name ?? null,
+            region: evaluation.appliedRegion,
+          };
+        } else if (clean.delivery.mode === "postal") {
+          const evaluation = evaluatePostalShipping({
+            settings: shippingSettings,
+            products: productsForFulfillment,
+            subtotalMinor,
+          });
+          if (!evaluation.available) {
+            const message =
+              evaluation.reason === "product_not_eligible"
+                ? "Um dos produtos não pode ser enviado por correio."
+                : evaluation.reason === "minimum_order"
+                  ? "O pedido não atingiu o valor mínimo para envio por correio."
+                  : evaluation.reason === "weight_missing"
+                    ? "Um dos produtos não possui peso para calcular o frete."
+                    : evaluation.reason === "weight_limit_exceeded"
+                      ? "O peso do pedido excede as faixas de frete configuradas."
+                      : "O envio por correio não está disponível.";
+            throw new OrderError("SHIPPING_UNAVAILABLE", message, 409);
+          }
 
-          throw new OrderError("SHIPPING_UNAVAILABLE", message, 409);
+          shippingFeeMinor = evaluation.shippingFeeMinor ?? 0;
+          shippingSnapshot = {
+            schemaVersion: 3,
+            pricingMode: evaluation.pricingMode,
+            quoteStatus: evaluation.quoteStatus,
+            recipientName: clean.delivery.shipping.recipientName,
+            postalCode: clean.delivery.shipping.postalCode,
+            prefecture: clean.delivery.shipping.prefecture,
+            city: clean.delivery.shipping.city,
+            addressLine1: clean.delivery.shipping.addressLine1,
+            addressLine2: clean.delivery.shipping.addressLine2 || null,
+            totalWeightGrams: evaluation.totalWeightGrams,
+            shippingFeeMinor: evaluation.shippingFeeMinor,
+            shippingFee:
+              evaluation.shippingFeeMinor === null
+                ? null
+                : minorToMajor(evaluation.shippingFeeMinor, currency),
+            appliedBand: evaluation.appliedBand,
+            instructions: evaluation.instructions,
+            pricingSnapshot: shippingSettings.postal,
+          };
+          fulfillmentSnapshot = {
+            schemaVersion: 1,
+            method: "postal",
+            label: evaluation.label || "Envio por correio",
+            description: evaluation.description,
+            instructions: evaluation.instructions,
+            feeMinor: evaluation.shippingFeeMinor,
+            fee:
+              evaluation.shippingFeeMinor === null
+                ? null
+                : minorToMajor(evaluation.shippingFeeMinor, currency),
+            quoteStatus: evaluation.quoteStatus,
+            minimumOrderMinor: evaluation.minimumOrderMinor,
+            freeAboveMinor: evaluation.freeAboveMinor,
+            estimatedDaysMin: evaluation.estimatedDaysMin,
+            estimatedDaysMax: evaluation.estimatedDaysMax,
+            pricingMode: evaluation.pricingMode,
+            totalWeightGrams: evaluation.totalWeightGrams,
+          };
         }
-
-        shippingFeeMinor = shippingEvaluation.shippingFeeMinor ?? 0;
-        shippingSnapshot = {
-          schemaVersion: 2,
-          pricingMode: shippingEvaluation.pricingMode,
-          quoteStatus: shippingEvaluation.quoteStatus,
-          recipientName: clean.delivery.shipping.recipientName,
-          postalCode: clean.delivery.shipping.postalCode,
-          prefecture: clean.delivery.shipping.prefecture,
-          city: clean.delivery.shipping.city,
-          addressLine1: clean.delivery.shipping.addressLine1,
-          addressLine2: clean.delivery.shipping.addressLine2 || null,
-          totalWeightGrams: shippingEvaluation.totalWeightGrams,
-          shippingFeeMinor:
-            shippingEvaluation.shippingFeeMinor === null
-              ? null
-              : shippingEvaluation.shippingFeeMinor,
-          shippingFee:
-            shippingEvaluation.shippingFeeMinor === null
-              ? null
-              : minorToMajor(shippingEvaluation.shippingFeeMinor, currency),
-          appliedBand: shippingEvaluation.appliedBand,
-          pricingSnapshot: {
-            postalEnabled: shippingSettings.postalEnabled,
-            pricingMode: shippingSettings.pricingMode,
-            weightBands: shippingSettings.weightBands,
-            instructions: shippingSettings.instructions,
-          },
-        };
       }
 
       const totalAmountMinor = Math.max(
@@ -1486,12 +1644,26 @@ export async function POST(request: NextRequest) {
           stockReserved: line.stockReserved,
           stockShortage: line.stockShortage,
           productionRequired: line.productionRequired,
+          productionLeadTime: line.productionLeadTime,
+          productionLeadTimeDays: line.productionLeadTimeDays,
+          productionScheduleApplied: line.productionRequired > 0,
+          earliestFulfillmentDate: earliestFulfillmentDate({
+            now: nowMillis,
+            timeZone: sellerTimeZone,
+            leadTimeDays: line.productionRequired > 0 ? line.productionLeadTimeDays : 0,
+          }),
           stockState: line.stockState,
           inventoryState: {
             reservationStatus,
             reservedQuantity: line.stockReserved,
             shortageQuantity: line.stockShortage,
             productionRequired: line.productionRequired,
+            productionLeadTimeDays: line.productionLeadTimeDays,
+            earliestFulfillmentDate: earliestFulfillmentDate({
+              now: nowMillis,
+              timeZone: sellerTimeZone,
+              leadTimeDays: line.productionRequired > 0 ? line.productionLeadTimeDays : 0,
+            }),
             producedQuantity: 0,
             consumedQuantity: 0,
             releasedQuantity: 0,
@@ -1500,8 +1672,11 @@ export async function POST(request: NextRequest) {
                 ? "pending"
                 : "not_required",
           },
+          fulfillmentOptions: line.shipping.fulfillment,
+          pickupEligible: line.shipping.fulfillment.pickup,
+          localDeliveryEligible: line.shipping.fulfillment.localDelivery,
+          postalEligible: line.shipping.fulfillment.postal,
           shipping: line.shipping,
-          postalEligible: line.shipping.postalEligible,
           shippingWeightGrams: line.shipping.weightGrams,
           options: bundleSnapshots.get(line.productId)?.selections.map((selection) => ({
             id: selection.productId,
@@ -1567,6 +1742,17 @@ export async function POST(request: NextRequest) {
           creditedAt: null,
           refundedAt: null,
         },
+        productionSchedule: {
+          schemaVersion: 1,
+          timeZone: sellerTimeZone,
+          maxLeadTimeDays: maxProductionLeadTimeDays,
+          earliestFulfillmentDate: earliestOrderFulfillmentDate,
+          productIds: productionScheduleProductIds,
+          productionRequired: productionLines.length > 0,
+          calculatedAt: now,
+        },
+        productionLeadTimeDays: maxProductionLeadTimeDays,
+        earliestFulfillmentDate: earliestOrderFulfillmentDate,
         status: initialOrderStatus,
         fulfillmentStatus: initialOrderStatus,
         readiness: {
@@ -1595,6 +1781,12 @@ export async function POST(request: NextRequest) {
         },
         channel: clean.source === "store" ? "store" : "pwa",
         deliveryMode: clean.delivery.mode,
+        fulfillment: fulfillmentSnapshot,
+        deliveryRegionId: clean.delivery.regionId || null,
+        deliveryRegion:
+          fulfillmentSnapshot && clean.delivery.mode === "delivery"
+            ? (fulfillmentSnapshot.region ?? null)
+            : null,
         deliveryDate: clean.delivery.date || null,
         deliveryTimeSlot: clean.delivery.time || null,
         address:
@@ -1861,22 +2053,31 @@ export async function POST(request: NextRequest) {
       );
 
       const printingSettings = normalizePrintSettings(printingSettingsSnapshot.data());
-      if (printingSettings.enabled && printingSettings.autoPrint && printingSettings.tokenHash) {
-        transaction.create(printJobRef, {
-          schemaVersion: 1,
-          type: "order",
-          sellerId: clean.sellerId,
-          orderId: orderRef.id,
-          orderPath: orderRef.path,
-          orderSource: clean.source,
-          eventId: clean.eventId || null,
-          status: "pending",
-          copies: printingSettings.copies,
-          attempts: 0,
-          createdAt: now,
-          updatedAt: now,
-          createdBy: "public-order-api",
-        });
+      if (printingSettings.enabled) {
+        for (const profile of printingSettings.profiles) {
+          if (!profile.enabled || !profile.autoPrint || !profile.tokenHash) continue;
+          const printJobRef = sellerRef
+            .collection("printJobs")
+            .doc(`order_${orderRef.id}_${sha256(profile.id).slice(0, 12)}`);
+          transaction.create(printJobRef, {
+            schemaVersion: 2,
+            type: "order",
+            sellerId: clean.sellerId,
+            profileId: profile.id,
+            queueKey: profileQueueKey(profile.id, "pending"),
+            orderId: orderRef.id,
+            orderPath: orderRef.path,
+            orderSource: clean.source,
+            eventId: clean.eventId || null,
+            status: "pending",
+            copies: profile.copies,
+            profileSnapshot: publicPrintProfile(profile),
+            attempts: 0,
+            createdAt: now,
+            updatedAt: now,
+            createdBy: "public-order-api",
+          });
+        }
       }
 
       if (customerOrderRef && customerIdentity) {

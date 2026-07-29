@@ -12,6 +12,7 @@ export type PublicOrderErrorCode =
   | "PRODUCT_UNAVAILABLE"
   | "OFFER_UNAVAILABLE"
   | "SHIPPING_UNAVAILABLE"
+  | "FULFILLMENT_DATE_UNAVAILABLE"
   | "IDEMPOTENCY_CONFLICT"
   | "TOO_MANY_REQUESTS"
   | "NETWORK_ERROR"
@@ -48,6 +49,7 @@ export type CreatePublicOrderInput = {
     time?: string;
     address?: string;
     locationLink?: string;
+    regionId?: string;
     note?: string;
     shipping?: {
       recipientName: string;
@@ -188,6 +190,7 @@ function isKnownErrorCode(value: unknown): value is PublicOrderErrorCode {
     value === "PRODUCT_UNAVAILABLE" ||
     value === "OFFER_UNAVAILABLE" ||
     value === "SHIPPING_UNAVAILABLE" ||
+    value === "FULFILLMENT_DATE_UNAVAILABLE" ||
     value === "IDEMPOTENCY_CONFLICT" ||
     value === "TOO_MANY_REQUESTS" ||
     value === "NETWORK_ERROR" ||

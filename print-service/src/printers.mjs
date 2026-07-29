@@ -1,25 +1,29 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
 import { getWindowsPrinters } from "./windows.mjs";
 
+const execFileAsync = promisify(execFile);
+
 async function main() {
-  if (process.platform !== "win32") {
-    console.error("Este comando lista impressoras somente no Windows.");
-    process.exitCode = 1;
+  if (process.platform === "win32") {
+    const printers = await getWindowsPrinters();
+    if (!printers.length) {
+      console.log("Nenhuma impressora instalada no Windows.");
+      return;
+    }
+    console.table(printers.map((printer) => ({
+      Nome: printer.Name,
+      Status: printer.PrinterStatus,
+      Porta: printer.PortName,
+      Driver: printer.DriverName,
+      Padrao: Boolean(printer.Default),
+    })));
     return;
   }
 
-  const printers = await getWindowsPrinters();
-  if (!printers.length) {
-    console.log("Nenhuma impressora instalada no Windows.");
-    return;
-  }
-
-  console.table(printers.map((printer) => ({
-    Nome: printer.Name,
-    Status: printer.PrinterStatus,
-    Porta: printer.PortName,
-    Driver: printer.DriverName,
-    Padrao: Boolean(printer.Default),
-  })));
+  const { stdout } = await execFileAsync("lpstat", ["-p", "-d"], { timeout: 20_000 });
+  console.log(stdout.trim() || "Nenhuma fila CUPS encontrada.");
 }
 
 main().catch((error) => {

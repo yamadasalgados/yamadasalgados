@@ -12,9 +12,9 @@ const db = admin.firestore();
 
 const vapidPublic = defineString("VAPID_PUBLIC");
 const vapidPrivate = defineSecret("VAPID_PRIVATE");
-const adminEmail = defineString("ADMIN_EMAIL", {
-  default: "mailto:admin@yamada.app",
-});
+const vapidSubject = defineString("VAPID_SUBJECT", { default: "" });
+// Compatibilidade com ambientes antigos que usavam ADMIN_EMAIL.
+const adminEmail = defineString("ADMIN_EMAIL", { default: "" });
 
 /* ---------------- TYPES ---------------- */
 
@@ -55,7 +55,7 @@ function ensurePushConfigured() {
 
   const pub = vapidPublic.value();
   const priv = vapidPrivate.value();
-  const subject = adminEmail.value();
+  const subject = normalizeVapidSubject(vapidSubject.value() || adminEmail.value());
 
   if (!pub || !priv) {
     console.warn("[push] Missing VAPID_PUBLIC or VAPID_PRIVATE. Push disabled.");
@@ -68,6 +68,17 @@ function ensurePushConfigured() {
 
 function cleanString(value: unknown, maxLength: number): string {
   return typeof value === "string" ? value.trim().slice(0, maxLength) : "";
+}
+
+function normalizeVapidSubject(value: unknown): string {
+  const subject = cleanString(value, 500);
+  if (/^https?:\/\//i.test(subject) || /^mailto:/i.test(subject)) {
+    return subject;
+  }
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(subject)) {
+    return `mailto:${subject}`;
+  }
+  return "mailto:noreply@example.com";
 }
 
 function languageOf(value: unknown): Language {

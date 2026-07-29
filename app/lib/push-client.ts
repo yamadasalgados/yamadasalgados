@@ -129,15 +129,15 @@ export async function showLocalPushTest(
 ): Promise<void> {
   const copy = {
     pt: {
-      title: "Teste local Yamada 🔔",
+      title: "Teste local de notificação 🔔",
       body: "O aparelho e o Service Worker conseguem mostrar notificações.",
     },
     en: {
-      title: "Yamada local test 🔔",
+      title: "Local notification test 🔔",
       body: "This device and its service worker can display notifications.",
     },
     ja: {
-      title: "Yamada 端末テスト 🔔",
+      title: "端末の通知テスト 🔔",
       body: "この端末とService Workerは通知を表示できます。",
     },
   } as const;
@@ -150,7 +150,7 @@ export async function showLocalPushTest(
     body: text.body,
     icon: "/icon-192x192.png",
     badge: "/notification-badge.png",
-    tag: `yamada-local-test-${Date.now()}`,
+    tag: `order-app-local-test-${Date.now()}`,
     renotify: true,
     silent: false,
     vibrate: [250, 100, 250, 100, 400],

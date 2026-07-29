@@ -38,6 +38,10 @@ import {
   type ProductLanguage,
 } from "@/app/lib/product-schema";
 import { normalizeProductShipping } from "@/app/lib/shipping-schema";
+import {
+  MAX_PRODUCTION_LEAD_TIME_DAYS,
+  normalizeProductProductionLeadTime,
+} from "@/app/lib/production-lead-time";
 import type {
   SupportedCurrency,
 } from "@/app/types/regional";
@@ -85,8 +89,11 @@ type Snapshot = {
   stockQty: string;
   lowStockThreshold: string;
   inventoryTracked: boolean;
+  pickupEligible: boolean;
+  localDeliveryEligible: boolean;
   postalEligible: boolean;
   shippingWeightGrams: string;
+  productionLeadTimeDays: string;
   content: ProductContent;
   existingImageUrl: string;
   existingExtraUrls: string[];
@@ -159,8 +166,11 @@ export default function ProductModal({
   const [stockQty, setStockQty] = useState("0");
   const [lowStockThreshold, setLowStockThreshold] = useState("5");
   const [inventoryTracked, setInventoryTracked] = useState(true);
+  const [pickupEligible, setPickupEligible] = useState(true);
+  const [localDeliveryEligible, setLocalDeliveryEligible] = useState(true);
   const [postalEligible, setPostalEligible] = useState(false);
   const [shippingWeightGrams, setShippingWeightGrams] = useState("");
+  const [productionLeadTimeDays, setProductionLeadTimeDays] = useState("0");
   const [content, setContent] = useState<ProductContent>(() => emptyProductContent());
   const [bundleEnabled, setBundleEnabled] = useState(false);
   const [bundleTotalUnits, setBundleTotalUnits] = useState("100");
@@ -212,7 +222,9 @@ export default function ProductModal({
             invalidUnits: "販売単位は1以上で入力してください。",
             invalidStock: "在庫数は0以上で入力してください。",
             invalidStockBelowReserved: "予約済み在庫を下回る数量には変更できません。",
+            invalidFulfillment: "少なくとも1つの受取方法を選択してください。",
             invalidShippingWeight: "発送重量は1g以上で入力してください。",
+            invalidProductionLeadTime: `製造日数は${MAX_PRODUCTION_LEAD_TIME_DAYS}日以内で入力してください。受注生産商品は1日以上必要です。`,
             imageRequired: "メイン画像を選択してください。",
             invalidBundleUnits: "セット数は1以上で入力してください。",
             invalidBundleOptions: "セットに含める商品を2つ以上選択してください。",
@@ -239,7 +251,9 @@ export default function ProductModal({
               invalidUnits: "Units per sale must be at least 1.",
               invalidStock: "Stock must be zero or greater.",
               invalidStockBelowReserved: "Physical stock cannot be lower than the reserved quantity.",
+              invalidFulfillment: "Select at least one fulfillment option.",
               invalidShippingWeight: "Shipping weight must be at least 1 gram.",
+              invalidProductionLeadTime: `Enter a production lead time between 0 and ${MAX_PRODUCTION_LEAD_TIME_DAYS} days. Made-to-order products require at least 1 day.`,
               imageRequired: "Select a main image.",
               invalidBundleUnits: "Bundle units must be at least 1.",
               invalidBundleOptions: "Select at least two products for this bundle.",
@@ -265,7 +279,9 @@ export default function ProductModal({
               invalidUnits: "As unidades por venda devem ser pelo menos 1.",
               invalidStock: "O estoque deve ser zero ou maior.",
               invalidStockBelowReserved: "O estoque físico não pode ficar abaixo da quantidade reservada.",
+              invalidFulfillment: "Selecione pelo menos uma forma de recebimento.",
               invalidShippingWeight: "O peso para envio deve ser pelo menos 1 grama.",
+              invalidProductionLeadTime: `Informe um prazo entre 0 e ${MAX_PRODUCTION_LEAD_TIME_DAYS} dias. Produtos sob encomenda exigem pelo menos 1 dia.`,
               imageRequired: "Selecione uma imagem principal.",
               invalidBundleUnits: "O total do kit deve ser pelo menos 1.",
               invalidBundleOptions: "Selecione pelo menos dois produtos para compor o kit.",
@@ -307,8 +323,11 @@ export default function ProductModal({
         stockQty,
         lowStockThreshold,
         inventoryTracked,
+        pickupEligible,
+        localDeliveryEligible,
         postalEligible,
         shippingWeightGrams,
+        productionLeadTimeDays,
         content,
         existingImageUrl,
         existingExtraUrls,
@@ -333,8 +352,11 @@ export default function ProductModal({
       stockQty,
       lowStockThreshold,
       inventoryTracked,
+      pickupEligible,
+      localDeliveryEligible,
       postalEligible,
       shippingWeightGrams,
+      productionLeadTimeDays,
       content,
       bundleEnabled,
       bundleTotalUnits,
@@ -375,6 +397,24 @@ export default function ProductModal({
       activeProduct?.category || activeCategories[0] || "";
     const activeBundle = normalizeProductBundleConfig(activeProduct?.bundleConfig);
     const activeStorefront = normalizeProductStorefrontConfig(activeProduct?.storefront);
+    const activeProductionLeadTime = normalizeProductProductionLeadTime(
+      activeProduct?.productionLeadTime,
+      activeProduct?.productionLeadTimeDays,
+      {
+        madeToOrder:
+          activeProduct?.status === "made_to_order" || activeBundle.enabled,
+      },
+    );
+    const activeShipping = normalizeProductShipping(
+      activeProduct?.shipping,
+      activeProduct?.postalEligible,
+      activeProduct?.shippingWeightGrams,
+      {
+        pickup: activeProduct?.pickupEligible,
+        localDelivery: activeProduct?.localDeliveryEligible,
+        postal: activeProduct?.postalEligible,
+      },
+    );
     const nextState: Snapshot = {
       name: activeProduct?.name || "",
       category: nextCategory,
@@ -391,8 +431,11 @@ export default function ProductModal({
       stockQty: String(activeInventory.quantity),
       lowStockThreshold: String(activeInventory.lowStockThreshold),
       inventoryTracked: activeInventory.tracked,
-      postalEligible: normalizeProductShipping(activeProduct?.shipping, activeProduct?.postalEligible, activeProduct?.shippingWeightGrams).postalEligible,
-      shippingWeightGrams: String(normalizeProductShipping(activeProduct?.shipping, activeProduct?.postalEligible, activeProduct?.shippingWeightGrams).weightGrams ?? ""),
+      pickupEligible: activeShipping.fulfillment.pickup,
+      localDeliveryEligible: activeShipping.fulfillment.localDelivery,
+      postalEligible: activeShipping.fulfillment.postal,
+      shippingWeightGrams: String(activeShipping.weightGrams ?? ""),
+      productionLeadTimeDays: String(activeProductionLeadTime.days),
       content: normalizeProductContent(activeProduct?.content, activeProduct?.name || "", activeProduct?.description || ""),
       existingImageUrl: activeProduct?.imageUrl || "",
       existingExtraUrls: activeProduct?.extraImageUrls || [],
@@ -414,8 +457,11 @@ export default function ProductModal({
     setStockQty(nextState.stockQty);
     setLowStockThreshold(nextState.lowStockThreshold);
     setInventoryTracked(nextState.inventoryTracked);
+    setPickupEligible(nextState.pickupEligible);
+    setLocalDeliveryEligible(nextState.localDeliveryEligible);
     setPostalEligible(nextState.postalEligible);
     setShippingWeightGrams(nextState.shippingWeightGrams);
+    setProductionLeadTimeDays(nextState.productionLeadTimeDays);
     setContent(nextState.content);
     setExistingImageUrl(nextState.existingImageUrl);
     setExistingExtraUrls(nextState.existingExtraUrls);
@@ -528,6 +574,7 @@ export default function ProductModal({
     const parsedStock = toNum(stockQty);
     const parsedThreshold = toNum(lowStockThreshold);
     const parsedShippingWeight = shippingWeightGrams.trim() === "" ? null : toNum(shippingWeightGrams);
+    const parsedProductionLeadTimeDays = toNum(productionLeadTimeDays);
     const parsedBundleTotalUnits = toNum(bundleTotalUnits);
 
     const translatedNameExists = Object.values(content).some((entry: ProductContent[ProductLanguage]) => entry.name.trim());
@@ -568,12 +615,26 @@ export default function ProductModal({
       errors.lowStockThreshold = copy.invalidStock;
     }
 
+    if (!pickupEligible && !localDeliveryEligible && !postalEligible) {
+      errors.fulfillmentOptions = copy.invalidFulfillment;
+    }
+
     if (
       postalEligible &&
       parsedShippingWeight !== null &&
       (Number.isNaN(parsedShippingWeight) || parsedShippingWeight < 1)
     ) {
       errors.shippingWeightGrams = copy.invalidShippingWeight;
+    }
+
+    const requiresProductionLeadTime = status === "made_to_order" || bundleEnabled;
+    if (
+      Number.isNaN(parsedProductionLeadTimeDays) ||
+      !Number.isInteger(parsedProductionLeadTimeDays) ||
+      parsedProductionLeadTimeDays < (requiresProductionLeadTime ? 1 : 0) ||
+      parsedProductionLeadTimeDays > MAX_PRODUCTION_LEAD_TIME_DAYS
+    ) {
+      errors.productionLeadTimeDays = copy.invalidProductionLeadTime;
     }
 
     if (bundleEnabled) {
@@ -620,6 +681,7 @@ export default function ProductModal({
       parsedStock,
       parsedThreshold,
       parsedShippingWeight,
+      parsedProductionLeadTimeDays,
       parsedBundleTotalUnits,
     };
   }, [
@@ -630,7 +692,9 @@ export default function ProductModal({
     copy.invalidStock,
     copy.invalidStockBelowReserved,
     copy.invalidUnits,
+    copy.invalidFulfillment,
     copy.invalidShippingWeight,
+    copy.invalidProductionLeadTime,
     copy.invalidBundleUnits,
     copy.invalidBundleOptions,
     costPrice,
@@ -646,10 +710,14 @@ export default function ProductModal({
     sellPrice,
     stockQty,
     lowStockThreshold,
+    pickupEligible,
+    localDeliveryEligible,
     postalEligible,
     shippingWeightGrams,
+    productionLeadTimeDays,
     content,
     bundleEnabled,
+    status,
     bundleTotalUnits,
     bundleOptionProductIds,
     availableProducts,
@@ -720,6 +788,11 @@ export default function ProductModal({
     const weightGrams = validation.parsedShippingWeight === null
       ? null
       : Math.max(1, Math.round(validation.parsedShippingWeight));
+    const normalizedProductionLeadTime = normalizeProductProductionLeadTime(
+      { days: validation.parsedProductionLeadTimeDays },
+      validation.parsedProductionLeadTimeDays,
+      { madeToOrder: status === "made_to_order" || bundleEnabled },
+    );
     const normalizedBundleTotalUnits = Math.max(1, Math.floor(validation.parsedBundleTotalUnits));
     const normalizedBundleOptionIds = Array.from(new Set(bundleOptionProductIds.filter((id) =>
       availableProducts.some(
@@ -836,11 +909,25 @@ export default function ProductModal({
           lowStockThreshold: threshold,
         },
         shipping: {
+          fulfillment: {
+            pickup: pickupEligible,
+            localDelivery: localDeliveryEligible,
+            postal: postalEligible,
+          },
           postalEligible,
           weightGrams,
         },
+        fulfillmentOptions: {
+          pickup: pickupEligible,
+          localDelivery: localDeliveryEligible,
+          postal: postalEligible,
+        },
+        pickupEligible,
+        localDeliveryEligible,
         postalEligible,
         shippingWeightGrams: weightGrams,
+        productionLeadTime: normalizedProductionLeadTime,
+        productionLeadTimeDays: normalizedProductionLeadTime.days,
         costPrice: cost,
         sellPrice: sale,
         shadowCost: cost,
@@ -949,8 +1036,12 @@ export default function ProductModal({
           stockQty: stock,
           lowStockThreshold: threshold,
           shipping: payload.shipping,
+          pickupEligible,
+          localDeliveryEligible,
           postalEligible,
           shippingWeightGrams: weightGrams,
+          productionLeadTime: normalizedProductionLeadTime,
+          productionLeadTimeDays: normalizedProductionLeadTime.days,
           bundleConfig: payload.bundleConfig,
           storefront: payload.storefront,
           status: payload.status,
@@ -969,8 +1060,11 @@ export default function ProductModal({
         stockQty: String(savedProduct.stockQty || 0),
         lowStockThreshold: String(savedProduct.lowStockThreshold || 0),
         inventoryTracked: savedProduct.inventory.tracked,
-        postalEligible: savedProduct.shipping.postalEligible,
+        pickupEligible: savedProduct.shipping.fulfillment.pickup,
+        localDeliveryEligible: savedProduct.shipping.fulfillment.localDelivery,
+        postalEligible: savedProduct.shipping.fulfillment.postal,
         shippingWeightGrams: String(savedProduct.shipping.weightGrams ?? ""),
+        productionLeadTimeDays: String(savedProduct.productionLeadTimeDays),
         content: savedProduct.content,
         existingImageUrl: savedProduct.imageUrl,
         existingExtraUrls: savedProduct.extraImageUrls || [],
@@ -986,6 +1080,10 @@ export default function ProductModal({
       initialSnapshotRef.current = finalSnapshot;
       setExistingImageUrl(savedProduct.imageUrl);
       setExistingExtraUrls(savedProduct.extraImageUrls || []);
+      setPickupEligible(savedProduct.shipping.fulfillment.pickup);
+      setLocalDeliveryEligible(savedProduct.shipping.fulfillment.localDelivery);
+      setPostalEligible(savedProduct.shipping.fulfillment.postal);
+      setProductionLeadTimeDays(String(savedProduct.productionLeadTimeDays));
       setBundleEnabled(savedProduct.bundleConfig.enabled);
       setBundleTotalUnits(String(savedProduct.bundleConfig.totalUnits));
       setBundleOptionProductIds(savedProduct.bundleConfig.optionProductIds);
@@ -1049,7 +1147,10 @@ export default function ProductModal({
     revokePreviews,
     sellerId,
     status,
+    pickupEligible,
+    localDeliveryEligible,
     postalEligible,
+    productionLeadTimeDays,
     storefrontSubgroup,
     storefrontSubgroupOrder,
     storefrontProductOrder,
@@ -1184,12 +1285,30 @@ export default function ProductModal({
                 }}
                 inventoryTracked={inventoryTracked}
                 setInventoryTracked={setInventoryTracked}
+                pickupEligible={pickupEligible}
+                setPickupEligible={(value) => {
+                  setPickupEligible(value);
+                  clearFieldError("fulfillmentOptions");
+                }}
+                localDeliveryEligible={localDeliveryEligible}
+                setLocalDeliveryEligible={(value) => {
+                  setLocalDeliveryEligible(value);
+                  clearFieldError("fulfillmentOptions");
+                }}
                 postalEligible={postalEligible}
-                setPostalEligible={setPostalEligible}
+                setPostalEligible={(value) => {
+                  setPostalEligible(value);
+                  clearFieldError("fulfillmentOptions");
+                }}
                 shippingWeightGrams={shippingWeightGrams}
                 setShippingWeightGrams={(value) => {
                   setShippingWeightGrams(value);
                   clearFieldError("shippingWeightGrams");
+                }}
+                productionLeadTimeDays={productionLeadTimeDays}
+                setProductionLeadTimeDays={(value) => {
+                  setProductionLeadTimeDays(value);
+                  clearFieldError("productionLeadTimeDays");
                 }}
                 content={content}
                 setContent={setContent}
@@ -1214,7 +1333,11 @@ export default function ProductModal({
                   if (value) {
                     setStatus("made_to_order");
                     setInventoryTracked(false);
+                    if (Number(productionLeadTimeDays || 0) < 1) {
+                      setProductionLeadTimeDays("1");
+                    }
                   }
+                  clearFieldError("productionLeadTimeDays");
                   clearFieldError("bundleTotalUnits");
                   clearFieldError("bundleOptions");
                 }}

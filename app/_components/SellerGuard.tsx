@@ -34,6 +34,10 @@ import {
 import {
   normalizeSellerRegionalProfile,
 } from "@/app/lib/seller-regional-profile";
+import type {
+  SellerContactIdentity,
+  SellerReceiptIdentity,
+} from "@/app/lib/seller-identity";
 import {
   normalizeSellerOrderSettings,
   type SellerOrderSettings,
@@ -78,6 +82,13 @@ export type UserDoc = {
   billingInterval?: "monthly" | "annual" | null;
 
   storeName?: string;
+  storeDescription?: string;
+  logoUrl?: string;
+  bannerUrl?: string;
+  brandPrimaryColor?: string;
+  brandAccentColor?: string;
+  contact?: SellerContactIdentity;
+  receiptIdentity?: SellerReceiptIdentity;
   whatsapp?: string;
   messengerId?: string;
   pickupLink?: string;
@@ -215,7 +226,14 @@ function buildProfile(
       access.billingInterval,
 
     storeName: regional.storeName,
-    whatsapp: String(seller?.whatsapp ?? "").trim(),
+    storeDescription: regional.storeDescription,
+    logoUrl: regional.logoUrl,
+    bannerUrl: regional.bannerUrl,
+    brandPrimaryColor: regional.brandPrimaryColor,
+    brandAccentColor: regional.brandAccentColor,
+    contact: regional.contact,
+    receiptIdentity: regional.receiptIdentity,
+    whatsapp: regional.contact.whatsapp || String(seller?.whatsapp ?? "").trim(),
     messengerId: String(seller?.messengerId ?? "").trim(),
     pickupLink: String(seller?.pickupLink ?? "").trim(),
     pickupNote: String(seller?.pickupNote ?? "").trim(),

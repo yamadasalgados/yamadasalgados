@@ -69,6 +69,9 @@ export type CustomerOrderDetail = CustomerOrderSummary & {
   rewardRedemptionStatus: string;
   rewardProductName: string;
   shippingFeeMinor: number;
+  fulfillmentLabel: string;
+  fulfillmentInstructions: string;
+  deliveryRegionName: string;
   address: string;
   locationLink: string;
   note: string;

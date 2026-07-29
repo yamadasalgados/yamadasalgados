@@ -1,6 +1,9 @@
+import process from "node:process";
+
 import { config } from "./config.mjs";
 
-const VERSION = "1.0.0";
+const VERSION = "2.0.0";
+const capabilities = ["preview", "windows", "cups", "tcp-escpos-raster", "paper-58", "paper-80"];
 
 async function request(action, extra = {}) {
   const response = await fetch(`${config.baseUrl}/api/print/jobs`, {
@@ -12,8 +15,12 @@ async function request(action, extra = {}) {
     body: JSON.stringify({
       action,
       sellerId: config.sellerId,
+      profileId: config.profileId,
       stationName: config.stationName,
       version: VERSION,
+      platform: process.platform,
+      arch: process.arch,
+      capabilities,
       ...extra,
     }),
   });
@@ -33,3 +40,5 @@ export const api = {
   complete: (jobId, outputFiles = []) => request("complete", { jobId, outputFiles }),
   fail: (jobId, error) => request("fail", { jobId, error: String(error).slice(0, 1000) }),
 };
+
+export const serviceVersion = VERSION;

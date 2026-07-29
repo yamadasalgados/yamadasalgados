@@ -7,12 +7,14 @@ if (!admin.apps.length) admin.initializeApp();
 
 const corsMiddleware = cors({ origin: true });
 
-const ADMIN_EMAILS = ["will@will.com", "SEU_EMAIL_ADMIN_2@exemplo.com"];
+async function isAdminUser(
+  uid: string,
+  token: admin.auth.DecodedIdToken,
+): Promise<boolean> {
+  if (token.admin === true || token.role === "admin") return true;
 
-function isAdminEmail(email?: string | null) {
-  if (!email) return false;
-  const e = email.trim().toLowerCase();
-  return ADMIN_EMAILS.map((x) => x.trim().toLowerCase()).includes(e);
+  const snapshot = await admin.firestore().doc(`users/${uid}`).get();
+  return snapshot.data()?.role === "admin";
 }
 
 /**
@@ -42,10 +44,9 @@ export const deleteSeller = onRequest(
 
         // ✅ valida token
         const decoded = await admin.auth().verifyIdToken(idToken, true);
-        const email = decoded.email ?? null;
 
-        // ✅ só admin
-        if (!isAdminEmail(email)) {
+        // A autorização vem da role/claim, nunca de uma lista fixa de e-mails.
+        if (!(await isAdminUser(decoded.uid, decoded))) {
           return res.status(403).json({ ok: false, error: "Forbidden: admin only" });
         }
 

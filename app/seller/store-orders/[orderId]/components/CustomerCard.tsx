@@ -229,10 +229,11 @@ export default function CustomerCard({
             </p>
 
             <p className="mt-1 font-semibold">
-              {getDeliveryModeLabel(
-                order.deliveryMode,
-                locale,
-              )}
+              {order.fulfillment?.label ||
+                getDeliveryModeLabel(
+                  order.deliveryMode,
+                  locale,
+                )}
             </p>
           </div>
 
@@ -251,6 +252,25 @@ export default function CustomerCard({
             </p>
           </div>
         </div>
+
+        {order.deliveryMode === "delivery" && order.fulfillment?.regionName && (
+          <div className="rounded-2xl border border-orange-200 bg-orange-50 p-4 dark:border-orange-900/50 dark:bg-orange-950/20">
+            <p className="text-xs font-bold uppercase text-orange-700 dark:text-orange-300">
+              {locale.startsWith("ja")
+                ? "配達地域"
+                : locale.startsWith("en")
+                  ? "Delivery region"
+                  : "Região de delivery"}
+            </p>
+            <p className="mt-1 font-black">{order.fulfillment.regionName}</p>
+          </div>
+        )}
+
+        {order.deliveryMode !== "postal" && order.fulfillment?.instructions && (
+          <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900 dark:border-blue-900/50 dark:bg-blue-950/20 dark:text-blue-100">
+            <p className="whitespace-pre-wrap">{order.fulfillment.instructions}</p>
+          </div>
+        )}
 
         {order.deliveryMode === "postal" && order.shipping && (
           <div className="rounded-2xl border border-sky-200 bg-sky-50 p-4 dark:border-sky-900/60 dark:bg-sky-950/25">

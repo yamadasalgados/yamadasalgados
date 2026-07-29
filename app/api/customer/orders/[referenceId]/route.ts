@@ -233,6 +233,8 @@ export async function GET(
         : "";
 
     const rewards = record(order.rewards);
+    const fulfillment = record(order.fulfillment);
+    const deliveryRegion = record(order.deliveryRegion);
     const summaryUpdate = {
       status,
       fulfillmentStatus: status,
@@ -272,6 +274,11 @@ export async function GET(
           deliveryMode: cleanString(order.deliveryMode, 40),
           deliveryDate: cleanString(order.deliveryDate, 80),
           deliveryTimeSlot: cleanString(order.deliveryTimeSlot, 80),
+          fulfillmentLabel: cleanString(fulfillment.label, 120),
+          fulfillmentInstructions: cleanString(fulfillment.instructions, 1500),
+          deliveryRegionName:
+            cleanString(fulfillment.regionName, 120) ||
+            cleanString(deliveryRegion.name, 120),
           readinessReasonCodes: stringList(readiness.reasonCodes),
           createdAt,
           updatedAt,

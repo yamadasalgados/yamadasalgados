@@ -12,6 +12,7 @@ import type {
   StoreOrderDate,
   StoreOrderDeliveryMode,
   StoreOrderHistory,
+  StoreOrderFulfillment,
   StoreOrderInventoryState,
   StoreOrderItem,
   StoreOrderOption,
@@ -294,19 +295,104 @@ export function normalizeStoreOrderItems(
           rawItem.stockState === "made_to_order"
             ? rawItem.stockState
             : "available",
-        shipping: {
-          postalEligible:
-            isRecord(rawItem.shipping)
-              ? rawItem.shipping.postalEligible === true
-              : rawItem.postalEligible === true,
-          weightGrams: (() => {
-            const shipping = isRecord(rawItem.shipping) ? rawItem.shipping : {};
-            const value = toOptionalNumber(
-              shipping.weightGrams ?? rawItem.shippingWeightGrams,
-            );
-            return value !== undefined && value > 0 ? Math.round(value) : null;
-          })(),
-        },
+        fulfillmentOptions: (() => {
+          const shipping = isRecord(rawItem.shipping) ? rawItem.shipping : {};
+          const shippingFulfillment = isRecord(shipping.fulfillment)
+            ? shipping.fulfillment
+            : {};
+          const rawFulfillment = isRecord(rawItem.fulfillmentOptions)
+            ? rawItem.fulfillmentOptions
+            : {};
+          const pickup =
+            typeof shippingFulfillment.pickup === "boolean"
+              ? shippingFulfillment.pickup
+              : typeof rawFulfillment.pickup === "boolean"
+                ? rawFulfillment.pickup
+                : rawItem.pickupEligible !== false;
+          const localDelivery =
+            typeof shippingFulfillment.localDelivery === "boolean"
+              ? shippingFulfillment.localDelivery
+              : typeof rawFulfillment.localDelivery === "boolean"
+                ? rawFulfillment.localDelivery
+                : rawItem.localDeliveryEligible !== false;
+          const postal =
+            typeof shippingFulfillment.postal === "boolean"
+              ? shippingFulfillment.postal
+              : typeof rawFulfillment.postal === "boolean"
+                ? rawFulfillment.postal
+                : shipping.postalEligible === true || rawItem.postalEligible === true;
+
+          return { pickup, localDelivery, postal };
+        })(),
+        pickupEligible: (() => {
+          const shipping = isRecord(rawItem.shipping) ? rawItem.shipping : {};
+          const fulfillment = isRecord(shipping.fulfillment)
+            ? shipping.fulfillment
+            : isRecord(rawItem.fulfillmentOptions)
+              ? rawItem.fulfillmentOptions
+              : {};
+          return typeof fulfillment.pickup === "boolean"
+            ? fulfillment.pickup
+            : rawItem.pickupEligible !== false;
+        })(),
+        localDeliveryEligible: (() => {
+          const shipping = isRecord(rawItem.shipping) ? rawItem.shipping : {};
+          const fulfillment = isRecord(shipping.fulfillment)
+            ? shipping.fulfillment
+            : isRecord(rawItem.fulfillmentOptions)
+              ? rawItem.fulfillmentOptions
+              : {};
+          return typeof fulfillment.localDelivery === "boolean"
+            ? fulfillment.localDelivery
+            : rawItem.localDeliveryEligible !== false;
+        })(),
+        postalEligible: (() => {
+          const shipping = isRecord(rawItem.shipping) ? rawItem.shipping : {};
+          const fulfillment = isRecord(shipping.fulfillment)
+            ? shipping.fulfillment
+            : isRecord(rawItem.fulfillmentOptions)
+              ? rawItem.fulfillmentOptions
+              : {};
+          return typeof fulfillment.postal === "boolean"
+            ? fulfillment.postal
+            : shipping.postalEligible === true || rawItem.postalEligible === true;
+        })(),
+        shipping: (() => {
+          const shipping = isRecord(rawItem.shipping) ? rawItem.shipping : {};
+          const shippingFulfillment = isRecord(shipping.fulfillment)
+            ? shipping.fulfillment
+            : {};
+          const rawFulfillment = isRecord(rawItem.fulfillmentOptions)
+            ? rawItem.fulfillmentOptions
+            : {};
+          const pickup =
+            typeof shippingFulfillment.pickup === "boolean"
+              ? shippingFulfillment.pickup
+              : typeof rawFulfillment.pickup === "boolean"
+                ? rawFulfillment.pickup
+                : rawItem.pickupEligible !== false;
+          const localDelivery =
+            typeof shippingFulfillment.localDelivery === "boolean"
+              ? shippingFulfillment.localDelivery
+              : typeof rawFulfillment.localDelivery === "boolean"
+                ? rawFulfillment.localDelivery
+                : rawItem.localDeliveryEligible !== false;
+          const postal =
+            typeof shippingFulfillment.postal === "boolean"
+              ? shippingFulfillment.postal
+              : typeof rawFulfillment.postal === "boolean"
+                ? rawFulfillment.postal
+                : shipping.postalEligible === true || rawItem.postalEligible === true;
+          const value = toOptionalNumber(
+            shipping.weightGrams ?? rawItem.shippingWeightGrams,
+          );
+
+          return {
+            fulfillment: { pickup, localDelivery, postal },
+            postalEligible: postal,
+            weightGrams: value !== undefined && value > 0 ? Math.round(value) : null,
+          };
+        })(),
         options:
           options.length > 0
             ? options
@@ -616,6 +702,75 @@ function normalizeAppliedOffers(
     );
 }
 
+
+function normalizeOrderFulfillment(
+  value: unknown,
+): StoreOrderFulfillment | undefined {
+  if (!isRecord(value)) return undefined;
+
+  const method =
+    value.method === "pickup" ||
+    value.method === "delivery" ||
+    value.method === "postal"
+      ? value.method
+      : null;
+
+  if (!method) return undefined;
+
+  const quoteStatus =
+    value.quoteStatus === "calculated" ||
+    value.quoteStatus === "region_required" ||
+    value.quoteStatus === "collect" ||
+    value.quoteStatus === "pending" ||
+    value.quoteStatus === "unavailable"
+      ? value.quoteStatus
+      : undefined;
+  const pricingMode =
+    value.pricingMode === "collect" ||
+    value.pricingMode === "arrange" ||
+    value.pricingMode === "weight_table"
+      ? value.pricingMode
+      : undefined;
+
+  return {
+    schemaVersion: toOptionalNumber(value.schemaVersion),
+    method,
+    label: toSafeString(value.label) || undefined,
+    description: toSafeString(value.description) || undefined,
+    instructions: toSafeString(value.instructions) || undefined,
+    feeMinor:
+      value.feeMinor === null ? null : toOptionalNumber(value.feeMinor),
+    fee:
+      value.fee === null ? null : toOptionalNumber(value.fee),
+    quoteStatus,
+    minimumOrderMinor:
+      value.minimumOrderMinor === null
+        ? null
+        : toOptionalNumber(value.minimumOrderMinor),
+    freeAboveMinor:
+      value.freeAboveMinor === null
+        ? null
+        : toOptionalNumber(value.freeAboveMinor),
+    estimatedDaysMin:
+      value.estimatedDaysMin === null
+        ? null
+        : toOptionalNumber(value.estimatedDaysMin),
+    estimatedDaysMax:
+      value.estimatedDaysMax === null
+        ? null
+        : toOptionalNumber(value.estimatedDaysMax),
+    regionId:
+      value.regionId === null ? null : toSafeString(value.regionId) || undefined,
+    regionName:
+      value.regionName === null ? null : toSafeString(value.regionName) || undefined,
+    pricingMode,
+    totalWeightGrams:
+      value.totalWeightGrams === null
+        ? null
+        : toOptionalNumber(value.totalWeightGrams),
+  };
+}
+
 function normalizeOrderShipping(
   value: unknown,
 ): StoreOrderShipping | undefined {
@@ -658,7 +813,9 @@ function normalizeOrderShipping(
         ? null
         : toOptionalNumber(value.shippingFee),
     instructions:
-      toSafeString(pricingSnapshot.instructions) || undefined,
+      toSafeString(value.instructions) ||
+      toSafeString(pricingSnapshot.instructions) ||
+      undefined,
   };
 }
 
@@ -801,6 +958,11 @@ export function parseStoreOrder(
     deliveryFee,
     shippingFee,
     shipping: normalizeOrderShipping(data.shipping),
+    fulfillment: normalizeOrderFulfillment(data.fulfillment),
+    deliveryRegionId:
+      toSafeString(data.deliveryRegionId) || undefined,
+    deliveryRegion:
+      isRecord(data.deliveryRegion) ? data.deliveryRegion : null,
     currency:
       data.currency === "BRL" || data.currency === "USD"
         ? data.currency

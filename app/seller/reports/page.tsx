@@ -365,7 +365,7 @@ const downloadFullBackup = useCallback(async () => {
     const a = document.createElement("a");
 
     a.href = url;
-    a.download = `yamada-full-backup-${sellerId}-${new Date()
+    a.download = `seller-full-backup-${sellerId}-${new Date()
       .toISOString()
       .slice(0, 10)}.json`;
 
@@ -413,7 +413,7 @@ const downloadCsv = useCallback(() => {
   const a = document.createElement("a");
 
   a.href = url;
-  a.download = `yamada-reports-${sellerId}-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.download = `seller-reports-${sellerId}-${new Date().toISOString().slice(0, 10)}.csv`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);

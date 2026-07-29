@@ -409,7 +409,8 @@ export default function OrderPrintDialog({
         (order.deliveryFee ?? 0),
     );
   const businessName =
-    storeName.trim() || "Yamada";
+    storeName.trim() ||
+    (lang === "ja" ? "店舗" : lang === "en" ? "Store" : "Loja");
 
   return (
     <div

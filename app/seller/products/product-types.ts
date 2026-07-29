@@ -1,6 +1,7 @@
 import type { Timestamp } from "firebase/firestore";
 import type { ProductBundleConfig, ProductContent, ProductStorefrontConfig } from "@/app/lib/product-schema";
 import type { ProductShipping } from "@/app/lib/shipping-schema";
+import type { ProductProductionLeadTime } from "@/app/lib/production-lead-time";
 
 export type CategoryId = string;
 export type ProductStatus = "active" | "made_to_order" | "hidden" | "inactive";
@@ -37,8 +38,12 @@ export type ProductDoc = {
   stockQty: number;
   lowStockThreshold: number;
   shipping: ProductShipping;
+  pickupEligible: boolean;
+  localDeliveryEligible: boolean;
   postalEligible: boolean;
   shippingWeightGrams: number | null;
+  productionLeadTime: ProductProductionLeadTime;
+  productionLeadTimeDays: number;
   status: ProductStatus;
   imageUrl: string;
   extraImageUrls?: string[];
@@ -54,7 +59,9 @@ export type ProductFormField =
   | "quantity"
   | "stockQty"
   | "lowStockThreshold"
+  | "fulfillmentOptions"
   | "shippingWeightGrams"
+  | "productionLeadTimeDays"
   | "bundleTotalUnits"
   | "bundleOptions"
   | "image";

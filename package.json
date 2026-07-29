@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "audit:white-label": "node scripts/audit-white-label.mjs"
   },
   "dependencies": {
     "firebase": "^12.6.0",

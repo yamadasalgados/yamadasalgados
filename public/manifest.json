@@ -1,7 +1,7 @@
 {
   "id": "/",
-  "name": "Yamada",
-  "short_name": "Yamada",
+  "name": "Order Portal",
+  "short_name": "Orders",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

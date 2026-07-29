@@ -2,6 +2,7 @@ import * as admin from "firebase-admin";
 import { NextRequest, NextResponse } from "next/server";
 
 import { getAdminDb } from "@/app/lib/firebaseAdmin";
+import { DEFAULT_PUBLIC_STORE_NAME, PRINT_SERVICE_NAME } from "@/app/lib/platform-brand";
 import {
   PrintApiError,
   asRecord,
@@ -9,6 +10,8 @@ import {
   cleanString,
   nonNegativeInteger,
   printCopies,
+  profileQueueKey,
+  publicPrintProfile,
   timestampMillis,
 } from "@/app/lib/print-server";
 
@@ -142,7 +145,7 @@ async function buildClaimPayload(params: {
   const sellerRef = db.collection("sellers").doc(sellerId);
   const sellerSnapshot = await sellerRef.get();
   const sellerData = sellerSnapshot.data() ?? {};
-  const storeName = cleanString(sellerData.storeName ?? sellerData.displayName, 160) || "Yamada";
+  const storeName = cleanString(sellerData.storeName ?? sellerData.displayName, 160) || DEFAULT_PUBLIC_STORE_NAME;
   const copies = printCopies(job.copies);
 
   if (job.type === "test") {
@@ -153,7 +156,7 @@ async function buildClaimPayload(params: {
       copies,
       test: {
         storeName: cleanString(testPayload.storeName, 160) || storeName,
-        message: cleanString(testPayload.message, 500) || "Yamada Print Service",
+        message: cleanString(testPayload.message, 500) || PRINT_SERVICE_NAME,
       },
     };
   }
@@ -197,33 +200,46 @@ export async function POST(request: NextRequest) {
     const body = asRecord(await request.json());
     const action = cleanString(body.action, 40);
     const sellerId = sellerIdFrom(body);
-    const stationName = cleanString(body.stationName, 120) || "Yamada Print Service";
-    const { settingsRef } = await authorizePrintStation({ request, sellerId });
+    const profileId = cleanString(body.profileId, 100);
+    const stationName = cleanString(body.stationName, 120) || PRINT_SERVICE_NAME;
+    const { stationRef, settings, profile } = await authorizePrintStation({ request, sellerId, profileId });
     const db = getAdminDb();
     const sellerRef = db.collection("sellers").doc(sellerId);
     const now = admin.firestore.Timestamp.now();
+    const stationStatus = {
+      lastSeenAt: now,
+      stationName,
+      stationVersion: cleanString(body.version, 40) || null,
+      platform: cleanString(body.platform, 40) || null,
+      arch: cleanString(body.arch, 40) || null,
+      capabilities: Array.isArray(body.capabilities)
+        ? body.capabilities.map((value) => cleanString(value, 40)).filter(Boolean).slice(0, 20)
+        : [],
+      updatedAt: now,
+    };
 
     if (action === "heartbeat") {
-      await settingsRef.set({
-        lastSeenAt: now,
-        stationName,
-        stationVersion: cleanString(body.version, 40) || null,
-        updatedAt: now,
-      }, { merge: true });
-      return NextResponse.json({ ok: true });
+      await stationRef.set(stationStatus, { merge: true });
+      return NextResponse.json({ ok: true, printingEnabled: settings.enabled, profile: publicPrintProfile(profile) });
     }
 
     if (action === "claim") {
-      await settingsRef.set({
-        lastSeenAt: now,
-        stationName,
-        stationVersion: cleanString(body.version, 40) || null,
-        updatedAt: now,
-      }, { merge: true });
+      await stationRef.set(stationStatus, { merge: true });
+
+      if (!settings.enabled) {
+        return NextResponse.json({
+          ok: true,
+          paused: true,
+          job: null,
+          profile: publicPrintProfile(profile),
+        }, {
+          headers: { "Cache-Control": "no-store" },
+        });
+      }
 
       const printingSnapshot = await sellerRef
         .collection("printJobs")
-        .where("status", "==", "printing")
+        .where("queueKey", "==", profileQueueKey(profile.id, "printing"))
         .limit(25)
         .get();
       const expiredJobs = printingSnapshot.docs.filter(
@@ -235,6 +251,7 @@ export async function POST(request: NextRequest) {
         for (const document of expiredJobs) {
           batch.set(document.ref, {
             status: "pending",
+            queueKey: profileQueueKey(profile.id, "pending"),
             leaseUntil: null,
             updatedAt: now,
             lastError: "A estação anterior não confirmou a impressão; trabalho reenfileirado.",
@@ -243,15 +260,30 @@ export async function POST(request: NextRequest) {
         await batch.commit();
       }
 
-      const pendingSnapshot = await sellerRef
+      let pendingSnapshot = await sellerRef
         .collection("printJobs")
-        .where("status", "==", "pending")
-        .limit(25)
+        .where("queueKey", "==", profileQueueKey(profile.id, "pending"))
+        .limit(50)
         .get();
 
-      const candidates = [...pendingSnapshot.docs].sort(
-        (left, right) => timestampMillis(left.data().createdAt) - timestampMillis(right.data().createdAt),
-      );
+      // Migração de trabalhos criados pela fila única anterior à 06D5.
+      if (pendingSnapshot.empty && profile.id === "legacy") {
+        pendingSnapshot = await sellerRef
+          .collection("printJobs")
+          .where("status", "==", "pending")
+          .limit(50)
+          .get();
+      }
+
+      const candidates = [...pendingSnapshot.docs]
+        .filter((document) => {
+          const data = document.data();
+          const targetProfileId = cleanString(data.profileId, 100) || "legacy";
+          return targetProfileId === profile.id;
+        })
+        .sort(
+          (left, right) => timestampMillis(left.data().createdAt) - timestampMillis(right.data().createdAt),
+        );
 
       for (const candidate of candidates) {
         const claimed = await db.runTransaction(async (transaction) => {
@@ -259,10 +291,13 @@ export async function POST(request: NextRequest) {
           if (!snapshot.exists) return null;
           const data = snapshot.data() ?? {};
           if (data.status !== "pending") return null;
+          const targetProfileId = cleanString(data.profileId, 100) || "legacy";
+          if (targetProfileId !== profile.id) return null;
           const attempts = nonNegativeInteger(data.attempts);
           if (attempts >= MAX_ATTEMPTS) {
             transaction.update(candidate.ref, {
               status: "failed",
+              queueKey: profileQueueKey(profile.id, "failed"),
               updatedAt: now,
               lastError: "Limite de tentativas excedido.",
             });
@@ -271,6 +306,7 @@ export async function POST(request: NextRequest) {
 
           transaction.update(candidate.ref, {
             status: "printing",
+            queueKey: profileQueueKey(profile.id, "printing"),
             attempts: attempts + 1,
             claimedAt: now,
             leaseUntil: admin.firestore.Timestamp.fromMillis(Date.now() + LEASE_MILLIS),
@@ -288,12 +324,17 @@ export async function POST(request: NextRequest) {
             jobId: claimed.id,
             job: claimed.data,
           });
-          return NextResponse.json({ ok: true, job }, {
+          return NextResponse.json({
+            ok: true,
+            job,
+            profile: publicPrintProfile(profile),
+          }, {
             headers: { "Cache-Control": "no-store" },
           });
         } catch (error) {
           await candidate.ref.set({
             status: "failed",
+            queueKey: profileQueueKey(profile.id, "failed"),
             lastError: error instanceof Error ? error.message : "Falha ao montar impressão.",
             updatedAt: admin.firestore.Timestamp.now(),
           }, { merge: true });
@@ -301,7 +342,11 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      return NextResponse.json({ ok: true, job: null }, {
+      return NextResponse.json({
+        ok: true,
+        job: null,
+        profile: publicPrintProfile(profile),
+      }, {
         headers: { "Cache-Control": "no-store" },
       });
     }
@@ -311,10 +356,19 @@ export async function POST(request: NextRequest) {
       throw new PrintApiError("INVALID_JOB", "Trabalho de impressão inválido.");
     }
     const jobRef = sellerRef.collection("printJobs").doc(jobId);
+    const jobSnapshot = await jobRef.get();
+    if (!jobSnapshot.exists) {
+      throw new PrintApiError("INVALID_JOB", "Trabalho de impressão não encontrado.", 404);
+    }
+    const jobProfileId = cleanString(jobSnapshot.data()?.profileId, 100) || "legacy";
+    if (jobProfileId !== profile.id) {
+      throw new PrintApiError("STATION_FORBIDDEN", "Este trabalho pertence a outra impressora.", 403);
+    }
 
     if (action === "complete") {
       await jobRef.set({
         status: "printed",
+        queueKey: profileQueueKey(profile.id, "printed"),
         completedAt: now,
         updatedAt: now,
         completedBy: stationName,
@@ -323,32 +377,28 @@ export async function POST(request: NextRequest) {
           : [],
         lastError: null,
       }, { merge: true });
-      await settingsRef.set({
-        lastSeenAt: now,
+      await stationRef.set({
+        ...stationStatus,
         lastPrintedAt: now,
         lastError: null,
-        stationName,
-        updatedAt: now,
       }, { merge: true });
       return NextResponse.json({ ok: true });
     }
 
     if (action === "fail") {
-      const snapshot = await jobRef.get();
-      const attempts = nonNegativeInteger(snapshot.data()?.attempts);
+      const attempts = nonNegativeInteger(jobSnapshot.data()?.attempts);
       const terminal = attempts >= MAX_ATTEMPTS;
       const message = cleanString(body.error, 1000) || "Falha de impressão.";
       await jobRef.set({
         status: terminal ? "failed" : "pending",
+        queueKey: profileQueueKey(profile.id, terminal ? "failed" : "pending"),
         updatedAt: now,
         leaseUntil: null,
         lastError: message,
       }, { merge: true });
-      await settingsRef.set({
-        lastSeenAt: now,
+      await stationRef.set({
+        ...stationStatus,
         lastError: message,
-        stationName,
-        updatedAt: now,
       }, { merge: true });
       return NextResponse.json({ ok: true, retrying: !terminal });
     }

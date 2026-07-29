@@ -1,9 +1,11 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs";
+import net from "node:net";
+import process from "node:process";
 import { promisify } from "node:util";
 
 import { api } from "./api.mjs";
-import { assertConfig, config } from "./config.mjs";
+import { assertBaseConfig, assertProfile, config, resolveProfile } from "./config.mjs";
 import {
   findWindowsPrinter,
   getSumatraPrinterReport,
@@ -12,63 +14,56 @@ import {
 
 const execFileAsync = promisify(execFile);
 
-async function main() {
-  assertConfig();
-  console.log(`✓ Configuração básica preenchida (${process.platform})`);
+async function testTcp(profile) {
+  await new Promise((resolve, reject) => {
+    const socket = net.createConnection({ host: profile.networkHost, port: profile.networkPort });
+    socket.setTimeout(5000, () => socket.destroy(new Error("Tempo esgotado.")));
+    socket.once("connect", () => { socket.end(); resolve(); });
+    socket.once("error", reject);
+  });
+}
 
-  if (!fs.existsSync(config.chromePath)) {
-    throw new Error(`Chrome/Edge não encontrado em: ${config.chromePath}`);
+async function main() {
+  assertBaseConfig();
+  const heartbeat = await api.heartbeat();
+  const profile = resolveProfile(heartbeat.profile);
+  assertProfile(profile);
+  console.log(`✓ API aceitou a estação (${process.platform}/${process.arch})`);
+  console.log(`✓ Perfil recebido: ${profile.name} (${profile.id})`);
+  console.log(`  Modo: ${profile.connectionMode} · papel ${profile.paperWidthMm} mm · ${profile.dotsPerLine} pontos`);
+  if (heartbeat.printingEnabled === false) {
+    console.warn("⚠ A impressão global está pausada no painel. A estação conecta, mas não recebe novos trabalhos.");
   }
+
+  if (!fs.existsSync(config.chromePath)) throw new Error(`Chrome/Edge/Chromium não encontrado em: ${config.chromePath}`);
   console.log(`✓ Navegador encontrado: ${config.chromePath}`);
 
-  if (config.printMode === "cups") {
+  if (profile.connectionMode === "cups") {
     const { stdout } = await execFileAsync("lpstat", ["-p"]);
-    if (!stdout.includes(`printer ${config.printerName} `)) {
-      throw new Error(`Fila CUPS não encontrada: ${config.printerName}\n${stdout}`);
-    }
-    console.log(`✓ Impressora CUPS encontrada: ${config.printerName}`);
-  } else if (config.printMode === "windows") {
-    if (!fs.existsSync(config.sumatraPath)) {
-      throw new Error(`SumatraPDF não encontrado em: ${config.sumatraPath}`);
-    }
+    if (!stdout.includes(`printer ${profile.printerName} `)) throw new Error(`Fila CUPS não encontrada: ${profile.printerName}\n${stdout}`);
+    console.log(`✓ Fila CUPS encontrada: ${profile.printerName}`);
+  } else if (profile.connectionMode === "windows") {
+    if (!fs.existsSync(config.sumatraPath)) throw new Error(`SumatraPDF não encontrado em: ${config.sumatraPath}`);
     const version = await getWindowsFileVersion(config.sumatraPath);
     console.log(`✓ SumatraPDF encontrado: ${config.sumatraPath}${version ? ` (versão ${version})` : ""}`);
-
-    const printer = await findWindowsPrinter(config.printerName);
-    if (!printer) {
-      throw new Error(`Impressora do Windows não encontrada: ${config.printerName}\nExecute: npm run printers`);
-    }
+    const printer = await findWindowsPrinter(profile.printerName);
+    if (!printer) throw new Error(`Impressora do Windows não encontrada: ${profile.printerName}\nExecute: npm run printers`);
     console.log(`✓ Impressora do Windows encontrada: ${printer.Name}`);
     console.log(`  Driver: ${printer.DriverName || "não informado"}`);
     console.log(`  Porta: ${printer.PortName || "não informada"}`);
-    console.log(`  Status: ${printer.PrinterStatus ?? "não informado"}`);
-
-    if (/Microsoft Print to PDF|OneNote/i.test(printer.Name)) {
-      console.warn("⚠ Esta impressora virtual abre uma janela e não é indicada para impressão automática.");
-    }
-    if (printer.WorkOffline === true) {
-      console.warn("⚠ O Windows marcou esta impressora como offline.");
-    }
-
+    if (printer.WorkOffline === true) console.warn("⚠ O Windows marcou esta impressora como offline.");
     const report = await getSumatraPrinterReport(config.sumatraPath);
-    if (!report.includes(config.printerName)) {
-      throw new Error(
-        `O Windows encontra '${config.printerName}', mas o SumatraPDF não.\n` +
-        "Instale/atualize o SumatraPDF e confirme o nome com SumatraPDF.exe -list-printers.",
-      );
-    }
+    if (!report.includes(profile.printerName)) throw new Error(`O SumatraPDF não reconheceu '${profile.printerName}'.`);
     console.log("✓ SumatraPDF também reconhece a impressora");
-    console.log(`  Ajustes: ${config.windowsPrintSettings || "nenhum"}`);
+  } else if (profile.connectionMode === "tcp") {
+    await testTcp(profile);
+    console.log(`✓ Porta TCP acessível: ${profile.networkHost}:${profile.networkPort}`);
+    console.log(`  Intensidade: ${profile.intensity}%${profile.useAdvancedThreshold ? ` · limiar ${profile.rasterThreshold}` : ""}`);
   } else {
-    console.log("✓ Modo preview: PDFs serão gerados em output/");
+    console.log("✓ Modo preview: arquivos serão gerados em output/");
   }
 
-  await api.heartbeat();
-  console.log("✓ API da Vercel aceitou a estação");
-  console.log("Tudo pronto.");
-  if (config.printMode === "windows") {
-    console.log("Próximo teste recomendado: npm run print-test");
-  }
+  console.log("Tudo pronto. Próximo teste: npm run print-test");
 }
 
 main().catch((error) => {

@@ -60,6 +60,26 @@ export interface StoreOrderShipping {
   instructions?: string;
 }
 
+
+export interface StoreOrderFulfillment {
+  schemaVersion?: number;
+  method: "pickup" | "delivery" | "postal";
+  label?: string;
+  description?: string;
+  instructions?: string;
+  feeMinor?: number | null;
+  fee?: number | null;
+  quoteStatus?: "calculated" | "region_required" | "collect" | "pending" | "unavailable";
+  minimumOrderMinor?: number | null;
+  freeAboveMinor?: number | null;
+  estimatedDaysMin?: number | null;
+  estimatedDaysMax?: number | null;
+  regionId?: string | null;
+  regionName?: string | null;
+  pricingMode?: StoreOrderPostalPricingMode;
+  totalWeightGrams?: number | null;
+}
+
 export type StoreOrderReservationStatus =
   | "none"
   | "partial"
@@ -106,7 +126,20 @@ export interface StoreOrderItem {
   productionRequired?: number;
   inventoryState?: StoreOrderInventoryState;
   stockState?: "available" | "insufficient" | "not_tracked" | "made_to_order";
+  fulfillmentOptions?: {
+    pickup: boolean;
+    localDelivery: boolean;
+    postal: boolean;
+  };
+  pickupEligible?: boolean;
+  localDeliveryEligible?: boolean;
+  postalEligible?: boolean;
   shipping?: {
+    fulfillment?: {
+      pickup: boolean;
+      localDelivery: boolean;
+      postal: boolean;
+    };
     postalEligible: boolean;
     weightGrams: number | null;
   };
@@ -133,6 +166,8 @@ export interface StoreOrder {
   deliveryMode?: StoreOrderDeliveryMode;
   deliveryDate?: string;
   deliveryTimeSlot?: string;
+  deliveryRegionId?: string;
+  deliveryRegion?: Record<string, unknown> | null;
   locationLink?: string;
   address?: string;
 
@@ -144,6 +179,7 @@ export interface StoreOrder {
   deliveryFee?: number;
   shippingFee?: number;
   shipping?: StoreOrderShipping;
+  fulfillment?: StoreOrderFulfillment;
   currency?: "JPY" | "BRL" | "USD";
   totalAmount: number;
 

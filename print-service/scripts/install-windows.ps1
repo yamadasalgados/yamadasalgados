@@ -1,18 +1,18 @@
 $ErrorActionPreference = "Stop"
 
-if ($env:OS -ne "Windows_NT") {
-  throw "Este instalador deve ser executado no Windows."
-}
+if ($env:OS -ne "Windows_NT") { throw "Este instalador deve ser executado no Windows." }
 
-$TaskName = "Yamada Print Service"
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $EnvPath = Join-Path $Root ".env"
 $Runner = Join-Path $PSScriptRoot "run-windows.ps1"
 $NodePathFile = Join-Path $PSScriptRoot "node-path.txt"
+if (-not (Test-Path $EnvPath)) { throw "Arquivo .env não encontrado. Execute primeiro setup-windows.cmd." }
 
-if (-not (Test-Path $EnvPath)) {
-  throw "Arquivo .env não encontrado. Execute primeiro setup-windows.cmd."
-}
+$ProfileLine = Get-Content $EnvPath | Where-Object { $_ -match '^PRINT_PROFILE_ID=' } | Select-Object -First 1
+$ProfileId = if ($ProfileLine) { ($ProfileLine -replace '^PRINT_PROFILE_ID=', '').Trim() } else { "legacy" }
+$SafeProfile = ($ProfileId -replace '[^A-Za-z0-9_.-]', '_')
+$TaskName = "Order Print Service - $SafeProfile"
+$LegacyTaskNames = @("Order Print Service", "Yamada Print Service")
 
 $NodePath = (Get-Command node -ErrorAction Stop).Source
 [IO.File]::WriteAllText($NodePathFile, $NodePath, [Text.UTF8Encoding]::new($false))
@@ -24,26 +24,19 @@ $Arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hi
 $Action = New-ScheduledTaskAction -Execute $PowerShellPath -Argument $Arguments -WorkingDirectory $Root
 $Trigger = New-ScheduledTaskTrigger -AtLogOn -User $CurrentUser
 $Principal = New-ScheduledTaskPrincipal -UserId $CurrentUser -LogonType Interactive -RunLevel Limited
-$Settings = New-ScheduledTaskSettingsSet `
-  -AllowStartIfOnBatteries `
-  -DontStopIfGoingOnBatteries `
-  -RestartCount 10 `
-  -RestartInterval (New-TimeSpan -Minutes 1) `
-  -ExecutionTimeLimit ([TimeSpan]::Zero) `
-  -MultipleInstances IgnoreNew
+$Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 10 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew
 
-try {
-  $ExistingTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-  if ($ExistingTask) {
-    Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-    Start-Sleep -Milliseconds 700
+foreach ($LegacyTaskName in $LegacyTaskNames) {
+  $LegacyTask = Get-ScheduledTask -TaskName $LegacyTaskName -ErrorAction SilentlyContinue
+  if ($LegacyTask) {
+    Stop-ScheduledTask -TaskName $LegacyTaskName -ErrorAction SilentlyContinue
+    Unregister-ScheduledTask -TaskName $LegacyTaskName -Confirm:$false
   }
-  Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger -Principal $Principal -Settings $Settings -Description "Impressão automática dos pedidos Yamada" -Force | Out-Null
-  Start-ScheduledTask -TaskName $TaskName
-} catch {
-  throw "Não foi possível registrar a tarefa automática. Abra o PowerShell como administrador e tente novamente. Detalhe: $($_.Exception.Message)"
 }
+$ExistingTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+if ($ExistingTask) { Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 700 }
 
-Write-Host "Yamada Print Service instalado e iniciado." -ForegroundColor Green
-Write-Host "Ele será iniciado automaticamente quando $CurrentUser entrar no Windows."
-Write-Host "Use status-windows.cmd para verificar o estado e os logs."
+Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger -Principal $Principal -Settings $Settings -Description "Impressão automática do perfil $ProfileId" -Force | Out-Null
+Start-ScheduledTask -TaskName $TaskName
+Write-Host "$TaskName instalado e iniciado." -ForegroundColor Green
+Write-Host "Para vários perfis no mesmo PC, mantenha uma cópia separada da pasta print-service para cada perfil."

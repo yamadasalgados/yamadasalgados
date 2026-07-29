@@ -12,6 +12,7 @@ import OpenInBrowserGate from "@/app/_components/OpenInBrowserGate";
 import RewardsCheckoutPanel from "@/app/_components/RewardsCheckoutPanel";
 import useCustomerSession from "@/app/hooks/useCustomerSession";
 import useCustomerRewards from "@/app/hooks/useCustomerRewards";
+import { useDocumentBranding } from "@/app/hooks/useDocumentBranding";
 import {
   eventDraftKey,
   readLocalDraft,
@@ -55,6 +56,21 @@ import {
 } from "@/app/lib/money";
 import { normalizeProductInventory } from "@/app/lib/inventory-schema";
 import { normalizeSellerOrderSettings } from "@/app/lib/order-settings-schema";
+import {
+  compareDateKeys,
+  defaultTimeZoneForRegional,
+  earliestFulfillmentDate,
+  formatDateKey,
+  formatLeadTimeDays,
+  normalizeProductProductionLeadTime,
+  normalizeTimeZone,
+} from "@/app/lib/production-lead-time";
+import {
+  EMPTY_SELLER_IDENTITY,
+  normalizeSellerIdentity,
+  sellerInitials,
+  type SellerIdentity,
+} from "@/app/lib/seller-identity";
 import type {
   RegionalLocale,
   SupportedCurrency,
@@ -88,6 +104,7 @@ type EventData = {
   currency: SupportedCurrency;
   regionalLocale: RegionalLocale;
   defaultLanguage: "pt" | "en" | "ja";
+  timeZone: string;
 };
 
 type ProductImageData = {
@@ -104,6 +121,7 @@ type ProductImageData = {
   availabilityMode: "normal" | "made_to_order";
   availabilityStatus: "active" | "made_to_order";
   productionMode: "stock" | "made_to_order";
+  productionLeadTimeDays: number;
 };
 
 type ChatMessage = {
@@ -145,6 +163,40 @@ function pill(active: boolean) {
       ? "bg-black text-white border-black dark:bg-white dark:text-black dark:border-white shadow-sm"
       : "bg-white text-neutral-500 border-neutral-200 hover:bg-neutral-50 dark:bg-neutral-900 dark:text-neutral-400 dark:border-neutral-800 dark:hover:bg-neutral-800"
   );
+}
+
+function eventProductionLeadTimeNotice(
+  language: "pt" | "en" | "ja",
+  days: number,
+): string {
+  const leadTime = formatLeadTimeDays(days, language);
+  if (language === "ja") return `製造期間：${leadTime}`;
+  if (language === "en") return `Production lead time: ${leadTime}`;
+  return `Prazo de produção: ${leadTime}`;
+}
+
+function eventProductionScheduleNotice(
+  language: "pt" | "en" | "ja",
+  days: number,
+  dateKey: string,
+  locale: string,
+): string {
+  const date = formatDateKey(dateKey, locale);
+  const leadTime = formatLeadTimeDays(days, language);
+  if (language === "ja") return `製造には最大${leadTime}かかります。最短受取日：${date}`;
+  if (language === "en") return `Production may take up to ${leadTime}. Earliest available date: ${date}.`;
+  return `A produção pode levar até ${leadTime}. Primeira data disponível: ${date}.`;
+}
+
+function eventProductionDateError(
+  language: "pt" | "en" | "ja",
+  dateKey: string,
+  locale: string,
+): string {
+  const date = formatDateKey(dateKey, locale);
+  if (language === "ja") return `選択した日は製造期間より前です。最短受取日は${date}です。`;
+  if (language === "en") return `The selected date is earlier than the production lead time. Earliest available date: ${date}.`;
+  return `A data escolhida é anterior ao prazo de produção. A primeira data disponível é ${date}.`;
 }
 
 function normalizeCategoryDynamic(v: any): CategoryName | undefined {
@@ -253,6 +305,11 @@ function mapProductSnapToData(
       productionMode: madeToOrder
         ? "made_to_order"
         : "stock",
+      productionLeadTimeDays: normalizeProductProductionLeadTime(
+        docData.productionLeadTime,
+        docData.productionLeadTimeDays,
+        { madeToOrder },
+      ).days,
     };
   });
 
@@ -320,6 +377,11 @@ async function fetchEventPublishedProducts(
     );
     published.stockQty = inventory.tracked ? inventory.available : undefined;
     published.lowStockThreshold = inventory.lowStockThreshold;
+    published.productionLeadTimeDays = normalizeProductProductionLeadTime(
+      data.productionLeadTime,
+      data.productionLeadTimeDays,
+      { madeToOrder: published.availabilityMode === "made_to_order" },
+    ).days;
   });
 
   wantedNames.forEach((name) => {
@@ -335,6 +397,7 @@ async function fetchEventPublishedProducts(
         availabilityMode: "normal",
         availabilityStatus: "active",
         productionMode: "stock",
+        productionLeadTimeDays: 0,
       };
     }
   });
@@ -366,6 +429,15 @@ const uiLocale =
   );
 
   const [event, setEvent] = useState<EventData | null>(null);
+  const [sellerIdentity, setSellerIdentity] = useState<SellerIdentity>(
+    EMPTY_SELLER_IDENTITY,
+  );
+
+  useDocumentBranding({
+    title: [event?.title, sellerIdentity.storeName].filter(Boolean).join(" · "),
+    themeColor: sellerIdentity.primaryColor,
+  });
+
   const locale = event?.regionalLocale ?? uiLocale;
   const currency = event?.currency ?? "JPY";
   const language = lang === "en" || lang === "ja" ? lang : "pt";
@@ -521,6 +593,68 @@ const uiLocale =
     [acceptOrdersWithoutStock, orderableIds, productsData, quantities],
   );
 
+  const productionSchedule = useMemo(() => {
+    const requiredProducts = orderableIds
+      .map((productId) => {
+        const product = productsData[productId];
+        const quantity = Math.max(0, Math.floor(quantities[productId] || 0));
+        if (!product || quantity <= 0) return null;
+        const stock = typeof product.stockQty === "number"
+          ? Math.max(0, Math.floor(product.stockQty))
+          : null;
+        const requiresProduction =
+          product.availabilityMode === "made_to_order" ||
+          (acceptOrdersWithoutStock && stock !== null && quantity > stock);
+        return requiresProduction ? product : null;
+      })
+      .filter((product): product is ProductImageData => product !== null);
+    const maxLeadTimeDays = requiredProducts.reduce(
+      (maximum, product) => Math.max(maximum, product.productionLeadTimeDays),
+      0,
+    );
+    const earliestDate = earliestFulfillmentDate({
+      timeZone: event?.timeZone || "Asia/Tokyo",
+      leadTimeDays: maxLeadTimeDays,
+    });
+    return {
+      required: requiredProducts.length > 0,
+      maxLeadTimeDays,
+      earliestDate,
+      productIds: requiredProducts
+        .filter((product) => product.productionLeadTimeDays === maxLeadTimeDays)
+        .map((product) => product.id),
+    };
+  }, [acceptOrdersWithoutStock, event?.timeZone, orderableIds, productsData, quantities]);
+
+  const eligibleDeliveryDates = useMemo(
+    () =>
+      (event?.deliveryDates || []).filter(
+        (date) =>
+          !productionSchedule.required ||
+          compareDateKeys(date, productionSchedule.earliestDate) >= 0,
+      ),
+    [event?.deliveryDates, productionSchedule.earliestDate, productionSchedule.required],
+  );
+
+  useEffect(() => {
+    if (
+      dateOption !== "event-date" ||
+      !selectedDate ||
+      !productionSchedule.required ||
+      compareDateKeys(selectedDate, productionSchedule.earliestDate) >= 0
+    ) {
+      return;
+    }
+    setSelectedDate(eligibleDeliveryDates[0] || "");
+    if (eligibleDeliveryDates.length === 0) setDateOption("no-preference");
+  }, [
+    dateOption,
+    eligibleDeliveryDates,
+    productionSchedule.earliestDate,
+    productionSchedule.required,
+    selectedDate,
+  ]);
+
   const selectedOffer = useMemo(
     () => offers.find((offer) => offer.id === selectedOfferId) ?? null,
     [offers, selectedOfferId],
@@ -607,9 +741,9 @@ const uiLocale =
     setSelectedMinute(null);
     setRewardSelection({ ...EMPTY_REWARD_SELECTION });
 
-    if (event?.deliveryDates?.length) {
+    if (eligibleDeliveryDates.length) {
       setDateOption("event-date");
-      setSelectedDate(event.deliveryDates[0]);
+      setSelectedDate(eligibleDeliveryDates[0]);
     } else {
       setDateOption("no-preference");
       setSelectedDate("");
@@ -622,7 +756,7 @@ const uiLocale =
     } else {
       setDeliveryMode("none");
     }
-  }, [event]);
+  }, [eligibleDeliveryDates, event]);
 
   const showSentToast = useCallback(() => {
     setSentToast(true);
@@ -863,6 +997,7 @@ const uiLocale =
         const data = snap.data() as any;
         const sellerSnapshot = await getDoc(doc(db, "sellers", sellerId));
         const sellerData = sellerSnapshot.exists() ? sellerSnapshot.data() as any : {};
+        setSellerIdentity(normalizeSellerIdentity(sellerData));
         setAcceptOrdersWithoutStock(
           normalizeSellerOrderSettings(
             sellerData.orderSettings,
@@ -937,6 +1072,14 @@ const uiLocale =
               : sellerData.storefrontLanguage === "en" || sellerData.storefrontLanguage === "ja"
                 ? sellerData.storefrontLanguage
                 : "pt",
+          timeZone: normalizeTimeZone(
+            data.timeZone ?? sellerRegional.timeZone ?? sellerData.timeZone,
+            defaultTimeZoneForRegional(
+              data.regionalLocale ?? sellerRegional.locale ?? sellerData.regionalLocale,
+              data.currency ?? sellerRegional.currency ?? sellerData.currency,
+              data.operatingCountry ?? sellerRegional.operatingCountry ?? sellerData.operatingCountry,
+            ),
+          ),
         };
 
         setEvent(nextEvent);
@@ -1043,6 +1186,11 @@ const uiLocale =
     if (totalItems <= 0 || totalAmount < 0) return false;
     if (!deliveryMode) return false;
     if (event.deliveryDates.length > 0 && dateOption === "event-date" && !selectedDate) return false;
+    if (
+      productionSchedule.required &&
+      dateOption === "event-date" &&
+      compareDateKeys(selectedDate, productionSchedule.earliestDate) < 0
+    ) return false;
     if (timeOption === "custom" && (selectedHour == null || selectedMinute == null)) return false;
     return true;
   }, [
@@ -1055,6 +1203,8 @@ const uiLocale =
     deliveryMode,
     dateOption,
     selectedDate,
+    productionSchedule.required,
+    productionSchedule.earliestDate,
     timeOption,
     selectedHour,
     selectedMinute,
@@ -1148,6 +1298,18 @@ const uiLocale =
       return;
     }
 
+    if (
+      productionSchedule.required &&
+      dateOption === "event-date" &&
+      selectedDate &&
+      compareDateKeys(selectedDate, productionSchedule.earliestDate) < 0
+    ) {
+      showFormError(
+        eventProductionDateError(language, productionSchedule.earliestDate, locale),
+      );
+      return;
+    }
+
     if (!canSubmit) {
       showFormError(tr("event.error.fill_required", "Escolha produtos, informe nome e telefone e selecione entrega/data/hora antes de finalizar."));
       return;
@@ -1193,6 +1355,8 @@ const uiLocale =
                   ? "Your session expired. Sign in again before placing the order."
                   : "Sua sessão expirou. Entre novamente antes de finalizar o pedido.",
             )
+          : errorCode === "FULFILLMENT_DATE_UNAVAILABLE"
+            ? eventProductionDateError(language, productionSchedule.earliestDate, locale)
           : errorCode === "PRODUCT_UNAVAILABLE"
           ? tr(
               "event.error.product_unavailable",
@@ -1225,6 +1389,11 @@ const uiLocale =
     customerPhone,
     customerSession.profile?.email,
     language,
+    locale,
+    dateOption,
+    selectedDate,
+    productionSchedule.required,
+    productionSchedule.earliestDate,
     registerOrderInFirestore,
     resetOrderForm,
     showFormError,
@@ -1288,7 +1457,35 @@ const uiLocale =
         </div>
       )}
 
-      <header className="space-y-3 border-b border-neutral-200 dark:border-neutral-800 pb-5">
+      <header
+        className="space-y-3 border-b pb-5"
+        style={{ borderColor: `${sellerIdentity.primaryColor}55` }}
+      >
+        {sellerIdentity.storeName && (
+          <Link
+            href={`/store/${encodeURIComponent(sellerId)}`}
+            className="inline-flex max-w-full items-center gap-3 rounded-2xl border border-neutral-200 bg-white px-3 py-2 shadow-sm dark:border-neutral-800 dark:bg-neutral-900"
+          >
+            {sellerIdentity.logoUrl ? (
+              <img
+                src={sellerIdentity.logoUrl}
+                alt={sellerIdentity.storeName}
+                className="h-10 w-10 shrink-0 rounded-xl object-cover"
+              />
+            ) : (
+              <span
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-xs font-black text-white"
+                style={{ backgroundColor: sellerIdentity.primaryColor }}
+                aria-hidden="true"
+              >
+                {sellerInitials(sellerIdentity.storeName)}
+              </span>
+            )}
+            <span className="min-w-0 truncate text-sm font-black">
+              {sellerIdentity.storeName}
+            </span>
+          </Link>
+        )}
         <h1 className="text-3xl font-black tracking-tight text-neutral-900 dark:text-white">{event.title}</h1>
 
         <p className="text-sm text-neutral-500 font-medium">
@@ -1358,6 +1555,7 @@ const uiLocale =
           locale={locale}
           eventClosed={eventClosed}
           acceptOrdersWithoutStock={acceptOrdersWithoutStock}
+          language={language}
           madeToOrder={false}
           onAdjust={adjustQuantity}
           tr={tr}
@@ -1384,6 +1582,7 @@ const uiLocale =
             locale={locale}
             eventClosed={eventClosed}
             acceptOrdersWithoutStock={acceptOrdersWithoutStock}
+            language={language}
             madeToOrder
             onAdjust={adjustQuantity}
             tr={tr}
@@ -1453,6 +1652,17 @@ const uiLocale =
         </div>
 
         <div className="space-y-3 pt-3">
+          {productionSchedule.required && (
+            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm font-bold leading-relaxed text-emerald-900 dark:border-emerald-900/50 dark:bg-emerald-950/20 dark:text-emerald-200">
+              {eventProductionScheduleNotice(
+                language,
+                productionSchedule.maxLeadTimeDays,
+                productionSchedule.earliestDate,
+                locale,
+              )}
+            </div>
+          )}
+
           {event.deliveryDates.length > 0 && (
             <div className="space-y-2">
               <p className="text-[10px] font-black uppercase tracking-widest text-neutral-400">
@@ -1464,11 +1674,15 @@ const uiLocale =
                   <button
                     key={date}
                     type="button"
+                    disabled={
+                      productionSchedule.required &&
+                      compareDateKeys(date, productionSchedule.earliestDate) < 0
+                    }
                     onClick={() => {
                       setDateOption("event-date");
                       setSelectedDate(date);
                     }}
-                    className={pill(dateOption === "event-date" && selectedDate === date)}
+                    className={`${pill(dateOption === "event-date" && selectedDate === date)} disabled:cursor-not-allowed disabled:opacity-35`}
                   >
                     {date}
                   </button>
@@ -1834,6 +2048,7 @@ function EventProductGrid({
   locale,
   eventClosed,
   acceptOrdersWithoutStock,
+  language,
   madeToOrder,
   onAdjust,
   tr,
@@ -1846,6 +2061,7 @@ function EventProductGrid({
   locale: string;
   eventClosed: boolean;
   acceptOrdersWithoutStock: boolean;
+  language: "pt" | "en" | "ja";
   madeToOrder: boolean;
   onAdjust: (productId: string, delta: number) => void;
   tr: (key: string, fallback: string) => string;
@@ -1943,7 +2159,7 @@ function EventProductGrid({
 
                 {madeToOrder ? (
                   <p className="rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-[10px] font-bold text-violet-700 dark:border-violet-900/50 dark:bg-violet-950/20 dark:text-violet-300">
-                    {tr("event.product.made_to_order_notice", "Produzido mediante reserva antecipada. O pedido ficará pendente até ficar pronto.")}
+                    {tr("event.product.made_to_order_notice", "Produzido mediante reserva antecipada. O pedido ficará pendente até ficar pronto.")} {eventProductionLeadTimeNotice(language, info?.productionLeadTimeDays || 1)}
                   </p>
                 ) : lastUnits ? (
                   <p className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-[10px] font-black text-amber-900 dark:border-amber-800 dark:bg-amber-950/20 dark:text-amber-200">
@@ -1956,8 +2172,8 @@ function EventProductGrid({
                   <p className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-[10px] font-black leading-relaxed text-amber-900 dark:border-amber-800 dark:bg-amber-950/20 dark:text-amber-200">
                     {tr(
                       "event.product.confirmation_notice",
-                      "Disponibilidade e prazo serão confirmados após o pedido.",
-                    )}
+                      "Disponibilidade sujeita à produção após o pedido.",
+                    )} {eventProductionLeadTimeNotice(language, info?.productionLeadTimeDays || 0)}
                   </p>
                 ) : soldOut ? (
                   <p className="rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-[10px] font-black text-red-800 dark:border-red-900/60 dark:bg-red-950/20 dark:text-red-300">

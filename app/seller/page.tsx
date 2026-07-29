@@ -272,7 +272,7 @@ const showPlanWarning =
   return (
     <main className="mx-auto min-h-screen w-full max-w-7xl space-y-8 bg-white p-4 transition-colors animate-fade-in dark:bg-neutral-950 sm:p-6">
       <PageHeader
-        eyebrow="Yamada Seller"
+        eyebrow={lang === "ja" ? "販売者" : lang === "en" ? "Seller" : "Vendedor"}
         title={t("dashboard.title")}
         description={t("dashboard.subtitle")}
         action={

@@ -1,9 +1,16 @@
-# Yamada Print Service no macOS
+# Print Service no macOS
 
-A configuração original do macOS continua disponível.
+1. Instale Node.js 20 ou superior e Chrome/Edge.
+2. Para CUPS, instale a impressora e confirme a fila com `lpstat -p`.
+3. Crie o perfil no painel e gere a chave.
+4. Crie `.env` com `PRINT_BASE_URL`, `PRINT_SELLER_ID`, `PRINT_PROFILE_ID`, `PRINT_STATION_TOKEN` e `PRINT_STATION_NAME`.
+5. Execute:
 
-1. Instale o driver e adicione a impressora.
-2. Copie `.env.example` para `.env`.
-3. Use `PRINT_MODE=cups` e o nome retornado por `lpstat -p`.
-4. Execute `npm run doctor`.
-5. Instale a inicialização automática com `./scripts/install-macos.sh`.
+```bash
+npm install
+npm run doctor
+npm run print-test
+./scripts/install-macos.sh
+```
+
+O mesmo serviço funciona em Macs Intel e Apple Silicon. Perfis TCP/IP ESC/POS não exigem fila CUPS, apenas acesso ao IP/porta da impressora.

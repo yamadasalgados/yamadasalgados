@@ -19,11 +19,11 @@ const COPY = {
   pt: {
     offlineTitle: "Sem conexão com a internet",
     offlineBody: "Você pode consultar a tela, mas aguarde a conexão voltar antes de finalizar ou alterar um pedido.",
-    installTitle: "Instale o app Yamada",
+    installTitle: "Instale este app",
     installBody: "Abra mais rápido, acompanhe pedidos e receba avisos sem procurar o link novamente.",
     install: "Instalar app",
-    iosTitle: "Instale o Yamada no iPhone",
-    iosSafariBody: "Toque no botão Compartilhar do Safari e escolha “Adicionar à Tela de Início”. Depois abra o ícone Yamada criado na tela inicial.",
+    iosTitle: "Adicione este app ao iPhone",
+    iosSafariBody: "Toque no botão Compartilhar do Safari e escolha “Adicionar à Tela de Início”. Depois abra o ícone criado na tela inicial.",
     iosOtherBody: "No iPhone, a instalação deve ser feita pelo Safari. Abra este mesmo endereço no Safari, toque em Compartilhar e escolha “Adicionar à Tela de Início”.",
     iosStepOne: "1. Abra no Safari",
     iosStepTwo: "2. Compartilhar",
@@ -35,11 +35,11 @@ const COPY = {
   en: {
     offlineTitle: "No internet connection",
     offlineBody: "You can view this screen, but wait until the connection returns before placing or changing an order.",
-    installTitle: "Install the Yamada app",
+    installTitle: "Install this app",
     installBody: "Open it faster, track orders and receive alerts without searching for the link again.",
     install: "Install app",
-    iosTitle: "Install Yamada on iPhone",
-    iosSafariBody: "Tap Safari's Share button and choose “Add to Home Screen”. Then open the Yamada icon created on your Home Screen.",
+    iosTitle: "Add this app to your iPhone",
+    iosSafariBody: "Tap Safari's Share button and choose “Add to Home Screen”. Then open the icon created on your Home Screen.",
     iosOtherBody: "On iPhone, installation must be completed in Safari. Open this same address in Safari, tap Share and choose “Add to Home Screen”.",
     iosStepOne: "1. Open in Safari",
     iosStepTwo: "2. Share",
@@ -51,11 +51,11 @@ const COPY = {
   ja: {
     offlineTitle: "インターネットに接続されていません",
     offlineBody: "画面の確認はできますが、注文の確定・変更は接続が戻ってから行ってください。",
-    installTitle: "Yamadaアプリをインストール",
+    installTitle: "このアプリをインストール",
     installBody: "リンクを探さず、すぐに開いて注文確認や通知を利用できます。",
     install: "アプリをインストール",
-    iosTitle: "iPhoneにYamadaを追加",
-    iosSafariBody: "Safariの共有ボタンを押し、「ホーム画面に追加」を選択してください。その後、ホーム画面に作成されたYamadaアイコンから開きます。",
+    iosTitle: "このアプリをiPhoneに追加",
+    iosSafariBody: "Safariの共有ボタンを押し、「ホーム画面に追加」を選択してください。その後、ホーム画面に作成されたアイコンから開きます。",
     iosOtherBody: "iPhoneではSafariからインストールします。同じURLをSafariで開き、共有から「ホーム画面に追加」を選択してください。",
     iosStepOne: "1. Safariで開く",
     iosStepTwo: "2. 共有",
@@ -222,7 +222,7 @@ export default function CustomerAppReadiness({
       </div>
 
       {showIosInstructions && (
-        <div className="fixed inset-0 z-[90] flex items-end justify-center bg-black/45 p-3 sm:items-center" role="dialog" aria-modal="true" aria-labelledby="yamada-ios-install-title">
+        <div className="fixed inset-0 z-[90] flex items-end justify-center bg-black/45 p-3 sm:items-center" role="dialog" aria-modal="true" aria-labelledby="pwa-ios-install-title">
           <div className="w-full max-w-md rounded-3xl bg-white p-5 text-neutral-950 shadow-2xl dark:bg-neutral-900 dark:text-neutral-100">
             <div className="flex items-start justify-between gap-4">
               <div className="flex items-start gap-3">
@@ -230,7 +230,7 @@ export default function CustomerAppReadiness({
                   {platform.safari ? <Share2 size={22} /> : <ExternalLink size={22} />}
                 </div>
                 <div>
-                  <h2 id="yamada-ios-install-title" className="text-lg font-black">{text.iosTitle}</h2>
+                  <h2 id="pwa-ios-install-title" className="text-lg font-black">{text.iosTitle}</h2>
                   <p className="mt-1 text-sm font-medium text-neutral-600 dark:text-neutral-300">
                     {platform.safari ? text.iosSafariBody : text.iosOtherBody}
                   </p>

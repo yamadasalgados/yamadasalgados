@@ -24,6 +24,7 @@ import { useSellerSession } from "@/app/_components/SellerSessionContext";
 import { db } from "@/app/lib/firebase";
 import { normalizeInventory, normalizeProductBundleConfig, normalizeProductContent, normalizeProductPriceMajor, normalizeProductStorefrontConfig } from "@/app/lib/product-schema";
 import { normalizeProductShipping } from "@/app/lib/shipping-schema";
+import { formatLeadTimeDays, normalizeProductProductionLeadTime } from "@/app/lib/production-lead-time";
 import { useI18n } from "@/app/lib/i18n";
 import { formatMoneyMajor } from "@/app/lib/money";
 import type {
@@ -316,6 +317,16 @@ export default function ProductsCatalogPage() {
             data.stockQty ?? data.stock,
             data.lowStockThreshold,
           );
+          const shipping = normalizeProductShipping(
+            data.shipping,
+            data.postalEligible,
+            data.shippingWeightGrams,
+            data.fulfillmentOptions ?? {
+              pickup: data.pickupEligible,
+              localDelivery: data.localDeliveryEligible,
+              postal: data.postalEligible,
+            },
+          );
           return {
             id: d.id,
             createdAt: data.createdAt,
@@ -338,9 +349,27 @@ export default function ProductsCatalogPage() {
             inventory,
             stockQty: inventory.quantity,
             lowStockThreshold: inventory.lowStockThreshold,
-            shipping: normalizeProductShipping(data.shipping, data.postalEligible, data.shippingWeightGrams),
-            postalEligible: normalizeProductShipping(data.shipping, data.postalEligible, data.shippingWeightGrams).postalEligible,
-            shippingWeightGrams: normalizeProductShipping(data.shipping, data.postalEligible, data.shippingWeightGrams).weightGrams,
+            shipping,
+            pickupEligible: shipping.fulfillment.pickup,
+            localDeliveryEligible: shipping.fulfillment.localDelivery,
+            postalEligible: shipping.fulfillment.postal,
+            shippingWeightGrams: shipping.weightGrams,
+            productionLeadTime: normalizeProductProductionLeadTime(
+              data.productionLeadTime,
+              data.productionLeadTimeDays,
+              {
+                madeToOrder:
+                  data.status === "made_to_order" || data.status === "preorder",
+              },
+            ),
+            productionLeadTimeDays: normalizeProductProductionLeadTime(
+              data.productionLeadTime,
+              data.productionLeadTimeDays,
+              {
+                madeToOrder:
+                  data.status === "made_to_order" || data.status === "preorder",
+              },
+            ).days,
             status: (
               data.status === "inactive"
                 ? "inactive"
@@ -749,7 +778,7 @@ export default function ProductsCatalogPage() {
     <main className="min-h-screen bg-neutral-50 text-neutral-950 transition-colors dark:bg-neutral-950 dark:text-neutral-100">
       <div className="mx-auto w-full max-w-7xl space-y-8 p-4 sm:p-6 lg:p-8">
         <PageHeader
-          eyebrow="Yamada Seller"
+          eyebrow={lang === "ja" ? "販売者" : lang === "en" ? "Seller" : "Vendedor"}
           title={t("products.title")}
           description={catalogText.subtitle}
           action={
@@ -1284,6 +1313,37 @@ function ProductCard({
                   )}
                 </>}
           </div>
+
+          <div className="flex flex-wrap gap-2 text-[10px] font-black uppercase tracking-wide">
+            {product.pickupEligible && (
+              <span className="rounded-full border border-violet-200 bg-violet-50 px-2.5 py-1 text-violet-700 dark:border-violet-900/50 dark:bg-violet-950/20 dark:text-violet-200">
+                {lang === "ja" ? "受取" : lang === "en" ? "Pickup" : "Retirada"}
+              </span>
+            )}
+            {product.localDeliveryEligible && (
+              <span className="rounded-full border border-orange-200 bg-orange-50 px-2.5 py-1 text-orange-700 dark:border-orange-900/50 dark:bg-orange-950/20 dark:text-orange-200">
+                {lang === "ja" ? "地域配達" : lang === "en" ? "Delivery" : "Delivery"}
+              </span>
+            )}
+            {product.postalEligible && (
+              <span className="rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-blue-700 dark:border-blue-900/50 dark:bg-blue-950/20 dark:text-blue-200">
+                {lang === "ja" ? "郵送" : lang === "en" ? "Postal" : "Correio"}
+              </span>
+            )}
+          </div>
+
+          {(madeToOrder || product.productionLeadTimeDays > 0) && (
+            <div className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-800 dark:border-emerald-900/50 dark:bg-emerald-950/20 dark:text-emerald-200">
+              <Clock3 size={14} className="shrink-0" />
+              <span>
+                {lang === "ja"
+                  ? `製造期間: ${formatLeadTimeDays(product.productionLeadTimeDays, lang)}`
+                  : lang === "en"
+                    ? `Production lead time: ${formatLeadTimeDays(product.productionLeadTimeDays, lang)}`
+                    : `Prazo de produção: ${formatLeadTimeDays(product.productionLeadTimeDays, lang)}`}
+              </span>
+            </div>
+          )}
 
           {product.storefront.subgroup && (
             <div className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-bold text-sky-800 dark:border-sky-900/50 dark:bg-sky-950/20 dark:text-sky-200">

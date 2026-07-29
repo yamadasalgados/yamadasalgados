@@ -1,0 +1,83 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function userDoc() {
+      return firestore.get(
+        /databases/(default)/documents/users/$(request.auth.uid)
+      );
+    }
+
+    function sellerDoc(sellerId) {
+      return firestore.get(
+        /databases/(default)/documents/sellers/$(sellerId)
+      );
+    }
+
+    function isAdmin() {
+      return signedIn()
+        && userDoc().data.role == "admin";
+    }
+
+    function ownsSeller(sellerId) {
+      return signedIn()
+        && (
+          request.auth.uid == sellerId
+          || userDoc().data.sellerId == sellerId
+          || sellerDoc(sellerId).data.ownerUid == request.auth.uid
+          || isAdmin()
+        );
+    }
+
+    function validImageUpload(maxBytes) {
+      return request.resource == null
+        || (
+          request.resource.size > 0
+          && request.resource.size <= maxBytes
+          && request.resource.contentType.matches('image/.*')
+        );
+    }
+
+    function validBrandImageUpload(maxBytes) {
+      return request.resource != null
+        && request.resource.size > 0
+        && request.resource.size <= maxBytes
+        && request.resource.contentType in [
+          'image/jpeg',
+          'image/png',
+          'image/webp',
+          'image/gif'
+        ];
+    }
+
+    match /sellers/{sellerId}/branding/logo/{fileName} {
+      allow read: if true;
+      allow create, update: if ownsSeller(sellerId)
+        && validBrandImageUpload(5 * 1024 * 1024);
+      allow delete: if ownsSeller(sellerId);
+    }
+
+    match /sellers/{sellerId}/branding/banner/{fileName} {
+      allow read: if true;
+      allow create, update: if ownsSeller(sellerId)
+        && validBrandImageUpload(10 * 1024 * 1024);
+      allow delete: if ownsSeller(sellerId);
+    }
+
+    // Compatibilidade com as imagens de produtos já usadas pelo catálogo.
+    match /sellers/{sellerId}/products/{allPaths=**} {
+      allow read: if true;
+      allow create, update: if ownsSeller(sellerId)
+        && validImageUpload(10 * 1024 * 1024);
+      allow delete: if ownsSeller(sellerId);
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

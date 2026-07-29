@@ -439,12 +439,138 @@ service cloud.firestore {
         && access.note == null;
     }
 
+
+    function validBrandColor(value) {
+      return value is string
+        && value.matches('^#[0-9a-fA-F]{6}$');
+    }
+
+    function validSellerContact(contact) {
+      return contact is map
+        && contact.keys().hasOnly([
+          "phone",
+          "email",
+          "whatsapp",
+          "instagram",
+          "website"
+        ])
+        && (
+          !contact.keys().hasAny(["phone"])
+          || (
+            contact.phone is string
+            && contact.phone.size() <= 80
+          )
+        )
+        && (
+          !contact.keys().hasAny(["email"])
+          || (
+            contact.email is string
+            && contact.email.size() <= 180
+          )
+        )
+        && (
+          !contact.keys().hasAny(["whatsapp"])
+          || (
+            contact.whatsapp is string
+            && contact.whatsapp.size() <= 80
+          )
+        )
+        && (
+          !contact.keys().hasAny(["instagram"])
+          || (
+            contact.instagram is string
+            && contact.instagram.size() <= 180
+          )
+        )
+        && (
+          !contact.keys().hasAny(["website"])
+          || (
+            contact.website is string
+            && contact.website.size() <= 500
+          )
+        );
+    }
+
+    function validReceiptIdentity(receipt) {
+      return receipt is map
+        && receipt.keys().hasOnly([
+          "headerText",
+          "footerText"
+        ])
+        && (
+          !receipt.keys().hasAny(["headerText"])
+          || (
+            receipt.headerText is string
+            && receipt.headerText.size() <= 500
+          )
+        )
+        && (
+          !receipt.keys().hasAny(["footerText"])
+          || (
+            receipt.footerText is string
+            && receipt.footerText.size() <= 1000
+          )
+        );
+    }
+
+    function validOptionalSellerIdentity(data) {
+      return (
+          !data.keys().hasAny(["identitySchemaVersion"])
+          || data.identitySchemaVersion == 1
+        )
+        && (
+          !data.keys().hasAny(["storeDescription"])
+          || (
+            data.storeDescription is string
+            && data.storeDescription.size() <= 1200
+          )
+        )
+        && (
+          !data.keys().hasAny(["logoUrl"])
+          || (
+            data.logoUrl is string
+            && data.logoUrl.size() <= 1500
+          )
+        )
+        && (
+          !data.keys().hasAny(["bannerUrl"])
+          || (
+            data.bannerUrl is string
+            && data.bannerUrl.size() <= 1500
+          )
+        )
+        && (
+          !data.keys().hasAny(["brandPrimaryColor"])
+          || validBrandColor(data.brandPrimaryColor)
+        )
+        && (
+          !data.keys().hasAny(["brandAccentColor"])
+          || validBrandColor(data.brandAccentColor)
+        )
+        && (
+          !data.keys().hasAny(["contact"])
+          || validSellerContact(data.contact)
+        )
+        && (
+          !data.keys().hasAny(["receiptIdentity"])
+          || validReceiptIdentity(data.receiptIdentity)
+        );
+    }
+
     function validOwnSellerCreate(sellerId) {
       return isSignedIn()
         && request.resource.data.keys().hasOnly([
           "schemaVersion",
           "ownerUid",
           "storeName",
+          "identitySchemaVersion",
+          "storeDescription",
+          "logoUrl",
+          "bannerUrl",
+          "brandPrimaryColor",
+          "brandAccentColor",
+          "contact",
+          "receiptIdentity",
           "storefrontLanguage",
           "regional",
           "onboarding",
@@ -485,6 +611,7 @@ service cloud.firestore {
           request.resource.data.access
         )
         && request.resource.data.limitsOverride == null
+        && validOptionalSellerIdentity(request.resource.data)
         && request.resource.data.createdAt == request.time
         && request.resource.data.updatedAt == request.time
         && request.resource.data.createdBy == request.auth.uid
@@ -503,6 +630,14 @@ service cloud.firestore {
       return isSellerOwner(sellerId)
         && changed.hasOnly([
           "storeName",
+          "identitySchemaVersion",
+          "storeDescription",
+          "logoUrl",
+          "bannerUrl",
+          "brandPrimaryColor",
+          "brandAccentColor",
+          "contact",
+          "receiptIdentity",
           "storefrontLanguage",
           "regional",
           "onboarding",
@@ -539,6 +674,7 @@ service cloud.firestore {
           || request.resource.data.onboarding
             == resource.data.onboarding
         )
+        && validOptionalSellerIdentity(request.resource.data)
         && request.resource.data.updatedAt == request.time
         && request.resource.data.updatedBy == request.auth.uid;
     }

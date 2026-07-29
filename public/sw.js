@@ -1,4 +1,4 @@
-const STATIC_CACHE = "yamada-static-06c8";
+const STATIC_CACHE = "order-portal-static-06d2";
 const STATIC_PATH_PREFIXES = ["/_next/static/", "/icons/"];
 const DEFAULT_ICON = "/icon-192x192.png";
 const DEFAULT_BADGE = "/notification-badge.png";
@@ -24,7 +24,10 @@ self.addEventListener("activate", (event) => {
         .then((keys) =>
           Promise.all(
             keys
-              .filter((key) => key.startsWith("yamada-static-") && key !== STATIC_CACHE)
+              .filter((key) =>
+                (key.startsWith("order-portal-static-") || key.startsWith("yamada-static-")) &&
+                key !== STATIC_CACHE,
+              )
               .map((key) => caches.delete(key)),
           ),
         ),
@@ -84,7 +87,7 @@ async function notifyOpenClients(data) {
   await Promise.all(
     clients.map((client) =>
       client.postMessage({
-        type: "YAMADA_PUSH_RECEIVED",
+        type: "ORDER_APP_PUSH_RECEIVED",
         kind: data.kind || "",
         badgeCount: Math.max(0, Math.floor(Number(data.badgeCount) || 0)),
         url: data.url || "/",
@@ -101,7 +104,7 @@ self.addEventListener("push", (event) => {
     data = { body: event.data?.text() || "" };
   }
 
-  const title = data.title || "Yamada";
+  const title = data.title || "Atualização do pedido";
   const badgeCount = Math.max(0, Math.floor(Number(data.badgeCount) || 0));
   const options = {
     body: data.body || "Há uma nova atualização.",

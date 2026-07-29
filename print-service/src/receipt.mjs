@@ -4,14 +4,14 @@ const htmlEscape = (value) => String(value ?? "")
   .replaceAll(">", "&gt;")
   .replaceAll('"', "&quot;");
 
-function currency(valueMinor, currency) {
-  const digits = currency === "JPY" ? 0 : 2;
-  return new Intl.NumberFormat(currency === "JPY" ? "ja-JP" : "pt-BR", {
+function currency(valueMinor, currencyCode) {
+  const digits = currencyCode === "JPY" ? 0 : 2;
+  return new Intl.NumberFormat(currencyCode === "JPY" ? "ja-JP" : "pt-BR", {
     style: "currency",
-    currency,
+    currency: currencyCode,
     minimumFractionDigits: digits,
     maximumFractionDigits: digits,
-  }).format((Number(valueMinor) || 0) / (currency === "JPY" ? 1 : 100));
+  }).format((Number(valueMinor) || 0) / (currencyCode === "JPY" ? 1 : 100));
 }
 
 function deliveryLabel(mode) {
@@ -38,12 +38,20 @@ function itemRows(order, operational) {
   }).join("");
 }
 
-export function receiptDocument(job, copyType) {
+export function receiptDocument(job, copyType, profile = {}) {
+  const shellProfile = {
+    paperWidthMm: Number(profile.paperWidthMm) === 58 ? 58 : 80,
+    dpi: Number(profile.dpi) || 203,
+    dotsPerLine: Number(profile.dotsPerLine) || (Number(profile.paperWidthMm) === 58 ? 384 : 576),
+    intensity: Number.isFinite(Number(profile.intensity)) ? Number(profile.intensity) : 55,
+  };
+
   if (job.type === "test") {
     return documentShell({
       title: "TESTE DE IMPRESSÃO",
-      body: `<div class="center"><h1>${htmlEscape(job.test.storeName)}</h1><p>${htmlEscape(job.test.message)}</p><p class="small">${new Date().toLocaleString()}</p></div>`,
-      estimatedMm: 95,
+      body: `<div class="center"><h1>${htmlEscape(job.test.storeName)}</h1><p>${htmlEscape(job.test.message)}</p><p class="small">${new Date().toLocaleString()}</p><div class="test-bars"><i></i><i></i><i></i><i></i><i></i></div></div>`,
+      estimatedMm: 100,
+      profile: shellProfile,
     });
   }
 
@@ -82,39 +90,68 @@ export function receiptDocument(job, copyType) {
   `;
 
   const optionCount = order.items.reduce((sum, item) => sum + (item.options?.length || 0), 0);
-  const estimatedMm = Math.max(150, 112 + order.items.length * 22 + optionCount * 7 + (order.note ? 24 : 0) + (!operational ? 35 : 0));
-  return documentShell({ title, body, estimatedMm });
+  const narrowExtra = shellProfile.paperWidthMm === 58 ? 35 : 0;
+  const estimatedMm = Math.max(150, 112 + narrowExtra + order.items.length * 22 + optionCount * 7 + (order.note ? 24 : 0) + (!operational ? 35 : 0));
+  return documentShell({ title, body, estimatedMm, profile: shellProfile });
 }
 
-function documentShell({ title, body, estimatedMm }) {
-  const height = Math.min(1000, Math.ceil(estimatedMm));
+function sharedCss({ width, padding, base, h1, h2, h3, small, orderId, gap, rowLabel, divider, itemPadding, badge, optionIndent }) {
+  return `
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; background: white; color: black; }
+    body { width: ${width}; padding: ${padding}; font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", "Noto Sans", Arial, sans-serif; font-size: ${base}; line-height: 1.35; }
+    h1 { margin: 0; font-size: ${h1}; font-weight: 900; }
+    h2 { margin: 4px 0 0; font-size: ${h2}; letter-spacing: .08em; }
+    h3 { margin: 0 0 5px; font-size: ${h3}; letter-spacing: .08em; }
+    p { margin: 4px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .center { text-align: center; }
+    .small { font-size: ${small}; }
+    .order-id { margin-top: 5px; font-size: ${orderId}; font-weight: 900; letter-spacing: .08em; }
+    .divider { border-top: ${divider} dashed #000; margin: 8px 0; }
+    .row { display: grid; grid-template-columns: ${rowLabel} 1fr; gap: ${gap}; padding: 1px 0; }
+    .row b { text-align: right; overflow-wrap: anywhere; }
+    .row.strong { font-size: 1.32em; border-top: ${divider} solid #000; margin-top: 4px; padding-top: 5px; }
+    .item { padding: ${itemPadding} 0; break-inside: avoid; }
+    .item + .item { border-top: 1px dotted #777; }
+    .item-main { display: flex; justify-content: space-between; align-items: flex-start; gap: 5px; }
+    .item-main > div { min-width: 0; overflow-wrap: anywhere; }
+    .badge { border: ${divider} solid #000; padding: 1px 3px; font-size: ${badge}; font-weight: 900; white-space: nowrap; }
+    .price { font-weight: 900; white-space: nowrap; }
+    .options { margin-top: 2px; padding-left: ${optionIndent}; font-size: ${small}; }
+    .warning { margin-top: 2px; padding-left: ${optionIndent}; font-size: ${small}; font-weight: 900; }
+    .thanks { margin-top: 8px; font-weight: 900; }
+    .test-bars { display:flex; height: 14px; margin-top: 12px; }
+    .test-bars i { flex:1; display:block; }
+    .test-bars i:nth-child(1) { background:#111; }
+    .test-bars i:nth-child(2) { background:#444; }
+    .test-bars i:nth-child(3) { background:#777; }
+    .test-bars i:nth-child(4) { background:#aaa; }
+    .test-bars i:nth-child(5) { background:#ddd; }
+  `;
+}
+
+function documentShell({ title, body, estimatedMm, profile }) {
+  const heightMm = Math.min(1000, Math.ceil(estimatedMm));
+  const pageMarginMm = profile.paperWidthMm === 58 ? 2 : 3;
+  const contentWidthMm = profile.paperWidthMm - pageMarginMm * 2;
+  const dots = profile.dotsPerLine;
+  const rasterPadding = Math.max(8, Math.round(dots * pageMarginMm / profile.paperWidthMm));
+  const contentDots = dots - rasterPadding * 2;
+  const cssPxPerMm = 96 / 25.4;
+  const rasterScale = dots / (profile.paperWidthMm * cssPxPerMm);
+  const px = (value) => `${Math.max(1, Math.round(value * rasterScale))}px`;
+
+  const pdfCss = sharedCss({
+    width: `${contentWidthMm}mm`, padding: "0", base: "10.5px", h1: "18px", h2: "12px", h3: "10px", small: "8px", orderId: "22px", gap: "2mm", rowLabel: profile.paperWidthMm === 58 ? "18mm" : "25mm", divider: "1px", itemPadding: "4px", badge: "7px", optionIndent: "4mm",
+  });
+  const rasterCss = sharedCss({
+    width: `${dots}px`, padding: `${rasterPadding}px`, base: px(10.5), h1: px(18), h2: px(12), h3: px(10), small: px(8), orderId: px(22), gap: px(7.5), rowLabel: `${Math.round(contentDots * (profile.paperWidthMm === 58 ? 0.34 : 0.36))}px`, divider: Math.max(1, Math.round(rasterScale)) + "px", itemPadding: px(4), badge: px(7), optionIndent: px(15),
+  });
+
   return {
-    heightMm: height,
-    html: `<!doctype html><html lang="pt"><head><meta charset="utf-8"><title>${htmlEscape(title)}</title><style>
-      @page { size: 80mm ${height}mm; margin: 3mm; }
-      * { box-sizing: border-box; }
-      html, body { margin: 0; padding: 0; width: 74mm; background: white; color: black; }
-      body { font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", "Noto Sans", Arial, sans-serif; font-size: 10.5px; line-height: 1.35; }
-      h1 { margin: 0; font-size: 18px; font-weight: 900; }
-      h2 { margin: 4px 0 0; font-size: 12px; letter-spacing: .08em; }
-      h3 { margin: 0 0 5px; font-size: 10px; letter-spacing: .08em; }
-      p { margin: 4px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
-      .center { text-align: center; }
-      .small { font-size: 8px; }
-      .order-id { margin-top: 5px; font-size: 22px; font-weight: 900; letter-spacing: .08em; }
-      .divider { border-top: 1px dashed #000; margin: 8px 0; }
-      .row { display: grid; grid-template-columns: 25mm 1fr; gap: 2mm; padding: 1px 0; }
-      .row b { text-align: right; overflow-wrap: anywhere; }
-      .row.strong { font-size: 14px; border-top: 2px solid #000; margin-top: 4px; padding-top: 5px; }
-      .item { padding: 4px 0; break-inside: avoid; }
-      .item + .item { border-top: 1px dotted #777; }
-      .item-main { display: flex; justify-content: space-between; align-items: flex-start; gap: 5px; }
-      .item-main > div { min-width: 0; overflow-wrap: anywhere; }
-      .badge { border: 1px solid #000; padding: 1px 3px; font-size: 7px; font-weight: 900; white-space: nowrap; }
-      .price { font-weight: 900; white-space: nowrap; }
-      .options { margin-top: 2px; padding-left: 4mm; font-size: 8px; }
-      .warning { margin-top: 2px; padding-left: 4mm; font-size: 8px; font-weight: 900; }
-      .thanks { margin-top: 8px; font-weight: 900; }
-    </style></head><body>${body}</body></html>`,
+    heightMm,
+    rasterHeightDots: Math.ceil(heightMm * profile.dpi / 25.4),
+    html: `<!doctype html><html lang="pt"><head><meta charset="utf-8"><title>${htmlEscape(title)}</title><style>@page { size: ${profile.paperWidthMm}mm ${heightMm}mm; margin: ${pageMarginMm}mm; }${pdfCss}</style></head><body>${body}</body></html>`,
+    rasterHtml: `<!doctype html><html lang="pt"><head><meta charset="utf-8"><title>${htmlEscape(title)}</title><style>${rasterCss}</style></head><body>${body}</body></html>`,
   };
 }

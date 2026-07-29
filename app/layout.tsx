@@ -1,25 +1,36 @@
 import type { Metadata, Viewport } from "next";
-import { I18nProvider } from "@/app/lib/i18n"; // Ajustado para _old
-import PwaRegister from "@/app/_components/PwaRegister"; // Ajustado para _old
-import PWAClient from "@/app/_components/pwa-client"; // Ajustado para _old
+import { I18nProvider } from "@/app/lib/i18n";
+import PwaRegister from "@/app/_components/PwaRegister";
+import PWAClient from "@/app/_components/pwa-client";
 import GlobalPwaInstallCoach from "@/app/_components/GlobalPwaInstallCoach";
+import {
+  PLATFORM_DESCRIPTION,
+  PLATFORM_LOGO_PATH,
+  PLATFORM_NAME,
+  PLATFORM_SHORT_NAME,
+} from "@/app/lib/platform-brand";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Yamada",
-  description: "Pedidos, eventos e acompanhamento de produção.",
+  title: {
+    default: PLATFORM_NAME,
+    template: `%s · ${PLATFORM_NAME}`,
+  },
+  description: PLATFORM_DESCRIPTION,
   manifest: "/manifest.webmanifest",
+  applicationName: PLATFORM_NAME,
   appleWebApp: {
     capable: true,
-    title: "Yamada",
+    title: PLATFORM_SHORT_NAME,
     statusBarStyle: "black-translucent",
   },
   icons: {
+    icon: PLATFORM_LOGO_PATH,
     apple: "/icon-192x192.png",
   },
 };
 
-// Configuração estrita de Viewport ideal para Mobile/PWA (Evita zoom indesejado no Safari)
+// Configuração estrita de viewport ideal para Mobile/PWA.
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
@@ -32,17 +43,18 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="pt" suppressHydrationWarning>
       <head>
-        {/* Script anti-flash para evitar flickering branco no Dark Mode */}
         <script
           dangerouslySetInnerHTML={{
             __html: `
               (function() {
                 try {
+                  // A chave antiga é mantida para preservar a preferência de tema
+                  // de usuários que já utilizavam a aplicação antes do white-label.
                   var theme = localStorage.getItem('yamada_theme_v1');
                   var supportDarkMode = window.matchMedia('(prefers-color-scheme: dark)').matches;
                   if (!theme && supportDarkMode) theme = 'dark';
                   if (!theme) theme = 'light';
-                  
+
                   document.documentElement.dataset.theme = theme;
                   if (theme === 'dark') {
                     document.documentElement.classList.add('dark');
@@ -60,7 +72,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 
       <body className="antialiased bg-white dark:bg-neutral-950 text-neutral-900 dark:text-neutral-100 transition-colors duration-300">
         <I18nProvider>
-          {/* Inicializadores do PWA vindos da pasta de backup */}
           <PwaRegister />
           <PWAClient />
           <GlobalPwaInstallCoach />

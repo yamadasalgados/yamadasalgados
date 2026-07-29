@@ -1,4 +1,9 @@
 import {
+  normalizeSellerIdentity,
+  type SellerContactIdentity,
+  type SellerReceiptIdentity,
+} from "@/app/lib/seller-identity";
+import {
   getRegionalSettings,
   isAllowedTimeZone,
   normalizeLanguage,
@@ -15,6 +20,13 @@ import {
 export type SellerRegionalProfile = {
   sellerId: string;
   storeName: string;
+  storeDescription: string;
+  logoUrl: string;
+  bannerUrl: string;
+  brandPrimaryColor: string;
+  brandAccentColor: string;
+  contact: SellerContactIdentity;
+  receiptIdentity: SellerReceiptIdentity;
   operatingCountry: OperatingCountry | null;
   currency: SupportedCurrency | null;
   regionalLocale: RegionalLocale | null;
@@ -135,10 +147,8 @@ export function normalizeSellerRegionalProfile(
       ? requestedTimeZone
       : derivedRegional?.timeZone ?? "";
 
-  const storeName =
-    text(data.storeName) ||
-    text(data.businessName) ||
-    text(data.publicName);
+  const identity = normalizeSellerIdentity(data);
+  const storeName = identity.storeName;
 
   const defaultLanguage =
     normalizeLanguage(
@@ -165,6 +175,13 @@ export function normalizeSellerRegionalProfile(
   return {
     sellerId,
     storeName,
+    storeDescription: identity.storeDescription,
+    logoUrl: identity.logoUrl,
+    bannerUrl: identity.bannerUrl,
+    brandPrimaryColor: identity.primaryColor,
+    brandAccentColor: identity.accentColor,
+    contact: identity.contact,
+    receiptIdentity: identity.receipt,
     operatingCountry,
     currency,
     regionalLocale,

@@ -29,6 +29,7 @@ import {
 import { AppearanceButtons } from "@/app/_components/RoleNavigation";
 import { resolveAuthenticatedAccount } from "@/app/lib/auth-role-client";
 import { useI18n } from "@/app/lib/i18n";
+import { PLATFORM_LOGO_PATH, PLATFORM_NAME } from "@/app/lib/platform-brand";
 
 type AuthMode = "email" | "google" | "phone";
 type Busy = null | "email" | "register" | "google" | "sendCode" | "verifyCode";
@@ -83,7 +84,7 @@ export default function LoginPage() {
   const portalCopy =
     lang === "ja"
       ? {
-          title: "Yamadaログイン",
+          title: "注文ポータルにログイン",
           subtitle: "アカウントを確認し、お客様・販売者・管理者の正しい画面へ自動的に移動します。",
           customer: "お客様としてログイン・登録",
           sellerHint: "新しい販売者アカウントを作成する場合は、下の「新規登録」を選択してください。",
@@ -91,14 +92,14 @@ export default function LoginPage() {
         }
       : lang === "en"
         ? {
-            title: "Yamada sign in",
+            title: "Order portal sign in",
             subtitle: "We identify the account and send customers, sellers and admins to the correct area automatically.",
             customer: "Customer sign in or registration",
             sellerHint: "To create a new seller account, choose Create account below.",
             unknown: "We could not identify this account type. Choose the customer or seller registration flow.",
           }
         : {
-            title: "Acesso Yamada",
+            title: "Acesso ao portal de pedidos",
             subtitle: "Identificamos a conta e direcionamos cliente, seller ou admin automaticamente para a área correta.",
             customer: "Entrar ou cadastrar como cliente",
             sellerHint: "Para criar uma nova conta de seller, selecione Criar conta abaixo.",
@@ -423,7 +424,7 @@ export default function LoginPage() {
         <div className="flex flex-col items-center gap-2">
           <div className="h-20 w-20 rounded-full overflow-hidden bg-neutral-100 dark:bg-neutral-800 flex items-center justify-center">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/logo-yamada.png" alt="Logo Yamada" className="h-full w-full object-cover" />
+            <img src={PLATFORM_LOGO_PATH} alt={PLATFORM_NAME} className="h-full w-full object-cover" />
           </div>
 
           <h1 className="text-xl font-black text-neutral-950 dark:text-white">

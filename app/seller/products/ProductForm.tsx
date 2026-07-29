@@ -38,10 +38,16 @@ type Props = {
   setLowStockThreshold: (value: string) => void;
   inventoryTracked: boolean;
   setInventoryTracked: (value: boolean) => void;
+  pickupEligible: boolean;
+  setPickupEligible: (value: boolean) => void;
+  localDeliveryEligible: boolean;
+  setLocalDeliveryEligible: (value: boolean) => void;
   postalEligible: boolean;
   setPostalEligible: (value: boolean) => void;
   shippingWeightGrams: string;
   setShippingWeightGrams: (value: string) => void;
+  productionLeadTimeDays: string;
+  setProductionLeadTimeDays: (value: string) => void;
   status: ProductStatus;
   setStatus: (value: ProductStatus) => void;
   storefrontSubgroup: string;
@@ -90,8 +96,10 @@ export default function ProductForm(props: Props) {
     setLegacyName, content, setContent, costPrice, setCostPrice, sellPrice,
     setSellPrice, quantity, setQuantity, reservedStock, stockQty, setStockQty,
     lowStockThreshold, setLowStockThreshold, inventoryTracked,
-    setInventoryTracked, postalEligible, setPostalEligible,
-    shippingWeightGrams, setShippingWeightGrams, status, setStatus,
+    setInventoryTracked, pickupEligible, setPickupEligible,
+    localDeliveryEligible, setLocalDeliveryEligible, postalEligible, setPostalEligible,
+    shippingWeightGrams, setShippingWeightGrams, productionLeadTimeDays,
+    setProductionLeadTimeDays, status, setStatus,
     storefrontSubgroup, setStorefrontSubgroup, storefrontSubgroupOrder,
     setStorefrontSubgroupOrder, storefrontProductOrder, setStorefrontProductOrder,
     availableProducts, currentProductId, bundleEnabled, setBundleEnabled, bundleTotalUnits,
@@ -111,6 +119,66 @@ export default function ProductForm(props: Props) {
     : lang === "en"
       ? { title: "Storefront organization (optional)", help: "Organize products from the same category into rows by type. Leave blank to keep the current layout.", subgroup: "Subgroup / type", subgroupPlaceholder: "Example: Empadas, Esfihas, Rolls", subgroupOrder: "Group order", productOrder: "Product order inside group", orderHelp: "Smaller numbers appear first. Blank values fall back to alphabetical order." }
       : { title: "Organização da vitrine (opcional)", help: "Organize produtos da mesma categoria em fileiras por tipo. Se deixar em branco, a vitrine continua como está hoje.", subgroup: "Subgrupo / tipo", subgroupPlaceholder: "Ex.: Empadas, Esfihas, Enrolados", subgroupOrder: "Ordem do subgrupo", productOrder: "Ordem do produto no subgrupo", orderHelp: "Números menores aparecem primeiro. Campos vazios usam ordem alfabética." };
+
+  const fulfillmentCopy = lang === "ja"
+    ? {
+        title: "受取・配送方法",
+        help: "この商品で利用できる方法を選択します。カート内のすべての商品に共通する方法だけがお客様に表示されます。",
+        pickup: "店頭受取",
+        pickupHelp: "店舗や指定場所で受け取れます。",
+        delivery: "地域配達",
+        deliveryHelp: "販売者が設定した地域へ配達できます。",
+        postal: "郵送",
+        postalHelp: "通常ストアから住所へ発送できます。",
+        required: "少なくとも1つの受取方法を選択してください。",
+      }
+    : lang === "en"
+      ? {
+          title: "Fulfillment options",
+          help: "Choose how this product may be received. Customers only see methods supported by every item in the cart.",
+          pickup: "Pickup",
+          pickupHelp: "The customer collects the order at the store or agreed location.",
+          delivery: "Local delivery",
+          deliveryHelp: "The seller delivers within configured service regions.",
+          postal: "Postal shipping",
+          postalHelp: "The product may be shipped to the customer's address.",
+          required: "Select at least one fulfillment option.",
+        }
+      : {
+          title: "Formas de recebimento",
+          help: "Escolha como este produto poderá ser recebido. O cliente verá somente os métodos compatíveis com todos os itens do carrinho.",
+          pickup: "Retirada",
+          pickupHelp: "O cliente retira na loja ou no local combinado.",
+          delivery: "Delivery local",
+          deliveryHelp: "O seller entrega nas regiões configuradas.",
+          postal: "Envio por correio",
+          postalHelp: "O produto pode ser enviado para o endereço do cliente.",
+          required: "Selecione pelo menos uma forma de recebimento.",
+        };
+
+  const productionCopy = lang === "ja"
+    ? {
+        title: "製造リードタイム",
+        label: "製造に必要な日数",
+        suffix: "日",
+        help: "受注生産または在庫不足のときに適用されます。カレンダー日で計算し、お客様が選べる最短日を自動設定します。",
+        madeToOrderHelp: "受注生産の商品は1日以上を設定してください。",
+      }
+    : lang === "en"
+      ? {
+          title: "Production lead time",
+          label: "Days required for production",
+          suffix: "calendar days",
+          help: "Applied when an item is made to order or the requested quantity exceeds stock. The checkout automatically calculates the earliest available date.",
+          madeToOrderHelp: "Made-to-order products must have at least 1 production day.",
+        }
+      : {
+          title: "Prazo de produção",
+          label: "Dias necessários para produção",
+          suffix: "dias corridos",
+          help: "Aplicado quando o item é sob encomenda ou a quantidade pedida ultrapassa o estoque. O checkout calcula automaticamente a primeira data disponível.",
+          madeToOrderHelp: "Produtos sob encomenda precisam ter pelo menos 1 dia de produção.",
+        };
 
   const updateContent = (language: ProductLanguage, field: keyof ProductContent[ProductLanguage], value: string) => {
     setContent({ ...content, [language]: { ...content[language], [field]: value } });
@@ -225,15 +293,36 @@ export default function ProductForm(props: Props) {
     <div className="space-y-1"><label className="text-xs font-black uppercase tracking-wider">{copy.threshold}</label><input value={lowStockThreshold} onChange={(e) => setLowStockThreshold(e.target.value)} inputMode="numeric" disabled={disabled || !inventoryTracked} className={fieldClass(Boolean(errors.lowStockThreshold))} /><FieldError message={errors.lowStockThreshold} /></div>
     <div className="flex items-center gap-3 rounded-xl border border-neutral-200 px-3 dark:border-neutral-800"><input id="inventory-tracked" type="checkbox" checked={inventoryTracked} onChange={(e) => setInventoryTracked(e.target.checked)} disabled={disabled || reservedStock > 0} /><label htmlFor="inventory-tracked" className="py-3 text-sm font-bold">{copy.track}</label></div>
 
-    <section className="space-y-3 rounded-2xl border border-blue-200 bg-blue-50/60 p-4 dark:border-blue-900/50 dark:bg-blue-950/20 sm:col-span-2">
-      <label className="flex cursor-pointer items-center justify-between gap-4">
-        <div>
-          <p className="text-sm font-black">{copy.postal}</p>
-          <p className="mt-1 text-xs font-semibold text-blue-800/80 dark:text-blue-200/80">{copy.postalHelp}</p>
-        </div>
-        <input type="checkbox" checked={postalEligible} onChange={(e) => setPostalEligible(e.target.checked)} disabled={disabled} className="h-5 w-5 accent-blue-700" />
-      </label>
-      {postalEligible && <div className="space-y-1">
+    <section className="space-y-4 rounded-2xl border border-blue-200 bg-blue-50/60 p-4 dark:border-blue-900/50 dark:bg-blue-950/20 sm:col-span-2">
+      <div>
+        <p className="text-sm font-black">{fulfillmentCopy.title}</p>
+        <p className="mt-1 text-xs font-semibold text-blue-800/80 dark:text-blue-200/80">{fulfillmentCopy.help}</p>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-3">
+        {[
+          { id: "pickup", checked: pickupEligible, setChecked: setPickupEligible, label: fulfillmentCopy.pickup, help: fulfillmentCopy.pickupHelp },
+          { id: "delivery", checked: localDeliveryEligible, setChecked: setLocalDeliveryEligible, label: fulfillmentCopy.delivery, help: fulfillmentCopy.deliveryHelp },
+          { id: "postal", checked: postalEligible, setChecked: setPostalEligible, label: fulfillmentCopy.postal, help: fulfillmentCopy.postalHelp },
+        ].map((option) => (
+          <label key={option.id} className="flex cursor-pointer items-start gap-3 rounded-2xl border border-blue-200 bg-white p-3 dark:border-blue-900/50 dark:bg-neutral-950/60">
+            <input
+              type="checkbox"
+              checked={option.checked}
+              onChange={(event) => option.setChecked(event.target.checked)}
+              disabled={disabled}
+              className="mt-0.5 h-5 w-5 shrink-0 accent-blue-700"
+            />
+            <span>
+              <span className="block text-sm font-black">{option.label}</span>
+              <span className="mt-1 block text-[11px] font-semibold leading-relaxed text-neutral-500 dark:text-neutral-400">{option.help}</span>
+            </span>
+          </label>
+        ))}
+      </div>
+      <FieldError message={errors.fulfillmentOptions} />
+
+      {postalEligible && <div className="space-y-1 border-t border-blue-200 pt-4 dark:border-blue-900/50">
         <label className="text-xs font-black uppercase tracking-wider">{copy.weight}</label>
         <input value={shippingWeightGrams} onChange={(e) => setShippingWeightGrams(e.target.value)} inputMode="numeric" disabled={disabled} placeholder="500" className={fieldClass(Boolean(errors.shippingWeightGrams))} />
         <p className="text-[11px] font-semibold text-neutral-500 dark:text-neutral-400">{copy.weightHelp}</p>
@@ -243,7 +332,13 @@ export default function ProductForm(props: Props) {
 
     <div className="space-y-1 sm:col-span-2">
       <label className="text-xs font-black uppercase tracking-wider">{t("products.form.status")}</label>
-      <select value={status} onChange={(e) => setStatus(e.target.value as ProductStatus)} disabled={disabled} className={`${fieldClass()} h-[46px]`}>
+      <select value={status} onChange={(e) => {
+        const nextStatus = e.target.value as ProductStatus;
+        setStatus(nextStatus);
+        if (nextStatus === "made_to_order" && Number(productionLeadTimeDays || 0) < 1) {
+          setProductionLeadTimeDays("1");
+        }
+      }} disabled={disabled} className={`${fieldClass()} h-[46px]`}>
         <option value="active">{t("products.badge.active")}</option>
         <option value="made_to_order">{copy.madeToOrder}</option>
         <option value="hidden">{copy.hidden}</option>
@@ -252,6 +347,33 @@ export default function ProductForm(props: Props) {
       {status === "made_to_order" && <p className="mt-2 rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-xs font-bold text-violet-700 dark:border-violet-900/50 dark:bg-violet-950/20 dark:text-violet-300">{copy.madeToOrderHelp}</p>}
       {status === "hidden" && <p className="mt-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-200">{copy.hiddenHelp}</p>}
     </div>
+
+    <section className="space-y-3 rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4 dark:border-emerald-900/50 dark:bg-emerald-950/20 sm:col-span-2">
+      <div>
+        <p className="text-sm font-black">{productionCopy.title}</p>
+        <p className="mt-1 text-xs font-semibold text-emerald-900/75 dark:text-emerald-200/75">{productionCopy.help}</p>
+      </div>
+      <div className="space-y-1">
+        <label className="text-xs font-black uppercase tracking-wider">{productionCopy.label}</label>
+        <div className="flex items-center gap-3">
+          <input
+            type="number"
+            value={productionLeadTimeDays}
+            onChange={(event) => setProductionLeadTimeDays(event.target.value)}
+            inputMode="numeric"
+            min={status === "made_to_order" || bundleEnabled ? 1 : 0}
+            max={365}
+            disabled={disabled}
+            className={`${fieldClass(Boolean(errors.productionLeadTimeDays))} max-w-36`}
+          />
+          <span className="text-xs font-black text-emerald-800 dark:text-emerald-200">{productionCopy.suffix}</span>
+        </div>
+        {status === "made_to_order" && (
+          <p className="text-[11px] font-bold text-violet-700 dark:text-violet-300">{productionCopy.madeToOrderHelp}</p>
+        )}
+        <FieldError message={errors.productionLeadTimeDays} />
+      </div>
+    </section>
 
     <section className="space-y-4 rounded-2xl border border-violet-200 bg-violet-50/60 p-4 dark:border-violet-900/50 dark:bg-violet-950/20 sm:col-span-2">
       <label className="flex cursor-pointer items-start justify-between gap-4">

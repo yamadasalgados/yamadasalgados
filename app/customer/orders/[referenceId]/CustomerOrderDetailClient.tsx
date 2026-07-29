@@ -488,11 +488,25 @@ export default function CustomerOrderDetailClient({ referenceId }: Props) {
               <section className="rounded-3xl border border-neutral-200 bg-white p-5 shadow-sm dark:border-neutral-800 dark:bg-neutral-900">
                 <h2 className="flex items-center gap-2 text-lg font-black"><CalendarDays size={20} /> {text.delivery}</h2>
                 <dl className="mt-4 space-y-3 text-sm">
-                  <InfoRow label={text.mode} value={deliveryModeLabel(order.deliveryMode, text)} />
+                  <InfoRow
+                    label={text.mode}
+                    value={order.fulfillmentLabel || deliveryModeLabel(order.deliveryMode, text)}
+                  />
+                  {order.deliveryRegionName && (
+                    <InfoRow
+                      label={language === "ja" ? "配達地域" : language === "en" ? "Delivery region" : "Região de delivery"}
+                      value={order.deliveryRegionName}
+                    />
+                  )}
                   <InfoRow label={text.date} value={order.deliveryDate || text.noInfo} />
                   <InfoRow label={text.time} value={order.deliveryTimeSlot || text.noInfo} />
                   <InfoRow label={text.address} value={order.address || text.noInfo} />
                 </dl>
+                {order.fulfillmentInstructions && (
+                  <div className="mt-4 rounded-2xl bg-blue-50 p-4 text-sm text-blue-900 dark:bg-blue-950/30 dark:text-blue-100">
+                    <p className="whitespace-pre-wrap">{order.fulfillmentInstructions}</p>
+                  </div>
+                )}
                 {order.locationLink && (
                   <a href={order.locationLink} target="_blank" rel="noreferrer" className="mt-4 inline-flex items-center gap-2 text-xs font-black underline">
                     <MapPin size={15} /> {text.address}

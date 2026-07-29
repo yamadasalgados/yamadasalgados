@@ -30,8 +30,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { signOut } from "firebase/auth";
 
 import useCustomerSession from "@/app/hooks/useCustomerSession";
+import { useSellerIdentity } from "@/app/hooks/useSellerIdentity";
+import { useDocumentBranding } from "@/app/hooks/useDocumentBranding";
 import { auth } from "@/app/lib/firebase";
 import { useI18n } from "@/app/lib/i18n";
+import { sellerInitials } from "@/app/lib/seller-identity";
+import { PLATFORM_LOGO_PATH, PLATFORM_NAME } from "@/app/lib/platform-brand";
 import { initTheme, onThemeChanged, setTheme, type Theme } from "@/app/lib/theme";
 
 const LAST_STORE_KEY = "yamada_customer_last_store_v1";
@@ -116,16 +120,40 @@ function NavLink({ item, compact = false }: { item: NavItem; compact?: boolean }
   );
 }
 
-function Brand({ label, href }: { label: string; href: string }) {
+function Brand({
+  label,
+  href,
+  name = PLATFORM_NAME,
+  logoUrl = PLATFORM_LOGO_PATH,
+  primaryColor = "#f97316",
+}: {
+  label: string;
+  href: string;
+  name?: string;
+  logoUrl?: string;
+  primaryColor?: string;
+}) {
+  const resolvedName = name.trim() || PLATFORM_NAME;
+
   return (
     <Link href={href} className="flex min-w-0 items-center gap-3 rounded-xl active:scale-[0.98]">
-      <img
-        src="/logo-yamada.png"
-        alt="Yamada"
-        className="h-10 w-10 shrink-0 rounded-xl object-cover shadow-sm"
-      />
+      {logoUrl ? (
+        <img
+          src={logoUrl}
+          alt={resolvedName}
+          className="h-10 w-10 shrink-0 rounded-xl object-cover shadow-sm"
+        />
+      ) : (
+        <span
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-xs font-black text-white shadow-sm"
+          style={{ backgroundColor: primaryColor }}
+          aria-hidden="true"
+        >
+          {sellerInitials(resolvedName)}
+        </span>
+      )}
       <div className="min-w-0 leading-tight">
-        <p className="truncate text-sm font-black text-neutral-950 dark:text-white">Yamada</p>
+        <p className="truncate text-sm font-black text-neutral-950 dark:text-white">{resolvedName}</p>
         <p className="truncate text-[10px] font-black uppercase tracking-[0.18em] text-neutral-400">
           {label}
         </p>
@@ -397,7 +425,7 @@ export function AdminNav({ displayName = "" }: { displayName?: string }) {
     <>
       <header className="sticky top-0 z-40 border-b border-neutral-200 bg-white/90 backdrop-blur dark:border-neutral-800 dark:bg-neutral-950/90">
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-3 sm:px-6">
-          <Brand label={displayName || copy.admin} href="/admin" />
+          <Brand label={displayName || copy.admin} href="/admin" name={PLATFORM_NAME} logoUrl={PLATFORM_LOGO_PATH} />
           <div className="flex min-w-0 items-center gap-2">
             <DesktopNav items={items} />
             <MoreMenu items={extra} label={copy.more} />
@@ -413,7 +441,7 @@ export function AdminNav({ displayName = "" }: { displayName?: string }) {
   );
 }
 
-export function SellerNav({ displayName = "", sellerId = "" }: { displayName?: string; sellerId?: string }) {
+export function SellerNav({ displayName = "", sellerId = "", logoUrl = "", primaryColor = "#f97316" }: { displayName?: string; sellerId?: string; logoUrl?: string; primaryColor?: string }) {
   const copy = useCopy();
   const router = useRouter();
   const [orderBadges, setOrderBadges] = useState({ store: 0, event: 0 });
@@ -456,7 +484,14 @@ export function SellerNav({ displayName = "", sellerId = "" }: { displayName?: s
     };
     const onCustomRefresh = () => void refreshOrderBadges();
     const onServiceWorkerMessage = (event: MessageEvent) => {
-      if (event.data?.type === "YAMADA_PUSH_RECEIVED") void refreshOrderBadges();
+      const messageType = event.data?.type;
+      if (
+        messageType === "ORDER_APP_PUSH_RECEIVED" ||
+        // Compatibilidade com o Service Worker anterior à etapa 06D2.
+        messageType === "YAMADA_PUSH_RECEIVED"
+      ) {
+        void refreshOrderBadges();
+      }
     };
 
     window.addEventListener("focus", onFocus);
@@ -496,7 +531,7 @@ export function SellerNav({ displayName = "", sellerId = "" }: { displayName?: s
     <>
       <header className="sticky top-0 z-40 border-b border-neutral-200 bg-white/90 backdrop-blur dark:border-neutral-800 dark:bg-neutral-950/90">
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-3 sm:px-6">
-          <Brand label={displayName || copy.seller} href="/seller" />
+          <Brand label={copy.seller} href="/seller" name={displayName || copy.seller} logoUrl={logoUrl} primaryColor={primaryColor} />
           <div className="flex min-w-0 items-center gap-2">
             <DesktopNav items={mainItems} />
             <MoreMenu items={extra} label={copy.more} />
@@ -525,6 +560,14 @@ export function CustomerNav() {
   const pathname = usePathname();
   const session = useCustomerSession();
   const [context, setContext] = useState(() => ({ storeHref: "/", sellerId: "" }));
+  const sellerIdentity = useSellerIdentity(context.sellerId);
+
+  useDocumentBranding({
+    title: sellerIdentity.storeName
+      ? `${sellerIdentity.storeName} · ${copy.customer}`
+      : copy.customer,
+    themeColor: sellerIdentity.primaryColor,
+  });
 
   useEffect(() => {
     setContext(readCustomerContext());
@@ -544,7 +587,7 @@ export function CustomerNav() {
     <>
       <header className="sticky top-0 z-40 border-b border-neutral-200 bg-white/90 backdrop-blur dark:border-neutral-800 dark:bg-neutral-950/90">
         <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-3 sm:px-6">
-          <Brand label={session.displayName || copy.customer} href={context.storeHref} />
+          <Brand label={session.displayName || copy.customer} href={context.storeHref} name={sellerIdentity.storeName || copy.store} logoUrl={sellerIdentity.logoUrl} primaryColor={sellerIdentity.primaryColor} />
           <div className="flex items-center gap-2">
             {session.registered && <DesktopNav items={items} />}
             <AppearanceButtons />
@@ -569,6 +612,7 @@ export function PublicStoreNav({ sellerId, storeHref, contextLabel = "" }: BaseP
   const copy = useCopy();
   const pathname = usePathname();
   const session = useCustomerSession();
+  const sellerIdentity = useSellerIdentity(sellerId || "");
   const resolvedStoreHref = storeHref || (sellerId ? `/store/${encodeURIComponent(sellerId)}` : "/");
 
   useEffect(() => {
@@ -591,7 +635,7 @@ export function PublicStoreNav({ sellerId, storeHref, contextLabel = "" }: BaseP
     <>
       <header className="sticky top-0 z-40 border-b border-neutral-200 bg-white/90 backdrop-blur dark:border-neutral-800 dark:bg-neutral-950/90">
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-3 sm:px-6">
-          <Brand label={contextLabel || copy.store} href={resolvedStoreHref} />
+          <Brand label={contextLabel || copy.store} href={resolvedStoreHref} name={sellerIdentity.storeName || copy.store} logoUrl={sellerIdentity.logoUrl} primaryColor={sellerIdentity.primaryColor} />
           <div className="flex items-center gap-2">
             {session.registered && <DesktopNav items={items} />}
             <AppearanceButtons />

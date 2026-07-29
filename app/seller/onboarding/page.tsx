@@ -50,6 +50,10 @@ import {
   normalizeSellerRegionalProfile,
 } from "@/app/lib/seller-regional-profile";
 import {
+  normalizeSellerIdentity,
+  sellerIdentityWritePayload,
+} from "@/app/lib/seller-identity";
+import {
   useI18n,
 } from "@/app/lib/i18n";
 import type {
@@ -334,6 +338,12 @@ export default function SellerOnboardingPage() {
         const timestamp =
           serverTimestamp();
 
+        const currentIdentity = normalizeSellerIdentity(result.sellerDoc);
+        const identityPayload = sellerIdentityWritePayload({
+          ...currentIdentity,
+          storeName: normalizedStoreName,
+        });
+
         const batch =
           writeBatch(db);
 
@@ -346,8 +356,7 @@ export default function SellerOnboardingPage() {
           {
             schemaVersion: 2,
             ownerUid: user.uid,
-            storeName:
-              normalizedStoreName,
+            ...identityPayload,
             storefrontLanguage:
               language,
 

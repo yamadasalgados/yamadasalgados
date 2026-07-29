@@ -10,7 +10,7 @@
     --card: 0 0% 100%;
     --card-foreground: 222 47% 11%;
     --border: 214.3 31.8% 91.4%;
-    --primary: 47.9 95.8% 53.1%; /* Amarelo Yamada */
+    --primary: 47.9 95.8% 53.1%; /* Cor principal padrão da plataforma */
   }
 
   .dark {
@@ -48,4 +48,25 @@ body {
   input, textarea, select {
     font-size: 16px !important;
   }
+}
+/* 06D1 — shared input used by white-label identity settings */
+.field-input {
+  width: 100%;
+  border-radius: 1rem;
+  border: 1px solid rgb(212 212 212);
+  background: white;
+  padding: 0.75rem 1rem;
+  font-size: 0.875rem;
+  outline: none;
+}
+
+.field-input:focus {
+  border-color: rgb(249 115 22);
+  box-shadow: 0 0 0 4px rgb(249 115 22 / 0.1);
+}
+
+html[data-theme="dark"] .field-input {
+  border-color: rgb(64 64 64);
+  background: rgb(23 23 23);
+  color: white;
 }
