@@ -2,15 +2,34 @@ import { majorToMinor } from "@/app/lib/money";
 import type { SupportedCurrency } from "@/app/types/regional";
 
 export const MAX_SCHEDULED_PRICE_MESSAGE_LENGTH = 240;
+export const DEFAULT_PRICE_NOTICE_DAYS = 7;
+export const DEFAULT_PRICE_COUNTDOWN_MINUTES = 24 * 60;
+export const DEFAULT_PRICE_APPLIED_NOTICE_DAYS = 3;
+export const MIN_PRICE_NOTICE_DAYS = 1;
+export const MAX_PRICE_NOTICE_DAYS = 365;
 
 export type ScheduledPriceStatus = "none" | "upcoming" | "active" | "invalid";
 
+export type ScheduledPriceNoticePhase =
+  | "hidden"
+  | "notice"
+  | "urgent"
+  | "countdown"
+  | "last_hour"
+  | "active_recent"
+  | "active";
+
 export type ProductScheduledPriceChange = {
+  schemaVersion: 2;
   enabled: boolean;
   nextPriceMinor: number | null;
   startsAtMillis: number | null;
   message: string;
   showCountdown: boolean;
+  noticeStartsBeforeDays: number;
+  countdownStartsBeforeMinutes: number;
+  showInLastChance: boolean;
+  appliedNoticeDurationDays: number;
 };
 
 export type ProductPriceEvaluation = {
@@ -19,6 +38,10 @@ export type ProductPriceEvaluation = {
   previousPriceMinor: number | null;
   scheduledPriceChange: ProductScheduledPriceChange;
   status: ScheduledPriceStatus;
+  noticePhase: ScheduledPriceNoticePhase;
+  shouldShowNotice: boolean;
+  shouldShowCountdown: boolean;
+  shouldShowInLastChance: boolean;
   isScheduledIncrease: boolean;
   priceChanged: boolean;
 };
@@ -38,6 +61,12 @@ function finiteNumber(value: unknown): number | null {
   return null;
 }
 
+function clampInteger(value: unknown, fallback: number, min: number, max: number): number {
+  const parsed = finiteNumber(value);
+  if (parsed === null) return fallback;
+  return Math.min(max, Math.max(min, Math.round(parsed)));
+}
+
 export function timestampToMillis(value: unknown): number | null {
   if (value instanceof Date) {
     const millis = value.getTime();
@@ -52,6 +81,10 @@ export function timestampToMillis(value: unknown): number | null {
   }
 
   if (typeof value === "string" && value.trim()) {
+    const numeric = finiteNumber(value);
+    if (numeric !== null && /^\d+(?:\.\d+)?$/.test(value.trim())) {
+      return timestampToMillis(numeric);
+    }
     const parsed = Date.parse(value);
     return Number.isFinite(parsed) ? parsed : null;
   }
@@ -60,10 +93,10 @@ export function timestampToMillis(value: unknown): number | null {
   const toMillis = raw.toMillis;
   if (typeof toMillis === "function") {
     try {
-      const parsed = Number((toMillis as () => unknown)());
+      const parsed = Number((toMillis as () => unknown).call(value));
       return Number.isFinite(parsed) ? Math.round(parsed) : null;
     } catch {
-      return null;
+      // Continue through the serialized Timestamp fallbacks below.
     }
   }
 
@@ -76,13 +109,37 @@ export function timestampToMillis(value: unknown): number | null {
   return null;
 }
 
+function firstValidTimestamp(...values: unknown[]): number | null {
+  for (const value of values) {
+    const parsed = timestampToMillis(value);
+    if (parsed !== null && parsed > 0) return parsed;
+  }
+  return null;
+}
+
+function firstValidPositiveMinor(...values: unknown[]): number | null {
+  for (const value of values) {
+    const parsed = finiteNumber(value);
+    if (parsed !== null && parsed > 0) return Math.round(parsed);
+  }
+  return null;
+}
+
+/**
+ * Normalizes the nested schedule object. Numeric `startsAtMillis` is checked
+ * before Timestamp-like objects because some JSON/React transformations can
+ * strip prototype methods from a Firestore Timestamp while preserving the
+ * redundant millisecond field.
+ */
 export function normalizeProductScheduledPriceChange(
   value: unknown,
   currency: SupportedCurrency,
 ): ProductScheduledPriceChange {
   const raw = asRecord(value);
-  const nextPriceMinorRaw = finiteNumber(
-    raw.nextPriceMinor ?? raw.futurePriceMinor ?? raw.scheduledPriceMinor,
+  const nextPriceMinorRaw = firstValidPositiveMinor(
+    raw.nextPriceMinor,
+    raw.futurePriceMinor,
+    raw.scheduledPriceMinor,
   );
   const legacyMajor =
     nextPriceMinorRaw === null
@@ -94,11 +151,18 @@ export function normalizeProductScheduledPriceChange(
       : legacyMajor !== null
         ? Math.max(0, majorToMinor(legacyMajor, currency))
         : null;
-  const startsAtMillis = timestampToMillis(
-    raw.startsAt ?? raw.effectiveAt ?? raw.changeAt ?? raw.startsAtMillis,
+
+  const startsAtMillis = firstValidTimestamp(
+    raw.startsAtMillis,
+    raw.effectiveAtMillis,
+    raw.changeAtMillis,
+    raw.startsAt,
+    raw.effectiveAt,
+    raw.changeAt,
   );
 
   return {
+    schemaVersion: 2,
     enabled: raw.enabled === true,
     nextPriceMinor:
       nextPriceMinor !== null && nextPriceMinor > 0 ? nextPriceMinor : null,
@@ -109,7 +173,111 @@ export function normalizeProductScheduledPriceChange(
         ? raw.message.trim().slice(0, MAX_SCHEDULED_PRICE_MESSAGE_LENGTH)
         : "",
     showCountdown: raw.showCountdown !== false,
+    noticeStartsBeforeDays: clampInteger(
+      raw.noticeStartsBeforeDays ?? raw.noticeDays ?? raw.warningDays,
+      DEFAULT_PRICE_NOTICE_DAYS,
+      MIN_PRICE_NOTICE_DAYS,
+      MAX_PRICE_NOTICE_DAYS,
+    ),
+    countdownStartsBeforeMinutes: clampInteger(
+      raw.countdownStartsBeforeMinutes ?? raw.countdownMinutes,
+      DEFAULT_PRICE_COUNTDOWN_MINUTES,
+      1,
+      30 * 24 * 60,
+    ),
+    showInLastChance: raw.showInLastChance !== false,
+    appliedNoticeDurationDays: clampInteger(
+      raw.appliedNoticeDurationDays,
+      DEFAULT_PRICE_APPLIED_NOTICE_DAYS,
+      0,
+      30,
+    ),
   };
+}
+
+/**
+ * Resolves a schedule from a complete product document. This accepts both the
+ * current nested object and old/top-level field names, making existing products
+ * recoverable without a migration when the numeric timestamp was already saved.
+ */
+export function resolveProductScheduledPriceChange(
+  productValue: unknown,
+  currency: SupportedCurrency,
+): ProductScheduledPriceChange {
+  const product = asRecord(productValue);
+  const nested = asRecord(
+    product.scheduledPriceChange ??
+      product.priceSchedule ??
+      product.scheduledPrice ??
+      product.futurePriceChange,
+  );
+
+  const merged: Record<string, unknown> = {
+    ...nested,
+    enabled:
+      nested.enabled ??
+      product.scheduledPriceEnabled ??
+      product.priceScheduleEnabled,
+    nextPriceMinor:
+      nested.nextPriceMinor ??
+      product.scheduledPriceNextMinor ??
+      product.futurePriceMinor,
+    nextPrice:
+      nested.nextPrice ??
+      product.scheduledPriceNext ??
+      product.futurePrice,
+    startsAtMillis:
+      nested.startsAtMillis ??
+      product.scheduledPriceStartsAtMillis ??
+      product.priceChangeStartsAtMillis,
+    startsAt:
+      nested.startsAt ??
+      product.scheduledPriceStartsAt ??
+      product.priceChangeStartsAt,
+    message:
+      nested.message ??
+      product.scheduledPriceMessage,
+    showCountdown:
+      nested.showCountdown ??
+      product.scheduledPriceShowCountdown,
+    noticeStartsBeforeDays:
+      nested.noticeStartsBeforeDays ??
+      product.scheduledPriceNoticeDays,
+    countdownStartsBeforeMinutes:
+      nested.countdownStartsBeforeMinutes ??
+      product.scheduledPriceCountdownMinutes,
+    showInLastChance:
+      nested.showInLastChance ??
+      product.scheduledPriceShowInLastChance,
+    appliedNoticeDurationDays:
+      nested.appliedNoticeDurationDays ??
+      product.scheduledPriceAppliedNoticeDays,
+  };
+
+  return normalizeProductScheduledPriceChange(merged, currency);
+}
+
+export function scheduledPriceNoticePhase(
+  scheduleValue: unknown,
+  currency: SupportedCurrency,
+  now = Date.now(),
+): ScheduledPriceNoticePhase {
+  const schedule = normalizeProductScheduledPriceChange(scheduleValue, currency);
+  if (!schedule.enabled || schedule.startsAtMillis === null) return "hidden";
+
+  const remaining = schedule.startsAtMillis - now;
+  if (remaining <= 0) {
+    const age = Math.abs(remaining);
+    return age <= schedule.appliedNoticeDurationDays * 86_400_000
+      ? "active_recent"
+      : "active";
+  }
+
+  if (remaining > schedule.noticeStartsBeforeDays * 86_400_000) return "hidden";
+  if (remaining <= 60 * 60_000) return "last_hour";
+  if (remaining <= schedule.countdownStartsBeforeMinutes * 60_000) return "countdown";
+  if (remaining <= 3 * 86_400_000) return "urgent";
+  return "notice";
 }
 
 export function evaluateProductPrice(params: {
@@ -137,6 +305,10 @@ export function evaluateProductPrice(params: {
       previousPriceMinor: null,
       scheduledPriceChange: schedule,
       status: "none",
+      noticePhase: "hidden",
+      shouldShowNotice: false,
+      shouldShowCountdown: false,
+      shouldShowInLastChance: false,
       isScheduledIncrease: false,
       priceChanged: false,
     };
@@ -154,18 +326,38 @@ export function evaluateProductPrice(params: {
       previousPriceMinor: null,
       scheduledPriceChange: schedule,
       status: "invalid",
+      noticePhase: "hidden",
+      shouldShowNotice: false,
+      shouldShowCountdown: false,
+      shouldShowInLastChance: false,
       isScheduledIncrease: false,
       priceChanged: false,
     };
   }
 
   const active = nowMillis >= schedule.startsAtMillis!;
+  const noticePhase = scheduledPriceNoticePhase(schedule, params.currency, nowMillis);
+  const shouldShowNotice =
+    noticePhase === "notice" ||
+    noticePhase === "urgent" ||
+    noticePhase === "countdown" ||
+    noticePhase === "last_hour" ||
+    noticePhase === "active_recent";
+  const shouldShowCountdown =
+    schedule.showCountdown &&
+    (noticePhase === "countdown" || noticePhase === "last_hour");
+
   return {
     basePriceMinor,
     effectivePriceMinor: active ? schedule.nextPriceMinor! : basePriceMinor,
     previousPriceMinor: active ? basePriceMinor : null,
     scheduledPriceChange: schedule,
     status: active ? "active" : "upcoming",
+    noticePhase,
+    shouldShowNotice,
+    shouldShowCountdown,
+    shouldShowInLastChance:
+      !active && shouldShowNotice && schedule.showInLastChance,
     isScheduledIncrease: true,
     priceChanged: active,
   };
@@ -209,7 +401,7 @@ export function dateTimeLocalToUtcMillis(
 ): number | null {
   const match = value
     .trim()
-    .match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/);
+    .match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d{1,3})?$/);
   if (!match) return null;
 
   const desired = {
@@ -242,7 +434,7 @@ export function dateTimeLocalToUtcMillis(
 
   const safeTimeZone = validTimeZone(timeZone);
   let candidate = naive;
-  for (let attempt = 0; attempt < 4; attempt += 1) {
+  for (let attempt = 0; attempt < 6; attempt += 1) {
     const actual = zonedParts(candidate, safeTimeZone);
     const actualAsUtc = Date.UTC(
       actual.year,

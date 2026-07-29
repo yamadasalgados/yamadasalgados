@@ -59,8 +59,10 @@ import {
 import {
   evaluateProductPrice,
   formatScheduledPriceDate,
+  resolveProductScheduledPriceChange,
   scheduledPriceCountdown,
   type ProductScheduledPriceChange,
+  type ScheduledPriceNoticePhase,
   type ScheduledPriceStatus,
 } from "@/app/lib/scheduled-price";
 import {
@@ -82,6 +84,45 @@ import type {
   RegionalLocale,
   SupportedCurrency,
 } from "@/app/types/regional";
+
+function eventScheduledPricePresentation(
+  language: "pt" | "en" | "ja",
+  phase: ScheduledPriceNoticePhase,
+): { title: string; cardClassName: string; badgeClassName: string } {
+  if (phase === "last_hour") {
+    return {
+      title: language === "ja" ? "まもなく終了" : language === "en" ? "Final hour" : "Última hora",
+      cardClassName: "border-red-500 bg-red-50 text-red-950 dark:border-red-700 dark:bg-red-950/40 dark:text-red-100 animate-pulse",
+      badgeClassName: "bg-red-600 text-white animate-pulse",
+    };
+  }
+  if (phase === "countdown") {
+    return {
+      title: language === "ja" ? "残りわずか" : language === "en" ? "Final hours" : "Últimas horas",
+      cardClassName: "border-red-300 bg-red-50 text-red-950 dark:border-red-800 dark:bg-red-950/30 dark:text-red-100",
+      badgeClassName: "bg-red-600 text-white",
+    };
+  }
+  if (phase === "urgent") {
+    return {
+      title: language === "ja" ? "あと数日" : language === "en" ? "Only a few days left" : "Faltam poucos dias",
+      cardClassName: "border-amber-300 bg-amber-50 text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100",
+      badgeClassName: "bg-amber-500 text-white",
+    };
+  }
+  if (phase === "active_recent") {
+    return {
+      title: language === "ja" ? "新価格を適用しました" : language === "en" ? "New price applied" : "Novo preço aplicado",
+      cardClassName: "border-sky-200 bg-sky-50 text-sky-950 dark:border-sky-900/60 dark:bg-sky-950/25 dark:text-sky-100",
+      badgeClassName: "bg-sky-600 text-white",
+    };
+  }
+  return {
+    title: language === "ja" ? "価格改定のお知らせ" : language === "en" ? "Price rises soon" : "Preço sobe em breve",
+    cardClassName: "border-emerald-200 bg-emerald-50 text-emerald-950 dark:border-emerald-900/60 dark:bg-emerald-950/25 dark:text-emerald-100",
+    badgeClassName: "bg-emerald-600 text-white",
+  };
+}
 
 type CategoryName = string;
 type ProductStatus = "active" | "inactive" | "made_to_order";
@@ -110,7 +151,7 @@ type EventData = {
   allowPickup?: boolean;
   currency: SupportedCurrency;
   regionalLocale: RegionalLocale;
-  defaultLanguage: UiLanguage;
+  defaultLanguage: "pt" | "en" | "ja";
   timeZone: string;
   rewardRecipientMode: "customer" | "event_presenter";
   rewardRecipientUid: string;
@@ -147,71 +188,19 @@ type ChatMessage = {
 
 const MAIN_CLASS = "p-4 space-y-6 max-w-3xl mx-auto animate-fade-in";
 
-type UnknownRecord = Record<string, unknown>;
-type UiLanguage = "pt" | "en" | "ja";
-
-function isRecord(value: unknown): value is UnknownRecord {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function asRecord(value: unknown): UnknownRecord {
-  return isRecord(value) ? value : {};
-}
-
-function asTrimmedString(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
-}
-
-function normalizeStringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-
-  return value
-    .filter((entry): entry is string => typeof entry === "string")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-}
-
-function safeNumber(value: unknown): number {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function normalizeSupportedCurrency(
-  value: unknown,
-  fallback: SupportedCurrency = "JPY",
-): SupportedCurrency {
-  return value === "BRL" || value === "USD" || value === "JPY"
+const normalizeStringArray = (value: any): string[] =>
+  Array.isArray(value)
     ? value
-    : fallback;
-}
+        .filter((v) => typeof v === "string")
+        .map((s) => s.trim())
+        .filter(Boolean)
+    : [];
 
-function defaultLocaleForCurrency(
-  currency: SupportedCurrency,
-): RegionalLocale {
-  if (currency === "BRL") return "pt-BR";
-  if (currency === "USD") return "en-US";
-  return "ja-JP";
-}
-
-function normalizeRegionalLocaleValue(
-  value: unknown,
-  fallback: RegionalLocale,
-): RegionalLocale {
-  return value === "pt-BR" || value === "en-US" || value === "ja-JP"
-    ? value
-    : fallback;
-}
-
-function normalizeUiLanguage(
-  value: unknown,
-  fallback: UiLanguage = "pt",
-): UiLanguage {
-  return value === "pt" || value === "en" || value === "ja"
-    ? value
-    : fallback;
-}
+const safeNumber = (v: any) => {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+};
 
 function uniq(arr: string[]) {
   return Array.from(new Set(arr.filter(Boolean)));
@@ -264,9 +253,9 @@ function eventProductionDateError(
   return `A data escolhida é anterior ao prazo de produção. A primeira data disponível é ${date}.`;
 }
 
-function normalizeCategoryDynamic(value: unknown): CategoryName | undefined {
-  if (typeof value !== "string") return undefined;
-  const s = value.trim();
+function normalizeCategoryDynamic(v: any): CategoryName | undefined {
+  if (typeof v !== "string") return undefined;
+  const s = v.trim();
   return s ? s : undefined;
 }
 
@@ -338,7 +327,7 @@ function mapProductSnapToData(
           );
     const priceEvaluation = evaluateProductPrice({
       basePriceMinor,
-      scheduledPriceChange: docData.scheduledPriceChange,
+      scheduledPriceChange: resolveProductScheduledPriceChange(docData, currency),
       currency,
     });
     const priceMinor = priceEvaluation.effectivePriceMinor;
@@ -449,7 +438,9 @@ async function fetchEventPublishedProducts(
     const data = catalogDoc.data() as Record<string, unknown>;
     const priceEvaluation = evaluateProductPrice({
       basePriceMinor: published.basePriceMinor,
-      scheduledPriceChange: data.scheduledPriceChange ?? published.scheduledPriceChange,
+      scheduledPriceChange: resolveProductScheduledPriceChange(data, currency).enabled
+        ? resolveProductScheduledPriceChange(data, currency)
+        : published.scheduledPriceChange,
       currency,
     });
     published.basePriceMinor = priceEvaluation.basePriceMinor;
@@ -482,11 +473,16 @@ async function fetchEventPublishedProducts(
         priceMinor: 0,
         basePriceMinor: 0,
         scheduledPriceChange: {
+          schemaVersion: 2,
           enabled: false,
           nextPriceMinor: null,
           startsAtMillis: null,
           message: "",
           showCountdown: true,
+          noticeStartsBeforeDays: 7,
+          countdownStartsBeforeMinutes: 24 * 60,
+          showInLastChance: true,
+          appliedNoticeDurationDays: 3,
         },
         scheduledPriceStatus: "none",
         status: "active",
@@ -566,9 +562,12 @@ const uiLocale =
   const [currentUrl, setCurrentUrl] = useState("");
 
   const [productsData, setProductsData] = useState<Record<string, ProductImageData>>({});
+  const [pricingNow, setPricingNow] = useState(() => Date.now());
 
   useEffect(() => {
     const refreshScheduledPrices = () => {
+      const now = Date.now();
+      setPricingNow(now);
       setProductsData((current) => {
         let changed = false;
         const next: Record<string, ProductImageData> = {};
@@ -577,6 +576,7 @@ const uiLocale =
             basePriceMinor: product.basePriceMinor,
             scheduledPriceChange: product.scheduledPriceChange,
             currency: event?.currency || "JPY",
+            now,
           });
           if (
             evaluation.effectivePriceMinor !== product.priceMinor ||
@@ -1138,59 +1138,23 @@ const uiLocale =
           return;
         }
 
-        const data = asRecord(snap.data());
+        const data = snap.data() as any;
         const sellerData = await fetchPublicSellerProfile(sellerId);
-
-        if (!alive) return;
-
         setSellerIdentity(normalizeSellerIdentity(sellerData));
-
-        const sellerOrderSettings = asRecord(sellerData.orderSettings);
         setAcceptOrdersWithoutStock(
           normalizeSellerOrderSettings(
             sellerData.orderSettings,
-            sellerOrderSettings.acceptOrdersWithoutStock,
+            sellerData.orderSettings.acceptOrdersWithoutStock,
           ).acceptOrdersWithoutStock,
         );
-
-        const sellerRegional = asRecord(sellerData.regional);
-        const sellerCurrency = normalizeSupportedCurrency(
-          sellerRegional.currency,
-          "JPY",
-        );
-        const sellerLocale = normalizeRegionalLocaleValue(
-          sellerRegional.locale,
-          defaultLocaleForCurrency(sellerCurrency),
-        );
-        const eventCurrency = normalizeSupportedCurrency(
-          data.currency,
-          sellerCurrency,
-        );
-        const eventLocale = normalizeRegionalLocaleValue(
-          data.regionalLocale,
-          sellerLocale,
-        );
-        const sellerLanguage = normalizeUiLanguage(
-          sellerData.storefrontLanguage,
-          "pt",
-        );
-        const eventDefaultLanguage = normalizeUiLanguage(
-          data.defaultLanguage,
-          sellerLanguage,
-        );
-        const operatingCountry =
-          asTrimmedString(data.operatingCountry) ||
-          asTrimmedString(sellerRegional.operatingCountry);
-        const eventTimeZone = normalizeTimeZone(
-          asTrimmedString(data.timeZone) ||
-            asTrimmedString(sellerRegional.timeZone),
-          defaultTimeZoneForRegional(
-            eventLocale,
-            eventCurrency,
-            operatingCountry,
-          ),
-        );
-        const storedSellerId = asTrimmedString(data.sellerId);
+        // fetchPublicSellerProfile() sempre devolve regional normalizado.
+        // Evitar o fallback `{}` aqui preserva o tipo PublicSellerProfile["regional"]
+        // e permite que o TypeScript reconheça currency, locale e timeZone.
+        const sellerRegional = sellerData.regional;
+        const storedSellerId =
+          typeof data.sellerId === "string"
+            ? data.sellerId.trim()
+            : "";
 
         // O caminho é a fonte de verdade. Um sellerId divergente no
         // documento indica dado inconsistente e não deve ser aceito.
@@ -1241,10 +1205,32 @@ const uiLocale =
           allowDelivery: data.allowDelivery !== false,
           allowPickup: data.allowPickup !== false,
           offerIds: normalizeStringArray(data.offerIds),
-          currency: eventCurrency,
-          regionalLocale: eventLocale,
-          defaultLanguage: eventDefaultLanguage,
-          timeZone: eventTimeZone,
+          currency:
+            data.currency === "BRL" || data.currency === "USD" || data.currency === "JPY"
+              ? data.currency
+              : sellerRegional.currency === "BRL" || sellerRegional.currency === "USD"
+                ? sellerRegional.currency
+                : "JPY",
+          regionalLocale:
+            data.regionalLocale === "pt-BR" || data.regionalLocale === "en-US" || data.regionalLocale === "ja-JP"
+              ? data.regionalLocale
+              : sellerRegional.locale === "pt-BR" || sellerRegional.locale === "en-US"
+                ? sellerRegional.locale
+                : "ja-JP",
+          defaultLanguage:
+            data.defaultLanguage === "en" || data.defaultLanguage === "ja" || data.defaultLanguage === "pt"
+              ? data.defaultLanguage
+              : sellerData.storefrontLanguage === "en" || sellerData.storefrontLanguage === "ja"
+                ? sellerData.storefrontLanguage
+                : "pt",
+          timeZone: normalizeTimeZone(
+            data.timeZone ?? sellerRegional.timeZone,
+            defaultTimeZoneForRegional(
+              data.regionalLocale ?? sellerRegional.locale,
+              data.currency ?? sellerRegional.currency,
+              data.operatingCountry ?? sellerRegional.operatingCountry,
+            ),
+          ),
           rewardRecipientMode,
           rewardRecipientUid:
             rewardRecipientMode === "event_presenter"
@@ -1818,6 +1804,7 @@ const uiLocale =
           currency={currency}
           locale={locale}
           timeZone={event?.timeZone || "Asia/Tokyo"}
+          now={pricingNow}
           eventClosed={eventClosed}
           acceptOrdersWithoutStock={acceptOrdersWithoutStock}
           language={language}
@@ -1846,6 +1833,7 @@ const uiLocale =
             currency={currency}
             locale={locale}
             timeZone={event?.timeZone || "Asia/Tokyo"}
+            now={pricingNow}
             eventClosed={eventClosed}
             acceptOrdersWithoutStock={acceptOrdersWithoutStock}
             language={language}
@@ -2332,6 +2320,7 @@ function EventProductGrid({
   currency,
   locale,
   timeZone,
+  now,
   eventClosed,
   acceptOrdersWithoutStock,
   language,
@@ -2346,6 +2335,7 @@ function EventProductGrid({
   currency: SupportedCurrency;
   locale: string;
   timeZone: string;
+  now: number;
   eventClosed: boolean;
   acceptOrdersWithoutStock: boolean;
   language: "pt" | "en" | "ja";
@@ -2374,7 +2364,17 @@ function EventProductGrid({
           locale,
           timeZone,
         );
-        const countdown = scheduledPriceCountdown(schedule?.startsAtMillis ?? null);
+        const countdown = scheduledPriceCountdown(schedule?.startsAtMillis ?? null, now);
+        const scheduledEvaluation = evaluateProductPrice({
+          basePriceMinor: info?.basePriceMinor ?? 0,
+          scheduledPriceChange: schedule,
+          currency,
+          now,
+        });
+        const scheduledPresentation = eventScheduledPricePresentation(
+          language,
+          scheduledEvaluation.noticePhase,
+        );
         const countdownLabel = countdown && !countdown.expired
           ? language === "ja"
             ? `${countdown.days}日 ${countdown.hours}時間 ${countdown.minutes}分`
@@ -2424,13 +2424,9 @@ function EventProductGrid({
                   </span>
                 )}
 
-                {info?.scheduledPriceStatus === "upcoming" && (
-                  <span className="absolute right-2 top-2 rounded-full bg-amber-500 px-2 py-1 text-[9px] font-black uppercase tracking-wider text-white shadow-lg">
-                    {language === "ja"
-                      ? "まもなく値上げ"
-                      : language === "en"
-                        ? "Price increases soon"
-                        : "Preço sobe em breve"}
+                {info?.scheduledPriceStatus === "upcoming" && scheduledEvaluation.shouldShowNotice && (
+                  <span className={`absolute right-2 top-2 rounded-full px-2 py-1 text-[9px] font-black uppercase tracking-wider shadow-lg ${scheduledPresentation.badgeClassName}`}>
+                    {scheduledPresentation.title}
                   </span>
                 )}
 
@@ -2476,8 +2472,9 @@ function EventProductGrid({
                     )}
                 </div>
 
-                {info?.scheduledPriceStatus === "upcoming" && schedule?.nextPriceMinor && (
-                  <div className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-[10px] font-bold leading-relaxed text-amber-950 dark:border-amber-800 dark:bg-amber-950/25 dark:text-amber-100">
+                {info?.scheduledPriceStatus === "upcoming" && schedule?.nextPriceMinor && scheduledEvaluation.shouldShowNotice && (
+                  <div className={`rounded-xl border px-3 py-2 text-[10px] font-bold leading-relaxed ${scheduledPresentation.cardClassName}`}>
+                    <p className="font-black uppercase tracking-wider">{scheduledPresentation.title}</p>
                     <p className="font-black">
                       {language === "ja"
                         ? `${scheduledDate}から${formatMoneyMinor(schedule.nextPriceMinor, currency, locale)}になります。`
@@ -2493,7 +2490,7 @@ function EventProductGrid({
                             ? "Take advantage of the current price before it increases."
                             : "Aproveite o preço atual antes do aumento.")}
                     </p>
-                    {schedule.showCountdown && countdownLabel && (
+                    {scheduledEvaluation.shouldShowCountdown && countdownLabel && (
                       <p className="mt-1 font-black">
                         {language === "ja"
                           ? `残り ${countdownLabel}`
@@ -2505,8 +2502,9 @@ function EventProductGrid({
                   </div>
                 )}
 
-                {info?.scheduledPriceStatus === "active" && (
-                  <p className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-[10px] font-bold text-emerald-800 dark:border-emerald-900/60 dark:bg-emerald-950/20 dark:text-emerald-200">
+                {info?.scheduledPriceStatus === "active" && scheduledEvaluation.noticePhase === "active_recent" && (
+                  <p className={`rounded-xl border px-3 py-2 text-[10px] font-bold ${scheduledPresentation.cardClassName}`}>
+                    <span className="mb-1 block font-black uppercase tracking-wider">{scheduledPresentation.title}</span>
                     {language === "ja"
                       ? "予定されていた新価格が自動的に適用されました。"
                       : language === "en"
@@ -2599,7 +2597,7 @@ function EventOffersSection({
   evaluation: OfferEvaluation | null;
   productsData: Record<string, ProductImageData>;
   language: "pt" | "en" | "ja";
-  defaultLanguage: UiLanguage;
+  defaultLanguage: "pt" | "en" | "ja";
   currency: SupportedCurrency;
   locale: RegionalLocale | string;
   eventClosed: boolean;

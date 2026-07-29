@@ -26,6 +26,7 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  Flame,
   Gift,
   ImageIcon,
   Loader2,
@@ -82,8 +83,10 @@ import {
 import {
   evaluateProductPrice,
   formatScheduledPriceDate,
+  resolveProductScheduledPriceChange,
   scheduledPriceCountdown,
   type ProductScheduledPriceChange,
+  type ScheduledPriceNoticePhase,
   type ScheduledPriceStatus,
 } from "@/app/lib/scheduled-price";
 
@@ -874,8 +877,9 @@ function optionalFiniteNumber(
 function scheduledPriceCountdownText(
   language: Language,
   startsAtMillis: number | null,
+  now = Date.now(),
 ): string {
-  const countdown = scheduledPriceCountdown(startsAtMillis);
+  const countdown = scheduledPriceCountdown(startsAtMillis, now);
   if (!countdown || countdown.expired) return "";
   if (language === "ja") {
     return countdown.days > 0
@@ -890,6 +894,45 @@ function scheduledPriceCountdownText(
   return countdown.days > 0
     ? `Faltam ${countdown.days}d ${countdown.hours}h`
     : `Faltam ${countdown.hours}h ${countdown.minutes}min`;
+}
+
+function scheduledPriceNoticePresentation(
+  language: Language,
+  phase: ScheduledPriceNoticePhase,
+): { title: string; className: string; badgeClassName: string } {
+  if (phase === "last_hour") {
+    return {
+      title: language === "ja" ? "まもなく終了" : language === "en" ? "Final hour" : "Última hora",
+      className: "border-red-500 bg-red-50 text-red-950 dark:border-red-700 dark:bg-red-950/40 dark:text-red-100 animate-pulse",
+      badgeClassName: "bg-red-600 text-white animate-pulse",
+    };
+  }
+  if (phase === "countdown") {
+    return {
+      title: language === "ja" ? "残りわずか" : language === "en" ? "Final hours" : "Últimas horas",
+      className: "border-red-300 bg-red-50 text-red-950 dark:border-red-800 dark:bg-red-950/30 dark:text-red-100",
+      badgeClassName: "bg-red-600 text-white",
+    };
+  }
+  if (phase === "urgent") {
+    return {
+      title: language === "ja" ? "あと数日" : language === "en" ? "Only a few days left" : "Faltam poucos dias",
+      className: "border-amber-300 bg-amber-50 text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100",
+      badgeClassName: "bg-amber-500 text-white",
+    };
+  }
+  if (phase === "active_recent") {
+    return {
+      title: language === "ja" ? "新価格を適用しました" : language === "en" ? "New price applied" : "Novo preço aplicado",
+      className: "border-sky-200 bg-sky-50 text-sky-950 dark:border-sky-900/60 dark:bg-sky-950/25 dark:text-sky-100",
+      badgeClassName: "bg-sky-600 text-white",
+    };
+  }
+  return {
+    title: language === "ja" ? "価格改定のお知らせ" : language === "en" ? "Price rises soon" : "Preço sobe em breve",
+    className: "border-emerald-200 bg-emerald-50 text-emerald-950 dark:border-emerald-900/60 dark:bg-emerald-950/25 dark:text-emerald-100",
+    badgeClassName: "bg-emerald-600 text-white",
+  };
 }
 
 function normalizeImageList(
@@ -948,7 +991,7 @@ function normalizeProduct(
   const basePriceMinor = normalizeProductPriceMinor(raw, currency);
   const priceEvaluation = evaluateProductPrice({
     basePriceMinor,
-    scheduledPriceChange: raw.scheduledPriceChange,
+    scheduledPriceChange: resolveProductScheduledPriceChange(raw, currency),
     currency,
   });
   const priceMinor = priceEvaluation.effectivePriceMinor;
@@ -1261,6 +1304,7 @@ export default function StoreClient({
 
   const [offers, setOffers] =
     useState<OfferDoc[]>([]);
+  const [pricingNow, setPricingNow] = useState(() => Date.now());
 
   const [selectedOfferId, setSelectedOfferId] =
     useState("");
@@ -1534,6 +1578,7 @@ export default function StoreClient({
   useEffect(() => {
     const refreshScheduledPrices = () => {
       const now = Date.now();
+      setPricingNow(now);
       setProducts((current) => {
         let changed = false;
         const next = current.map((product) => {
@@ -1994,6 +2039,26 @@ const visibleProducts =
           compareStorefrontProducts(left, right, locale),
         ),
     [locale, products],
+  );
+
+  const lastChanceProducts = useMemo(
+    () =>
+      products
+        .filter((product) => {
+          if (!product.publiclyVisible) return false;
+          const evaluation = evaluateProductPrice({
+            basePriceMinor: product.basePriceMinor,
+            scheduledPriceChange: product.scheduledPriceChange,
+            currency: storeProfile.currency,
+            now: pricingNow,
+          });
+          return evaluation.shouldShowInLastChance;
+        })
+        .sort((left, right) =>
+          (left.scheduledPriceChange.startsAtMillis ?? Number.MAX_SAFE_INTEGER) -
+          (right.scheduledPriceChange.startsAtMillis ?? Number.MAX_SAFE_INTEGER),
+        ),
+    [pricingNow, products, storeProfile.currency],
   );
 
   const cartItems =
@@ -3163,6 +3228,7 @@ const visibleProducts =
             locale={storeProfile.regionalLocale}
             currency={storeProfile.currency}
             timeZone={storeProfile.timeZone}
+            now={pricingNow}
             acceptOrdersWithoutStock={storeProfile.acceptOrdersWithoutStock}
             onOpen={(product) => {
               setSelectedProduct(product);
@@ -3184,6 +3250,7 @@ const visibleProducts =
             locale={storeProfile.regionalLocale}
             currency={storeProfile.currency}
             timeZone={storeProfile.timeZone}
+            now={pricingNow}
             acceptOrdersWithoutStock={storeProfile.acceptOrdersWithoutStock}
             madeToOrder
             onOpen={(product) => {
@@ -3220,6 +3287,7 @@ const visibleProducts =
             locale={storeProfile.regionalLocale}
             currency={storeProfile.currency}
             timeZone={storeProfile.timeZone}
+            now={pricingNow}
             acceptOrdersWithoutStock={storeProfile.acceptOrdersWithoutStock}
             onOpen={(product) => {
               setSelectedProduct(product);
@@ -3241,6 +3309,7 @@ const visibleProducts =
               locale={storeProfile.regionalLocale}
               currency={storeProfile.currency}
               timeZone={storeProfile.timeZone}
+              now={pricingNow}
               acceptOrdersWithoutStock={storeProfile.acceptOrdersWithoutStock}
               madeToOrder
               onOpen={(product) => {
@@ -3255,6 +3324,88 @@ const visibleProducts =
       )
     ) : (
       <>
+        {lastChanceProducts.length > 0 && (
+          <section className="mt-6 rounded-3xl border border-amber-200 bg-gradient-to-br from-amber-50 to-orange-50 p-4 shadow-sm dark:border-amber-900/60 dark:from-amber-950/30 dark:to-orange-950/20 sm:p-5">
+            <div className="flex items-center gap-3">
+              <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-orange-600 text-white shadow-sm">
+                <Flame size={22} />
+              </span>
+              <div>
+                <h2 className="text-xl font-black sm:text-2xl">
+                  {language === "ja" ? "ラストチャンス" : language === "en" ? "Last chance" : "Última chance"}
+                </h2>
+                <p className="mt-1 text-xs font-semibold text-neutral-600 dark:text-neutral-300 sm:text-sm">
+                  {language === "ja"
+                    ? "値上げ前の現在価格で購入できる商品です。"
+                    : language === "en"
+                      ? "Products still available at the current price before the scheduled increase."
+                      : "Produtos que ainda podem ser comprados pelo preço atual antes do aumento."}
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-4 flex snap-x gap-3 overflow-x-auto pb-2">
+              {lastChanceProducts.map((product) => {
+                const evaluation = evaluateProductPrice({
+                  basePriceMinor: product.basePriceMinor,
+                  scheduledPriceChange: product.scheduledPriceChange,
+                  currency: storeProfile.currency,
+                  now: pricingNow,
+                });
+                const countdown = evaluation.shouldShowCountdown
+                  ? scheduledPriceCountdownText(
+                      language,
+                      product.scheduledPriceChange.startsAtMillis,
+                      pricingNow,
+                    )
+                  : "";
+                const dateLabel = formatScheduledPriceDate(
+                  product.scheduledPriceChange.startsAtMillis,
+                  storeProfile.regionalLocale,
+                  storeProfile.timeZone,
+                );
+                return (
+                  <button
+                    key={`last-chance-${product.id}`}
+                    type="button"
+                    onClick={() => {
+                      setSelectedProduct(product);
+                      setSelectedImageIndex(0);
+                    }}
+                    className="w-[230px] shrink-0 snap-start overflow-hidden rounded-2xl border border-amber-200 bg-white text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md dark:border-amber-900/60 dark:bg-neutral-900"
+                  >
+                    <div className="aspect-[16/10] bg-neutral-100 dark:bg-neutral-800">
+                      {product.imageUrl ? (
+                        <img src={product.imageUrl} alt={product.name} className="h-full w-full object-cover" />
+                      ) : (
+                        <div className="flex h-full items-center justify-center"><Package size={34} className="text-neutral-400" /></div>
+                      )}
+                    </div>
+                    <div className="p-3">
+                      <p className="line-clamp-2 text-sm font-black">{product.name}</p>
+                      <p className="mt-2 text-base font-black text-orange-700 dark:text-orange-300">
+                        {formatMoneyMinor(product.basePriceMinor, storeProfile.currency, storeProfile.regionalLocale)}
+                      </p>
+                      <p className="mt-1 text-[11px] font-bold text-neutral-500 dark:text-neutral-400">
+                        {language === "ja"
+                          ? `${dateLabel}まで`
+                          : language === "en"
+                            ? `Current price until ${dateLabel}`
+                            : `Preço atual até ${dateLabel}`}
+                      </p>
+                      {countdown && (
+                        <p className="mt-2 rounded-lg bg-red-600 px-2 py-1.5 text-[11px] font-black uppercase tracking-wide text-white">
+                          {countdown}
+                        </p>
+                      )}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+        )}
+
         {fulfillmentVitrines.length > 0 && (
           <section className="mt-6">
             <h2 className="text-xl font-black sm:text-2xl">
@@ -3373,6 +3524,7 @@ const visibleProducts =
           locale={storeProfile.regionalLocale}
           currency={storeProfile.currency}
           timeZone={storeProfile.timeZone}
+          now={pricingNow}
           acceptOrdersWithoutStock={storeProfile.acceptOrdersWithoutStock}
           madeToOrder
           onOpen={(product) => {
@@ -4072,6 +4224,7 @@ const visibleProducts =
           locale={storeProfile.regionalLocale}
           currency={storeProfile.currency}
           timeZone={storeProfile.timeZone}
+          now={pricingNow}
           text={text}
           language={language}
           onImageIndexChange={
@@ -4299,6 +4452,7 @@ function StoreProductGrid({
   locale,
   currency,
   timeZone,
+  now,
   acceptOrdersWithoutStock,
   madeToOrder = false,
   onOpen,
@@ -4316,6 +4470,7 @@ function StoreProductGrid({
   locale: RegionalLocale;
   currency: SupportedCurrency;
   timeZone: string;
+  now: number;
   acceptOrdersWithoutStock: boolean;
   madeToOrder?: boolean;
   onOpen: (product: Product) => void;
@@ -4418,8 +4573,19 @@ function StoreProductGrid({
             ? scheduledPriceCountdownText(
                 language,
                 product.scheduledPriceChange.startsAtMillis,
+                now,
               )
             : "";
+          const scheduledEvaluation = evaluateProductPrice({
+            basePriceMinor: product.basePriceMinor,
+            scheduledPriceChange: product.scheduledPriceChange,
+            currency,
+            now,
+          });
+          const scheduledPresentation = scheduledPriceNoticePresentation(
+            language,
+            scheduledEvaluation.noticePhase,
+          );
 
           return (
             <article
@@ -4487,9 +4653,9 @@ function StoreProductGrid({
                   </span>
                 )}
 
-                {product.scheduledPriceStatus === "upcoming" && (
-                  <span className="absolute bottom-3 left-3 rounded-full bg-amber-500 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-white shadow-lg">
-                    {language === "ja" ? "値上げ予定" : language === "en" ? "Price rising soon" : "Preço sobe em breve"}
+                {product.scheduledPriceStatus === "upcoming" && scheduledEvaluation.shouldShowNotice && (
+                  <span className={`absolute bottom-3 left-3 rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-wider shadow-lg ${scheduledPresentation.badgeClassName}`}>
+                    {scheduledPresentation.title}
                   </span>
                 )}
 
@@ -4529,10 +4695,10 @@ function StoreProductGrid({
                   </p>
                 )}
 
-                {product.scheduledPriceStatus === "upcoming" && (
-                  <div className="mt-3 rounded-xl border border-amber-300 bg-amber-50 px-3 py-3 text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
+                {product.scheduledPriceStatus === "upcoming" && scheduledEvaluation.shouldShowNotice && (
+                  <div className={`mt-3 rounded-xl border px-3 py-3 ${scheduledPresentation.className}`}>
                     <p className="text-[10px] font-black uppercase tracking-wider">
-                      {language === "ja" ? "価格改定のお知らせ" : language === "en" ? "Price increase notice" : "Aviso de aumento de preço"}
+                      {scheduledPresentation.title}
                     </p>
                     <p className="mt-1 text-xs font-black sm:text-sm">
                       {language === "ja"
@@ -4544,7 +4710,7 @@ function StoreProductGrid({
                     {product.scheduledPriceChange.message && (
                       <p className="mt-1 text-xs font-semibold opacity-85">{product.scheduledPriceChange.message}</p>
                     )}
-                    {scheduledCountdown && (
+                    {scheduledEvaluation.shouldShowCountdown && scheduledCountdown && (
                       <p className="mt-2 text-[11px] font-black uppercase tracking-wide">{scheduledCountdown}</p>
                     )}
                   </div>
@@ -5246,6 +5412,7 @@ function ProductModal({
   locale,
   currency,
   timeZone,
+  now,
   text,
   language,
   onImageIndexChange,
@@ -5257,6 +5424,7 @@ function ProductModal({
   locale: string;
   currency: SupportedCurrency;
   timeZone: string;
+  now: number;
   text: (typeof TEXT)[Language];
   language: Language;
   onImageIndexChange: (
@@ -5284,8 +5452,19 @@ function ProductModal({
     ? scheduledPriceCountdownText(
         language,
         product.scheduledPriceChange.startsAtMillis,
+        now,
       )
     : "";
+  const scheduledEvaluation = evaluateProductPrice({
+    basePriceMinor: product.basePriceMinor,
+    scheduledPriceChange: product.scheduledPriceChange,
+    currency,
+    now,
+  });
+  const scheduledPresentation = scheduledPriceNoticePresentation(
+    language,
+    scheduledEvaluation.noticePhase,
+  );
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4">
@@ -5392,10 +5571,10 @@ function ProductModal({
             </p>
           )}
 
-          {product.scheduledPriceStatus === "upcoming" && (
-            <div className="mt-4 rounded-2xl border border-amber-300 bg-amber-50 p-4 text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
+          {product.scheduledPriceStatus === "upcoming" && scheduledEvaluation.shouldShowNotice && (
+            <div className={`mt-4 rounded-2xl border p-4 ${scheduledPresentation.className}`}>
               <p className="text-xs font-black uppercase tracking-wider">
-                {language === "ja" ? "価格改定のお知らせ" : language === "en" ? "Price increase notice" : "Aviso de aumento de preço"}
+                {scheduledPresentation.title}
               </p>
               <p className="mt-2 text-sm font-black">
                 {language === "ja"
@@ -5407,9 +5586,22 @@ function ProductModal({
               {product.scheduledPriceChange.message && (
                 <p className="mt-2 text-sm font-semibold">{product.scheduledPriceChange.message}</p>
               )}
-              {scheduledCountdown && (
+              {scheduledEvaluation.shouldShowCountdown && scheduledCountdown && (
                 <p className="mt-3 text-xs font-black uppercase tracking-wide">{scheduledCountdown}</p>
               )}
+            </div>
+          )}
+
+          {product.scheduledPriceStatus === "active" && scheduledEvaluation.noticePhase === "active_recent" && (
+            <div className={`mt-4 rounded-2xl border p-4 ${scheduledPresentation.className}`}>
+              <p className="text-xs font-black uppercase tracking-wider">{scheduledPresentation.title}</p>
+              <p className="mt-2 text-sm font-bold">
+                {language === "ja"
+                  ? `${scheduledPriceDate}から新価格が適用されています。`
+                  : language === "en"
+                    ? `The new price has been active since ${scheduledPriceDate}.`
+                    : `O novo preço está valendo desde ${scheduledPriceDate}.`}
+              </p>
             </div>
           )}
 

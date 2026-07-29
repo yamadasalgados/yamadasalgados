@@ -25,7 +25,12 @@ import { db } from "@/app/lib/firebase";
 import { normalizeInventory, normalizeProductBundleConfig, normalizeProductContent, normalizeProductPriceMinor, normalizeProductStorefrontConfig } from "@/app/lib/product-schema";
 import { normalizeProductShipping } from "@/app/lib/shipping-schema";
 import { defaultTimeZoneForRegional, formatLeadTimeDays, normalizeProductProductionLeadTime, normalizeTimeZone } from "@/app/lib/production-lead-time";
-import { evaluateProductPrice, formatScheduledPriceDate } from "@/app/lib/scheduled-price";
+import {
+  evaluateProductPrice,
+  formatScheduledPriceDate,
+  resolveProductScheduledPriceChange,
+  scheduledPriceCountdown,
+} from "@/app/lib/scheduled-price";
 import { useI18n } from "@/app/lib/i18n";
 import { formatMoneyMajor, minorToMajor } from "@/app/lib/money";
 import type {
@@ -98,6 +103,7 @@ interface ProductCardProps {
   locale: string;
   timeZone: string;
   currency: SupportedCurrency;
+  now: number;
 }
 
 // --- 🚀 Componente Principal da Página ---
@@ -229,6 +235,7 @@ export default function ProductsCatalogPage() {
   const [productModalOpen, setProductModalOpen] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<ProductDoc | null>(null);
   const [toastMessage, setToastMessage] = useState("");
+  const [pricingNow, setPricingNow] = useState(() => Date.now());
   const [errMsg, setErrMsg] = useState("");
   const [successMsg, setSuccessMsg] = useState("");
 
@@ -345,7 +352,7 @@ export default function ProductsCatalogPage() {
           const basePriceMinor = normalizeProductPriceMinor(data, currency);
           const priceEvaluation = evaluateProductPrice({
             basePriceMinor,
-            scheduledPriceChange: data.scheduledPriceChange,
+            scheduledPriceChange: resolveProductScheduledPriceChange(data, currency),
             currency,
           });
           return {
@@ -430,6 +437,7 @@ export default function ProductsCatalogPage() {
   useEffect(() => {
     const refreshPrices = () => {
       const now = Date.now();
+      setPricingNow(now);
       setOwnProducts((current) => {
         let changed = false;
         const next = current.map((product) => {
@@ -1180,6 +1188,7 @@ export default function ProductsCatalogPage() {
                       locale={locale}
                       timeZone={timeZone}
                       currency={currency}
+                      now={pricingNow}
                     />
                   ))}
                 </div>
@@ -1241,6 +1250,7 @@ function ProductCard({
   locale,
   timeZone,
   currency,
+  now,
 }: ProductCardProps) {
   const [currentIndex, setCurrentIndex] = useState(0);
 
@@ -1271,6 +1281,22 @@ function ProductCard({
     product.scheduledPriceChange.nextPriceMinor === null
       ? ""
       : yen(minorToMajor(product.scheduledPriceChange.nextPriceMinor, currency));
+  const scheduledEvaluation = evaluateProductPrice({
+    basePriceMinor: product.basePriceMinor,
+    scheduledPriceChange: product.scheduledPriceChange,
+    currency,
+    now,
+  });
+  const scheduledCountdown = scheduledEvaluation.shouldShowCountdown
+    ? scheduledPriceCountdown(product.scheduledPriceChange.startsAtMillis, now)
+    : null;
+  const scheduledCountdownLabel = scheduledCountdown && !scheduledCountdown.expired
+    ? lang === "ja"
+      ? `${scheduledCountdown.hours + scheduledCountdown.days * 24}時間 ${scheduledCountdown.minutes}分`
+      : lang === "en"
+        ? `${scheduledCountdown.hours + scheduledCountdown.days * 24}h ${scheduledCountdown.minutes}m remaining`
+        : `Faltam ${scheduledCountdown.hours + scheduledCountdown.days * 24}h ${scheduledCountdown.minutes}min`
+    : "";
 
   const lowStock =
     !madeToOrder &&
@@ -1427,6 +1453,9 @@ function ProductCard({
               </p>
               {product.scheduledPriceChange.message && (
                 <p className="mt-1 font-medium opacity-80">{product.scheduledPriceChange.message}</p>
+              )}
+              {scheduledCountdownLabel && (
+                <p className="mt-2 font-black uppercase tracking-wide">{scheduledCountdownLabel}</p>
               )}
             </div>
           )}

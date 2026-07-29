@@ -18,7 +18,12 @@ import {
   type ProductProductionLeadTime,
 } from "@/app/lib/production-lead-time";
 import { normalizeProductBundleConfig } from "@/app/lib/product-schema";
-import { evaluateProductPrice, type ProductScheduledPriceChange, type ScheduledPriceStatus } from "@/app/lib/scheduled-price";
+import {
+  evaluateProductPrice,
+  resolveProductScheduledPriceChange,
+  type ProductScheduledPriceChange,
+  type ScheduledPriceStatus,
+} from "@/app/lib/scheduled-price";
 import {
   evaluateRewardSelection,
   rewardProductPointCost,
@@ -615,8 +620,10 @@ function normalizeProductLine(params: {
       : majorToMinor(raw.sellPrice ?? raw.price ?? raw.shadowSell, currency);
   const priceEvaluation = evaluateProductPrice({
     basePriceMinor,
-    scheduledPriceChange:
-      catalogRaw.scheduledPriceChange ?? raw.scheduledPriceChange,
+    scheduledPriceChange: resolveProductScheduledPriceChange(
+      Object.keys(catalogRaw).length > 0 ? catalogRaw : raw,
+      currency,
+    ),
     currency,
     now: nowMillis,
   });
@@ -1775,11 +1782,16 @@ export async function POST(request: NextRequest) {
               : "base_price",
           scheduledPriceStatus: line.scheduledPriceStatus,
           scheduledPriceChange: {
+            schemaVersion: 2,
             enabled: line.scheduledPriceChange.enabled,
             nextPriceMinor: line.scheduledPriceChange.nextPriceMinor,
             startsAtMillis: line.scheduledPriceChange.startsAtMillis,
             message: line.scheduledPriceChange.message || null,
             showCountdown: line.scheduledPriceChange.showCountdown,
+            noticeStartsBeforeDays: line.scheduledPriceChange.noticeStartsBeforeDays,
+            countdownStartsBeforeMinutes: line.scheduledPriceChange.countdownStartsBeforeMinutes,
+            showInLastChance: line.scheduledPriceChange.showInLastChance,
+            appliedNoticeDurationDays: line.scheduledPriceChange.appliedNoticeDurationDays,
           },
           subtotalMinor: line.priceMinor * line.quantity,
           subtotal: minorToMajor(line.priceMinor * line.quantity, currency),

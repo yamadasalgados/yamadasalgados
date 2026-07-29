@@ -41,6 +41,10 @@ type Props = {
   setScheduledPriceMessage: (value: string) => void;
   scheduledPriceShowCountdown: boolean;
   setScheduledPriceShowCountdown: (value: boolean) => void;
+  scheduledPriceNoticeDays: string;
+  setScheduledPriceNoticeDays: (value: string) => void;
+  scheduledPriceShowInLastChance: boolean;
+  setScheduledPriceShowInLastChance: (value: boolean) => void;
   quantity: string;
   setQuantity: (value: string) => void;
   reservedStock: number;
@@ -109,7 +113,8 @@ export default function ProductForm(props: Props) {
     setSellPrice, timeZone, scheduledPriceEnabled, setScheduledPriceEnabled,
     scheduledPrice, setScheduledPrice, scheduledPriceStartsAt, setScheduledPriceStartsAt,
     scheduledPriceMessage, setScheduledPriceMessage, scheduledPriceShowCountdown,
-    setScheduledPriceShowCountdown, quantity, setQuantity, reservedStock, stockQty, setStockQty,
+    setScheduledPriceShowCountdown, scheduledPriceNoticeDays, setScheduledPriceNoticeDays,
+    scheduledPriceShowInLastChance, setScheduledPriceShowInLastChance, quantity, setQuantity, reservedStock, stockQty, setStockQty,
     lowStockThreshold, setLowStockThreshold, inventoryTracked,
     setInventoryTracked, pickupEligible, setPickupEligible,
     localDeliveryEligible, setLocalDeliveryEligible, postalEligible, setPostalEligible,
@@ -204,7 +209,11 @@ export default function ProductForm(props: Props) {
         startsAt: "適用日時",
         message: "お客様へのメッセージ（任意）",
         messagePlaceholder: "例：今の価格で購入できる最後のチャンスです。",
-        countdown: "カウントダウンを表示",
+        countdown: "最後の24時間にカウントダウンを表示",
+        noticeStart: "告知を開始する時期",
+        noticeDays: "日前",
+        lastChance: "ストアの「ラストチャンス」に表示",
+        noticeHelp: "標準は7日前です。カウントダウンは最後の24時間だけ表示されます。",
         timezone: "販売者タイムゾーン",
         active: "この日時はすでに過ぎています。注文では改定後の価格が使われます。",
         upcoming: "この日時まで現在価格が使われます。",
@@ -218,7 +227,11 @@ export default function ProductForm(props: Props) {
           startsAt: "Effective date and time",
           message: "Customer message (optional)",
           messagePlaceholder: "Example: Last chance to buy at the current price.",
-          countdown: "Show countdown",
+          countdown: "Show countdown during the final 24 hours",
+          noticeStart: "Start customer warning",
+          noticeDays: "days before",
+          lastChance: "Show in the store Last chance showcase",
+          noticeHelp: "The default is 7 days. The live countdown appears only during the final 24 hours.",
           timezone: "Seller time zone",
           active: "This time has passed. Checkout is already using the new price.",
           upcoming: "The current price remains valid until this time.",
@@ -231,7 +244,11 @@ export default function ProductForm(props: Props) {
           startsAt: "Data e hora da mudança",
           message: "Mensagem para o cliente (opcional)",
           messagePlaceholder: "Ex.: Última chance para comprar pelo preço atual.",
-          countdown: "Mostrar contagem regressiva",
+          countdown: "Mostrar countdown nas últimas 24 horas",
+          noticeStart: "Começar o aviso ao cliente",
+          noticeDays: "dias antes",
+          lastChance: "Mostrar na vitrine Última chance da loja",
+          noticeHelp: "O padrão é 7 dias. O countdown ao vivo aparece somente nas últimas 24 horas.",
           timezone: "Fuso horário do seller",
           active: "Esse horário já passou. O checkout já está usando o novo preço.",
           upcoming: "O preço atual continua válido até esse horário.",
@@ -378,10 +395,55 @@ export default function ProductForm(props: Props) {
             <p className="text-right text-[10px] font-bold text-neutral-400">{scheduledPriceMessage.length}/240</p>
           </div>
 
-          <label className="flex items-center gap-3 rounded-xl border border-amber-200 bg-white px-3 py-3 text-sm font-bold dark:border-amber-900/50 dark:bg-neutral-950/60">
-            <input type="checkbox" checked={scheduledPriceShowCountdown} onChange={(event) => setScheduledPriceShowCountdown(event.target.checked)} disabled={disabled} className="h-5 w-5 accent-amber-600" />
-            <span>{scheduledPriceCopy.countdown}</span>
-          </label>
+          <div className="space-y-2 rounded-xl border border-amber-200 bg-white px-3 py-3 dark:border-amber-900/50 dark:bg-neutral-950/60">
+            <label className="text-xs font-black uppercase tracking-wider">{scheduledPriceCopy.noticeStart}</label>
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                value={["1", "3", "7", "15", "30"].includes(scheduledPriceNoticeDays) ? scheduledPriceNoticeDays : "custom"}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  if (value !== "custom") setScheduledPriceNoticeDays(value);
+                  else if (["1", "3", "7", "15", "30"].includes(scheduledPriceNoticeDays)) setScheduledPriceNoticeDays("10");
+                }}
+                disabled={disabled}
+                className={`${fieldClass()} max-w-[220px]`}
+              >
+                <option value="1">1 {scheduledPriceCopy.noticeDays}</option>
+                <option value="3">3 {scheduledPriceCopy.noticeDays}</option>
+                <option value="7">7 {scheduledPriceCopy.noticeDays}</option>
+                <option value="15">15 {scheduledPriceCopy.noticeDays}</option>
+                <option value="30">30 {scheduledPriceCopy.noticeDays}</option>
+                <option value="custom">{lang === "ja" ? "カスタム" : lang === "en" ? "Custom" : "Personalizado"}</option>
+              </select>
+              {!["1", "3", "7", "15", "30"].includes(scheduledPriceNoticeDays) && (
+                <label className="flex items-center gap-2 text-sm font-bold">
+                  <input
+                    type="number"
+                    min={1}
+                    max={365}
+                    step={1}
+                    value={scheduledPriceNoticeDays}
+                    onChange={(event) => setScheduledPriceNoticeDays(event.target.value)}
+                    disabled={disabled}
+                    className={`${fieldClass()} w-24`}
+                  />
+                  <span>{scheduledPriceCopy.noticeDays}</span>
+                </label>
+              )}
+            </div>
+            <p className="text-[11px] font-semibold text-neutral-500 dark:text-neutral-400">{scheduledPriceCopy.noticeHelp}</p>
+          </div>
+
+          <div className="grid gap-2 sm:grid-cols-2">
+            <label className="flex items-center gap-3 rounded-xl border border-amber-200 bg-white px-3 py-3 text-sm font-bold dark:border-amber-900/50 dark:bg-neutral-950/60">
+              <input type="checkbox" checked={scheduledPriceShowCountdown} onChange={(event) => setScheduledPriceShowCountdown(event.target.checked)} disabled={disabled} className="h-5 w-5 accent-amber-600" />
+              <span>{scheduledPriceCopy.countdown}</span>
+            </label>
+            <label className="flex items-center gap-3 rounded-xl border border-amber-200 bg-white px-3 py-3 text-sm font-bold dark:border-amber-900/50 dark:bg-neutral-950/60">
+              <input type="checkbox" checked={scheduledPriceShowInLastChance} onChange={(event) => setScheduledPriceShowInLastChance(event.target.checked)} disabled={disabled} className="h-5 w-5 accent-amber-600" />
+              <span>{scheduledPriceCopy.lastChance}</span>
+            </label>
+          </div>
 
           <div className="rounded-xl bg-amber-100/70 px-3 py-2 text-xs font-bold text-amber-900 dark:bg-amber-950/50 dark:text-amber-200">
             <p>{scheduledPriceCopy.timezone}: <span className="font-black">{timeZone}</span></p>
