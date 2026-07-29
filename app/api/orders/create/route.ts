@@ -898,6 +898,9 @@ function resultResponse(params: {
   rewardsDiscountMinor: number;
   pointsRedeemed: number;
   pointsToEarn: number;
+  pointsAssignedToPresenter: number;
+  rewardRecipientType: "customer" | "event_presenter" | "none";
+  rewardRecipientName: string;
   rewardMode: RewardRedemptionMode;
   replayed: boolean;
 }) {
@@ -921,6 +924,9 @@ function resultResponse(params: {
     rewardsDiscountMinor: params.rewardsDiscountMinor,
     pointsRedeemed: params.pointsRedeemed,
     pointsToEarn: params.pointsToEarn,
+    pointsAssignedToPresenter: params.pointsAssignedToPresenter,
+    rewardRecipientType: params.rewardRecipientType,
+    rewardRecipientName: params.rewardRecipientName || null,
     rewardMode: params.rewardMode,
     replayed: params.replayed,
   };
@@ -1092,7 +1098,30 @@ export async function POST(request: NextRequest) {
           customerRegistered: Boolean(markerData.customerRegistered),
           rewardsDiscountMinor: cleanInteger(markerData.rewardsDiscountMinor, 0, 2_000_000_000),
           pointsRedeemed: cleanInteger(markerData.pointsRedeemed, 0, 2_000_000_000),
-          pointsToEarn: cleanInteger(markerData.pointsToEarn, 0, 2_000_000_000),
+          pointsToEarn: cleanInteger(
+            markerData.customerPointsToEarn ?? markerData.pointsToEarn,
+            0,
+            2_000_000_000,
+          ),
+          pointsAssignedToPresenter:
+            cleanInteger(
+              markerData.customerPointsToEarn ?? markerData.pointsToEarn,
+              0,
+              2_000_000_000,
+            ) > 0
+              ? 0
+              : cleanInteger(
+                  markerData.pointsAssignedToPresenter,
+                  0,
+                  2_000_000_000,
+                ),
+          rewardRecipientType:
+            markerData.rewardRecipientType === "event_presenter"
+              ? "event_presenter"
+              : markerData.rewardRecipientType === "customer"
+                ? "customer"
+                : "none",
+          rewardRecipientName: cleanString(markerData.rewardRecipientName, 120),
           rewardMode: cleanRewardMode(markerData.rewardMode),
           replayed: true,
         });
@@ -1159,6 +1188,24 @@ export async function POST(request: NextRequest) {
           );
         }
       }
+
+      const eventRewardAssignment = clean.source === "event"
+        ? record(eventData.rewardAssignment)
+        : {};
+      const eventRewardRecipientMode =
+        clean.source === "event" &&
+        cleanString(eventRewardAssignment.mode, 40) === "event_presenter" &&
+        cleanString(eventRewardAssignment.recipientUid, 160)
+          ? "event_presenter"
+          : "customer";
+      const eventRewardRecipientUid =
+        eventRewardRecipientMode === "event_presenter"
+          ? cleanString(eventRewardAssignment.recipientUid, 160)
+          : "";
+      const eventRewardRecipientName =
+        eventRewardRecipientMode === "event_presenter"
+          ? cleanString(eventRewardAssignment.recipientName, 120)
+          : "";
 
       const sellerRegional = record(sellerData.regional);
       const sellerTimeZone = normalizeTimeZone(
@@ -1494,6 +1541,35 @@ export async function POST(request: NextRequest) {
       const merchandisePaidMinor = Math.max(0, subtotalMinor - discountMinor);
       const pointsRedeemed = rewardEvaluation.pointsRedeemed;
       const pointsToEarn = rewardEvaluation.pointsToEarn;
+      const earnRecipientType: "customer" | "event_presenter" | "none" =
+        eventRewardRecipientMode === "event_presenter"
+          ? "event_presenter"
+          : customerIdentity?.uid
+            ? "customer"
+            : "none";
+      const earnRecipientUid =
+        earnRecipientType === "event_presenter"
+          ? eventRewardRecipientUid
+          : earnRecipientType === "customer"
+            ? customerIdentity?.uid || ""
+            : "";
+      const earnRecipientName =
+        earnRecipientType === "event_presenter"
+          ? eventRewardRecipientName
+          : clean.customer.name || customerIdentity?.displayName || "";
+      const customerPointsToEarn =
+        earnRecipientUid && customerIdentity?.uid === earnRecipientUid
+          ? pointsToEarn
+          : 0;
+      const pointsAssignedToPresenter =
+        earnRecipientType === "event_presenter" ? pointsToEarn : 0;
+      const customerVisiblePresenterPoints =
+        earnRecipientType === "event_presenter" &&
+        customerIdentity?.uid !== earnRecipientUid
+          ? pointsToEarn
+          : 0;
+      const rewardEarnStatus =
+        pointsToEarn > 0 && earnRecipientUid ? "pending" : "not_eligible";
 
       let shippingFeeMinor = 0;
       let shippingSnapshot: Record<string, unknown> | null = null;
@@ -1802,7 +1878,7 @@ export async function POST(request: NextRequest) {
         offersApplied,
         selectedOfferId: clean.selectedOfferId || null,
         rewards: {
-          schemaVersion: 1,
+          schemaVersion: 2,
           sellerId: clean.sellerId,
           mode: rewardEvaluation.mode,
           pointsRedeemed,
@@ -1811,8 +1887,35 @@ export async function POST(request: NextRequest) {
           rewardProductName: rewardEvaluation.rewardProductName || null,
           rewardProductPoints: rewardEvaluation.rewardProductPoints,
           redemptionStatus: pointsRedeemed > 0 ? "committed" : "none",
+          buyerCustomerUid: customerIdentity?.uid || null,
           pointsToEarn,
-          earnStatus: pointsToEarn > 0 ? "pending" : "not_eligible",
+          customerPointsToEarn,
+          pointsAssignedToPresenter,
+          earnStatus: rewardEarnStatus,
+          earnRecipientType,
+          earnRecipientUid: earnRecipientUid || null,
+          earnRecipientName: earnRecipientName || null,
+          earnRecipientSource:
+            earnRecipientType === "event_presenter"
+              ? "event_assignment"
+              : earnRecipientType === "customer"
+                ? "customer_order"
+                : "none",
+          eventRewardAssignmentSnapshot:
+            clean.source === "event"
+              ? {
+                  schemaVersion: 1,
+                  mode: eventRewardRecipientMode,
+                  recipientUid:
+                    eventRewardRecipientMode === "event_presenter"
+                      ? eventRewardRecipientUid || null
+                      : null,
+                  recipientName:
+                    eventRewardRecipientMode === "event_presenter"
+                      ? eventRewardRecipientName || null
+                      : null,
+                }
+              : null,
           merchandisePaidMinor,
           creditedAt: null,
           refundedAt: null,
@@ -2176,9 +2279,18 @@ export async function POST(request: NextRequest) {
           offerDiscountMinor,
           rewardsDiscountMinor,
           pointsRedeemed,
-          pointsToEarn,
+          pointsToEarn: customerPointsToEarn,
+          eventPointsAssigned: customerVisiblePresenterPoints,
           rewardMode: rewardEvaluation.mode,
-          rewardStatus: pointsToEarn > 0 ? "pending" : "not_eligible",
+          rewardStatus:
+            customerPointsToEarn > 0 ? rewardEarnStatus : "not_eligible",
+          eventRewardStatus:
+            customerVisiblePresenterPoints > 0 ? rewardEarnStatus : "not_eligible",
+          rewardRedemptionStatus:
+            pointsRedeemed > 0 ? "committed" : "none",
+          rewardRecipientType: earnRecipientType,
+          rewardRecipientUid: earnRecipientUid || null,
+          rewardRecipientName: earnRecipientName || null,
           totalItems: clean.totalItems,
           deliveryMode: clean.delivery.mode,
           deliveryDate: clean.delivery.date || null,
@@ -2205,6 +2317,10 @@ export async function POST(request: NextRequest) {
         rewardsDiscountMinor,
         pointsRedeemed,
         pointsToEarn,
+        customerPointsToEarn,
+        pointsAssignedToPresenter,
+        rewardRecipientType: earnRecipientType,
+        rewardRecipientName: earnRecipientName || null,
         rewardMode: rewardEvaluation.mode,
         orderStatus: initialOrderStatus,
         customerOrderRefId: customerOrderRef?.id || null,
@@ -2230,7 +2346,10 @@ export async function POST(request: NextRequest) {
         customerRegistered: Boolean(customerIdentity),
         rewardsDiscountMinor,
         pointsRedeemed,
-        pointsToEarn,
+        pointsToEarn: customerPointsToEarn,
+        pointsAssignedToPresenter: customerVisiblePresenterPoints,
+        rewardRecipientType: earnRecipientType,
+        rewardRecipientName: earnRecipientName,
         rewardMode: rewardEvaluation.mode,
         replayed: false,
       });

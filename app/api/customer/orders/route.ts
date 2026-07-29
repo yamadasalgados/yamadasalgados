@@ -102,8 +102,17 @@ function serializeSummary(
     readinessReasonCodes: stringList(data.readinessReasonCodes),
     pointsRedeemed: nonNegativeInteger(data.pointsRedeemed),
     pointsToEarn: nonNegativeInteger(data.pointsToEarn),
+    eventPointsAssigned: nonNegativeInteger(data.eventPointsAssigned),
+    rewardRecipientType:
+      cleanString(data.rewardRecipientType, 40) === "event_presenter"
+        ? "event_presenter"
+        : cleanString(data.rewardRecipientType, 40) === "customer"
+          ? "customer"
+          : "none",
+    rewardRecipientName: cleanString(data.rewardRecipientName, 160),
     rewardMode: cleanString(data.rewardMode, 40) || "none",
     rewardStatus: cleanString(data.rewardStatus, 40) || "not_eligible",
+    eventRewardStatus: cleanString(data.eventRewardStatus, 40) || "not_eligible",
     createdAt: timestampIso(data.createdAt),
     updatedAt: timestampIso(data.updatedAt ?? data.createdAt),
     storeHref: sellerId ? `/store/${encodeURIComponent(sellerId)}` : "",

@@ -64,6 +64,10 @@ const COPY = {
     pointsUsed: "Pontos utilizados",
     pointsPending: "Pontos após a entrega",
     pointsCredited: "Pontos creditados",
+    eventPointsPending: "Pontos destinados ao apresentador após a entrega",
+    eventPointsCredited: "Pontos creditados ao apresentador",
+    eventPointsVoided: "Pontos do apresentador não concedidos",
+    eventPresenter: "Conta que recebe os pontos do evento",
     pointsVoided: "Pontos não concedidos",
     pointsRefunded: "Pontos devolvidos",
     rewardProduct: "Produto trocado",
@@ -120,6 +124,10 @@ const COPY = {
     pointsUsed: "Points used",
     pointsPending: "Points after delivery",
     pointsCredited: "Points credited",
+    eventPointsPending: "Points for the presenter after delivery",
+    eventPointsCredited: "Points credited to the presenter",
+    eventPointsVoided: "Presenter points not awarded",
+    eventPresenter: "Event points recipient",
     pointsVoided: "Points not awarded",
     pointsRefunded: "Points refunded",
     rewardProduct: "Redeemed product",
@@ -176,6 +184,10 @@ const COPY = {
     pointsUsed: "使用ポイント",
     pointsPending: "受け渡し後の獲得ポイント",
     pointsCredited: "獲得済みポイント",
+    eventPointsPending: "受け渡し後に担当者へ付与されるポイント",
+    eventPointsCredited: "担当者へ付与済みポイント",
+    eventPointsVoided: "担当者ポイントは付与されません",
+    eventPresenter: "イベントポイントの受取人",
     pointsVoided: "付与対象外ポイント",
     pointsRefunded: "返還ポイント",
     rewardProduct: "交換商品",
@@ -462,7 +474,7 @@ export default function CustomerOrderDetailClient({ referenceId }: Props) {
               </div>
             </section>
 
-            {(order.pointsRedeemed > 0 || order.pointsToEarn > 0) && (
+            {(order.pointsRedeemed > 0 || order.pointsToEarn > 0 || order.eventPointsAssigned > 0) && (
               <section className="rounded-3xl border border-violet-200 bg-violet-50 p-5 shadow-sm dark:border-violet-900/60 dark:bg-violet-950/25">
                 <h2 className="flex items-center gap-2 text-lg font-black text-violet-950 dark:text-violet-100"><Gift size={20} /> {language === "ja" ? "ポイント" : language === "en" ? "Rewards" : "Recompensas"}</h2>
                 <div className="mt-4 space-y-2 text-sm font-bold text-violet-800 dark:text-violet-200">
@@ -479,6 +491,26 @@ export default function CustomerOrderDetailClient({ referenceId }: Props) {
                       </span>
                       <span>{order.pointsToEarn}</span>
                     </div>
+                  )}
+                  {order.eventPointsAssigned > 0 && (
+                    <>
+                      <div className="flex justify-between gap-4">
+                        <span>
+                          {order.eventRewardStatus === "credited"
+                            ? text.eventPointsCredited
+                            : order.eventRewardStatus === "void"
+                              ? text.eventPointsVoided
+                              : text.eventPointsPending}
+                        </span>
+                        <span>{order.eventPointsAssigned}</span>
+                      </div>
+                      {order.rewardRecipientName && (
+                        <div className="flex justify-between gap-4 text-xs">
+                          <span>{text.eventPresenter}</span>
+                          <span className="text-right">{order.rewardRecipientName}</span>
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
               </section>

@@ -18,11 +18,14 @@ const COPY = {
     login: "Entre para consultar seus pontos",
     balance: "Saldo disponível",
     earned: "Total ganho",
+    gifted: "Recebido de presente",
     redeemed: "Total usado",
     refunded: "Total devolvido",
     history: "Histórico",
     empty: "Ainda não há movimentações nesta carteira.",
     earn: "Pontos ganhos",
+    eventEarn: "Pontos de vendas do evento",
+    gift: "Pontos recebidos de presente",
     redeem: "Pontos usados",
     refund: "Estorno de pontos",
     adjustment: "Ajuste",
@@ -41,11 +44,14 @@ const COPY = {
     login: "Sign in to view your points",
     balance: "Available balance",
     earned: "Total earned",
+    gifted: "Gifted points",
     redeemed: "Total used",
     refunded: "Total refunded",
     history: "History",
     empty: "There are no wallet transactions yet.",
     earn: "Points earned",
+    eventEarn: "Event sales points",
+    gift: "Gifted points",
     redeem: "Points used",
     refund: "Points refund",
     adjustment: "Adjustment",
@@ -64,11 +70,14 @@ const COPY = {
     login: "ログインしてポイントを確認",
     balance: "利用可能ポイント",
     earned: "累計獲得",
+    gifted: "プレゼントポイント",
     redeemed: "累計使用",
     refunded: "返還ポイント",
     history: "履歴",
     empty: "ポイント履歴はまだありません。",
     earn: "ポイント獲得",
+    eventEarn: "イベント販売ポイント",
+    gift: "プレゼントポイント",
     redeem: "ポイント使用",
     refund: "ポイント返還",
     adjustment: "調整",
@@ -130,10 +139,11 @@ function Inner() {
 
         <section className="rounded-3xl border border-violet-200 bg-gradient-to-br from-violet-600 to-fuchsia-600 p-6 text-white shadow-lg sm:p-8">
           <div className="flex items-start gap-3"><Sparkles size={26} /><div><p className="text-xs font-black uppercase tracking-widest text-violet-100">{wallet?.storeName || text.title}</p><h1 className="mt-1 text-3xl font-black">{text.title}</h1><p className="mt-2 text-sm font-medium text-violet-100">{text.subtitle}</p></div></div>
-          <div className="mt-7 grid gap-3 sm:grid-cols-4">
+          <div className="mt-7 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
             {[
               { label: text.balance, value: wallet?.pointsBalance ?? 0, icon: Gift },
               { label: text.earned, value: wallet?.lifetimeEarned ?? 0, icon: Sparkles },
+              { label: text.gifted, value: wallet?.lifetimeGifted ?? 0, icon: Gift },
               { label: text.redeemed, value: wallet?.lifetimeRedeemed ?? 0, icon: TicketPercent },
               { label: text.refunded, value: wallet?.lifetimeRefunded ?? 0, icon: RefreshCw },
             ].map(({ label, value, icon: Icon }) => (
@@ -158,8 +168,23 @@ function Inner() {
           ) : (
             <div className="mt-5 divide-y divide-neutral-100 dark:divide-neutral-800">
               {wallet.transactions.map((transaction) => {
-                const positive = transaction.type === "earn" || transaction.type === "refund";
-                const label = transaction.type === "earn" ? text.earn : transaction.type === "redeem" ? text.redeem : transaction.type === "refund" ? text.refund : text.adjustment;
+                const positive =
+                  transaction.type === "earn" ||
+                  transaction.type === "event_earn" ||
+                  transaction.type === "gift" ||
+                  transaction.type === "refund";
+                const label =
+                  transaction.type === "earn"
+                    ? text.earn
+                    : transaction.type === "event_earn"
+                      ? text.eventEarn
+                      : transaction.type === "gift"
+                        ? text.gift
+                        : transaction.type === "redeem"
+                          ? text.redeem
+                          : transaction.type === "refund"
+                            ? text.refund
+                            : text.adjustment;
                 return (
                   <div key={transaction.id} className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center sm:justify-between">
                     <div><p className="text-sm font-black">{transaction.label || label}</p><p className="mt-1 text-xs font-medium text-neutral-500">{transaction.orderId ? `${text.order} #${transaction.orderId}` : label} · {transaction.createdAt ? new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(new Date(transaction.createdAt)) : ""}</p></div>

@@ -95,16 +95,26 @@ export async function GET(request: NextRequest) {
 
     const transactions = transactionsSnapshot.docs.map((document) => {
       const data = document.data() ?? {};
-      const type = data.type === "redeem" || data.type === "refund" || data.type === "adjustment"
-        ? data.type
-        : "earn";
+      const type =
+        data.type === "redeem" ||
+        data.type === "refund" ||
+        data.type === "adjustment" ||
+        data.type === "gift" ||
+        data.type === "event_earn"
+          ? data.type
+          : "earn";
       return {
         id: document.id,
         type,
         points: nonNegativeInteger(data.points),
         balanceAfter: nonNegativeInteger(data.balanceAfter),
         orderId: cleanString(data.orderId, 160),
-        orderSource: data.orderSource === "event" ? "event" : "store",
+        orderSource:
+          data.orderSource === "event"
+            ? "event"
+            : data.orderSource === "store"
+              ? "store"
+              : "",
         eventId: cleanString(data.eventId, 160),
         label: cleanString(data.label, 240),
         createdAt: timestampIso(data.createdAt),
@@ -123,6 +133,7 @@ export async function GET(request: NextRequest) {
           currency,
           pointsBalance: nonNegativeInteger(wallet.pointsBalance),
           lifetimeEarned: nonNegativeInteger(wallet.lifetimeEarned),
+          lifetimeGifted: nonNegativeInteger(wallet.lifetimeGifted),
           lifetimeRedeemed: nonNegativeInteger(wallet.lifetimeRedeemed),
           lifetimeRefunded: nonNegativeInteger(wallet.lifetimeRefunded),
           transactions,

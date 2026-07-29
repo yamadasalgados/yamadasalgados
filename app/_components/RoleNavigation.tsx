@@ -516,6 +516,7 @@ export function SellerNav({ displayName = "", sellerId = "", logoUrl = "", prima
     { href: "/seller/events", label: copy.events, icon: CalendarDays, badge: orderBadges.event },
   ];
   const extra: NavItem[] = [
+    { href: "/seller/rewards", label: copy.rewards, icon: Sparkles },
     { href: "/seller/offers", label: copy.offers, icon: Gift },
     { href: "/seller/reports", label: copy.reports, icon: ChartNoAxesCombined },
     { href: "/seller/settings", label: copy.settings, icon: Settings },

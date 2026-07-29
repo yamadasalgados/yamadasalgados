@@ -84,6 +84,9 @@ export type CreatePublicOrderResult = {
   rewardsDiscountMinor: number;
   pointsRedeemed: number;
   pointsToEarn: number;
+  pointsAssignedToPresenter: number;
+  rewardRecipientType: "customer" | "event_presenter" | "none";
+  rewardRecipientName: string | null;
   rewardMode: PublicOrderRewardMode;
   replayed: boolean;
 };

@@ -322,7 +322,18 @@ function rewardTransitionRefs(params: {
   requestedStatus: FulfillmentStatus;
 }) {
   const rewards = record(params.orderData.rewards);
-  const customerUid = cleanString(params.orderData.customerUid, 160);
+  const buyerCustomerUid = cleanString(
+    rewards.buyerCustomerUid ?? params.orderData.customerUid,
+    160,
+  );
+  const earnRecipientUid = cleanString(
+    rewards.earnRecipientUid ?? buyerCustomerUid,
+    160,
+  );
+  const customerUid =
+    params.requestedStatus === "delivered"
+      ? earnRecipientUid
+      : buyerCustomerUid;
   const rewardSellerId = cleanString(rewards.sellerId ?? params.sellerId, 160);
   if (
     !customerUid ||
@@ -402,7 +413,7 @@ function applyRewardTransition(params: {
       transaction.set(
         context.walletRef,
         {
-          schemaVersion: 1,
+          schemaVersion: 2,
           customerUid: context.customerUid,
           sellerId,
           storeName,
@@ -417,25 +428,41 @@ function applyRewardTransition(params: {
         },
         { merge: true },
       );
+      const earnRecipientType =
+        cleanString(rewards.earnRecipientType, 40) === "event_presenter"
+          ? "event_presenter"
+          : "customer";
       transaction.create(context.movementRef, {
-        schemaVersion: 1,
-        type: "earn",
+        schemaVersion: 2,
+        type: earnRecipientType === "event_presenter" ? "event_earn" : "earn",
         points: pointsToEarn,
         balanceBefore: currentBalance,
         balanceAfter: nextBalance,
         sellerId,
         customerUid: context.customerUid,
+        sourceCustomerUid: cleanString(
+          rewards.buyerCustomerUid ?? orderData.customerUid,
+          160,
+        ) || null,
+        rewardRecipientType: earnRecipientType,
+        rewardRecipientName: cleanString(rewards.earnRecipientName, 120) || null,
         orderId,
         orderPath,
         orderSource,
         eventId: eventId || null,
-        label: "Pontos da compra entregue",
+        label:
+          earnRecipientType === "event_presenter"
+            ? "Pontos das vendas do evento"
+            : "Pontos da compra entregue",
         createdAt: now,
       });
     }
 
     rewards.earnStatus = "credited";
     rewards.creditedAt = now;
+    rewards.creditedToUid = context.customerUid;
+    rewards.creditedRecipientType =
+      cleanString(rewards.earnRecipientType, 40) || "customer";
     return rewards;
   }
 
@@ -450,7 +477,7 @@ function applyRewardTransition(params: {
       transaction.set(
         context.walletRef,
         {
-          schemaVersion: 1,
+          schemaVersion: 2,
           customerUid: context.customerUid,
           sellerId,
           storeName,
@@ -512,6 +539,17 @@ function customerOrderIndexPayload(params: {
   rewards?: Record<string, unknown>;
   now: admin.firestore.Timestamp;
 }) {
+  const buyerCustomerUid = cleanString(params.rewards?.buyerCustomerUid, 160);
+  const earnRecipientUid = cleanString(params.rewards?.earnRecipientUid, 160);
+  const eventPointsAssigned = nonNegativeInteger(
+    params.rewards?.pointsAssignedToPresenter,
+  );
+  const customerVisibleEventPoints =
+    eventPointsAssigned > 0 &&
+    (!buyerCustomerUid || !earnRecipientUid || buyerCustomerUid !== earnRecipientUid)
+      ? eventPointsAssigned
+      : 0;
+
   return {
     status: params.status,
     fulfillmentStatus: params.status,
@@ -522,9 +560,27 @@ function customerOrderIndexPayload(params: {
     ...(params.rewards
       ? {
           pointsRedeemed: nonNegativeInteger(params.rewards.pointsRedeemed),
-          pointsToEarn: nonNegativeInteger(params.rewards.pointsToEarn),
+          pointsToEarn: nonNegativeInteger(
+            params.rewards.customerPointsToEarn ?? params.rewards.pointsToEarn,
+          ),
+          eventPointsAssigned: customerVisibleEventPoints,
           rewardMode: cleanString(params.rewards.mode, 40) || "none",
-          rewardStatus: cleanString(params.rewards.earnStatus, 40) || "not_eligible",
+          rewardStatus:
+            nonNegativeInteger(
+              params.rewards.customerPointsToEarn ?? params.rewards.pointsToEarn,
+            ) > 0
+              ? cleanString(params.rewards.earnStatus, 40) || "not_eligible"
+              : "not_eligible",
+          eventRewardStatus:
+            customerVisibleEventPoints > 0
+              ? cleanString(params.rewards.earnStatus, 40) || "not_eligible"
+              : "not_eligible",
+          rewardRecipientType:
+            cleanString(params.rewards.earnRecipientType, 40) || "customer",
+          rewardRecipientUid:
+            cleanString(params.rewards.earnRecipientUid, 160) || null,
+          rewardRecipientName:
+            cleanString(params.rewards.earnRecipientName, 120) || null,
           rewardRedemptionStatus:
             cleanString(params.rewards.redemptionStatus, 40) || "none",
         }

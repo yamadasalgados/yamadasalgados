@@ -2,11 +2,11 @@ import { auth } from "@/app/lib/firebase";
 
 export type CustomerRewardTransaction = {
   id: string;
-  type: "earn" | "redeem" | "refund" | "adjustment";
+  type: "earn" | "event_earn" | "gift" | "redeem" | "refund" | "adjustment";
   points: number;
   balanceAfter: number;
   orderId: string;
-  orderSource: "store" | "event";
+  orderSource: "store" | "event" | "";
   eventId: string;
   label: string;
   createdAt: string;
@@ -18,6 +18,7 @@ export type CustomerRewardWallet = {
   currency: "JPY" | "BRL" | "USD";
   pointsBalance: number;
   lifetimeEarned: number;
+  lifetimeGifted: number;
   lifetimeRedeemed: number;
   lifetimeRefunded: number;
   transactions: CustomerRewardTransaction[];

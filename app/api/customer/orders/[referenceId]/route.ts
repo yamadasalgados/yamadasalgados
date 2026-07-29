@@ -233,6 +233,36 @@ export async function GET(
         : "";
 
     const rewards = record(order.rewards);
+    const rawPointsToEarn = nonNegativeInteger(rewards.pointsToEarn);
+    const rewardRecipientUid = cleanString(rewards.earnRecipientUid, 160);
+    const rewardRecipientType =
+      cleanString(rewards.earnRecipientType, 40) === "event_presenter"
+        ? "event_presenter"
+        : cleanString(rewards.earnRecipientType, 40) === "customer"
+          ? "customer"
+          : rewardRecipientUid
+            ? rewardRecipientUid === decoded.uid
+              ? "customer"
+              : "event_presenter"
+            : "customer";
+    const customerPointsToEarn =
+      rewards.customerPointsToEarn !== undefined
+        ? nonNegativeInteger(rewards.customerPointsToEarn)
+        : rewardRecipientUid && rewardRecipientUid !== decoded.uid
+          ? 0
+          : rawPointsToEarn;
+    const rawEventPointsAssigned =
+      rewards.pointsAssignedToPresenter !== undefined
+        ? nonNegativeInteger(rewards.pointsAssignedToPresenter)
+        : rewardRecipientType === "event_presenter"
+          ? rawPointsToEarn
+          : 0;
+    const eventPointsAssigned =
+      rewardRecipientUid && rewardRecipientUid === decoded.uid
+        ? 0
+        : rawEventPointsAssigned;
+    const rewardRecipientName = cleanString(rewards.earnRecipientName, 160);
+    const rewardEarnStatus = cleanString(rewards.earnStatus, 40) || "not_eligible";
     const fulfillment = record(order.fulfillment);
     const deliveryRegion = record(order.deliveryRegion);
     const summaryUpdate = {
@@ -247,9 +277,13 @@ export async function GET(
       deliveryTimeSlot: cleanString(order.deliveryTimeSlot, 80) || null,
       readinessReasonCodes: stringList(readiness.reasonCodes),
       pointsRedeemed: nonNegativeInteger(rewards.pointsRedeemed),
-      pointsToEarn: nonNegativeInteger(rewards.pointsToEarn),
+      pointsToEarn: customerPointsToEarn,
+      eventPointsAssigned,
+      rewardRecipientType,
+      rewardRecipientName: rewardRecipientName || null,
       rewardMode: cleanString(rewards.mode, 40) || "none",
-      rewardStatus: cleanString(rewards.earnStatus, 40) || "not_eligible",
+      rewardStatus: customerPointsToEarn > 0 ? rewardEarnStatus : "not_eligible",
+      eventRewardStatus: eventPointsAssigned > 0 ? rewardEarnStatus : "not_eligible",
       rewardRedemptionStatus: cleanString(rewards.redemptionStatus, 40) || "none",
       updatedAt: order.updatedAt ?? admin.firestore.Timestamp.now(),
     };
@@ -295,9 +329,13 @@ export async function GET(
           offerDiscountMinor: nonNegativeInteger(order.offerDiscountMinor),
           rewardsDiscountMinor: nonNegativeInteger(order.rewardsDiscountMinor ?? rewards.discountMinor),
           pointsRedeemed: nonNegativeInteger(rewards.pointsRedeemed),
-          pointsToEarn: nonNegativeInteger(rewards.pointsToEarn),
+          pointsToEarn: customerPointsToEarn,
+          eventPointsAssigned,
+          rewardRecipientType,
+          rewardRecipientName,
           rewardMode: cleanString(rewards.mode, 40) || "none",
-          rewardStatus: cleanString(rewards.earnStatus, 40) || "not_eligible",
+          rewardStatus: customerPointsToEarn > 0 ? rewardEarnStatus : "not_eligible",
+          eventRewardStatus: eventPointsAssigned > 0 ? rewardEarnStatus : "not_eligible",
           rewardRedemptionStatus: cleanString(rewards.redemptionStatus, 40) || "none",
           rewardProductName: cleanString(rewards.rewardProductName, 240),
           shippingFeeMinor: nonNegativeInteger(order.shippingFeeMinor),

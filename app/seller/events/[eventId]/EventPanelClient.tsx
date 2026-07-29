@@ -25,7 +25,7 @@ import {
   formatMoneyMinor,
 } from "@/app/lib/money";
 import { normalizeProductInventory } from "@/app/lib/inventory-schema";
-import { Gift } from "lucide-react";
+import { Gift, Loader2, Search, Sparkles, UserRound } from "lucide-react";
 import {
   normalizeOffer,
   offerIsCurrentlyActive,
@@ -49,12 +49,17 @@ import PageHeader from "@/app/_components/PageHeader";
 import BackLink from "@/app/_components/BackLink";
 import MetricStrip from "@/app/_components/MetricStrip";
 import FeedbackBanner from "@/app/_components/FeedbackBanner";
+import {
+  lookupSellerRewardAccount,
+  type SellerRewardAccount,
+} from "@/app/lib/seller-rewards-client";
 
 // --- 📝 Interfaces de Tipagem Estrita ---
 
 type EventStatus = "active" | "closed" | "cancelled";
 type EventProductMode = "normal" | "made_to_order";
 type ProductSelectionMode = "excluded" | EventProductMode;
+type EventRewardRecipientMode = "customer" | "event_presenter";
 
 type UserDoc = {
   role?: "seller" | "admin";
@@ -93,6 +98,16 @@ type EventDoc = {
   createdAt?: Timestamp;
   updatedAt?: Timestamp;
   closedAt?: Timestamp;
+  rewardAssignment?: {
+    schemaVersion?: number;
+    mode?: EventRewardRecipientMode | string;
+    recipientUid?: string | null;
+    recipientName?: string | null;
+    recipientEmail?: string | null;
+    recipientPhone?: string | null;
+    assignedAt?: Timestamp | null;
+    assignedBy?: string | null;
+  };
 };
 
 type OrderDoc = {
@@ -110,6 +125,11 @@ type OrderDoc = {
   totalAmount?: number;
   createdAt?: Timestamp;
   deliveredAt?: Timestamp;
+  pointsToEarn?: number;
+  rewardStatus?: string;
+  rewardRecipientType?: string;
+  rewardRecipientUid?: string;
+  rewardRecipientName?: string;
 };
 
 type MessageSummary = {
@@ -331,6 +351,11 @@ const [messageSummaries, setMessageSummaries] = useState<Record<string, MessageS
   const [pickupNote, setPickupNote] = useState("");
   const [messengerId, setMessengerId] = useState("");
   const [deliveryDatesText, setDeliveryDatesText] = useState("");
+  const [rewardRecipientMode, setRewardRecipientMode] = useState<EventRewardRecipientMode>("customer");
+  const [rewardRecipient, setRewardRecipient] = useState<SellerRewardAccount | null>(null);
+  const [rewardRecipientIdentifier, setRewardRecipientIdentifier] = useState("");
+  const [rewardLookupLoading, setRewardLookupLoading] = useState(false);
+  const [rewardLookupError, setRewardLookupError] = useState("");
 
   const [productIds, setProductIds] = useState<string[]>([]);
   const [productAvailabilityModes, setProductAvailabilityModes] = useState<Record<string, EventProductMode>>({});
@@ -470,6 +495,30 @@ const [messageSummaries, setMessageSummaries] = useState<Record<string, MessageS
         setPickupNote(String(data.pickupNote || ""));
         setMessengerId(String(data.messengerId || ""));
         setDeliveryDatesText(Array.isArray(data.deliveryDates) ? data.deliveryDates.join("\n") : "");
+        const storedRewardAssignment: NonNullable<EventDoc["rewardAssignment"]> =
+          data.rewardAssignment && typeof data.rewardAssignment === "object"
+            ? data.rewardAssignment
+            : {};
+        const storedRewardMode = storedRewardAssignment.mode === "event_presenter"
+          ? "event_presenter"
+          : "customer";
+        const storedRewardUid = String(storedRewardAssignment.recipientUid || "").trim();
+        setRewardRecipientMode(storedRewardMode);
+        setRewardLookupError("");
+        if (storedRewardMode === "event_presenter" && storedRewardUid) {
+          const storedAccount: SellerRewardAccount = {
+            uid: storedRewardUid,
+            name: String(storedRewardAssignment.recipientName || "").trim(),
+            email: String(storedRewardAssignment.recipientEmail || "").trim(),
+            phone: String(storedRewardAssignment.recipientPhone || "").trim(),
+            pointsBalance: 0,
+          };
+          setRewardRecipient(storedAccount);
+          setRewardRecipientIdentifier(storedAccount.email || storedAccount.phone || storedAccount.uid);
+        } else {
+          setRewardRecipient(null);
+          setRewardRecipientIdentifier("");
+        }
 
         const eventItemsSnapshot = await getDocs(collection(resolved.ref, "items"));
         const storedModes = data.productAvailabilityModes && typeof data.productAvailabilityModes === "object"
@@ -565,6 +614,9 @@ const [messageSummaries, setMessageSummaries] = useState<Record<string, MessageS
       (snap) => {
         const list = snap.docs.map((d) => {
           const data = d.data();
+          const rewards = data.rewards && typeof data.rewards === "object" && !Array.isArray(data.rewards)
+            ? data.rewards as Record<string, unknown>
+            : {};
           return {
             id: d.id,
             customerName: data.customerName || "",
@@ -580,6 +632,11 @@ const [messageSummaries, setMessageSummaries] = useState<Record<string, MessageS
             locationLink: data.locationLink || "",
             createdAt: data.createdAt,
             deliveredAt: data.deliveredAt,
+            pointsToEarn: Number(rewards.pointsToEarn || 0),
+            rewardStatus: String(rewards.earnStatus || "not_eligible"),
+            rewardRecipientType: String(rewards.earnRecipientType || "customer"),
+            rewardRecipientUid: String(rewards.earnRecipientUid || ""),
+            rewardRecipientName: String(rewards.earnRecipientName || ""),
           };
         });
         setOrders(list);
@@ -610,6 +667,19 @@ const deliveredCount = useMemo(() => {
 
 const ordersRevenueSum = useMemo(() => {
   return validOrders.reduce((acc, o) => acc + (o.totalAmount || 0), 0);
+}, [validOrders]);
+const eventRewardSummary = useMemo(() => {
+  return validOrders.reduce(
+    (summary, order) => {
+      const points = Math.max(0, Math.floor(Number(order.pointsToEarn) || 0));
+      if (points <= 0 || order.rewardRecipientType !== "event_presenter") return summary;
+      summary.total += points;
+      if (order.rewardStatus === "credited") summary.credited += points;
+      else if (order.rewardStatus === "pending") summary.pending += points;
+      return summary;
+    },
+    { total: 0, credited: 0, pending: 0 },
+  );
 }, [validOrders]);
   const revenueOfficial = useMemo(() => Number(event?.revenueYen || 0), [event?.revenueYen]);
   const isActive = status === "active";
@@ -747,6 +817,33 @@ return validOrders.filter((o) => o.deliveryDate === filterDate);
     setSuccess(t("eventPanel.msg.sellerDefaultsApplied"));
   }, [profile, t]);
 
+  const handleRewardRecipientLookup = useCallback(async () => {
+    if (!sellerUid || !rewardRecipientIdentifier.trim()) return;
+    setRewardLookupLoading(true);
+    setRewardLookupError("");
+    try {
+      const account = await lookupSellerRewardAccount({
+        sellerId: sellerUid,
+        identifier: rewardRecipientIdentifier.trim(),
+      });
+      setRewardRecipient(account);
+      setRewardRecipientIdentifier(account.email || account.phone || account.uid);
+    } catch (currentError) {
+      setRewardRecipient(null);
+      setRewardLookupError(
+        currentError instanceof Error
+          ? currentError.message
+          : lang === "ja"
+            ? "アカウントを確認できませんでした。"
+            : lang === "en"
+              ? "Could not verify the account."
+              : "Não foi possível confirmar a conta.",
+      );
+    } finally {
+      setRewardLookupLoading(false);
+    }
+  }, [lang, rewardRecipientIdentifier, sellerUid]);
+
   const handleSaveConfig = useCallback(async () => {
     setError(null);
     setSuccess(null);
@@ -754,6 +851,16 @@ return validOrders.filter((o) => o.deliveryDate === filterDate);
 
     if (!title.trim()) {
       setError(t("eventPanel.err.requiredTitle"));
+      return;
+    }
+    if (rewardRecipientMode === "event_presenter" && !rewardRecipient?.uid) {
+      setError(
+        lang === "ja"
+          ? "イベントポイントを受け取るアカウントを確認してください。"
+          : lang === "en"
+            ? "Verify the account that will receive the event points."
+            : "Confirme a conta que receberá os pontos do evento.",
+      );
       return;
     }
 
@@ -842,6 +949,20 @@ return validOrders.filter((o) => o.deliveryDate === filterDate);
         pickupLink: pickupLink.trim(),
         pickupNote: pickupNote.trim(),
         messengerId: messengerId.trim(),
+        rewardAssignment: {
+          schemaVersion: 1,
+          mode: rewardRecipientMode,
+          recipientUid:
+            rewardRecipientMode === "event_presenter"
+              ? rewardRecipient?.uid || null
+              : null,
+          recipientName:
+            rewardRecipientMode === "event_presenter"
+              ? rewardRecipient?.name || null
+              : null,
+          assignedAt: serverTimestamp(),
+          assignedBy: authUser?.uid ?? sellerUid,
+        },
         deliveryDates: newDeliveryDates,
         deliveryDateLabel: newDeliveryDates.join(" • "),
         productIds: cleanedProductIds,
@@ -863,7 +984,7 @@ return validOrders.filter((o) => o.deliveryDate === filterDate);
     } finally {
       setSaving(false);
     }
-  }, [eventRef, title, region, whatsapp, status, pickupLink, pickupNote, messengerId, deliveryDatesText, productIds, productAvailabilityModes, productById, requiredProductIds, featuredProductIds, allProducts, allOffers, offerIds, authUser?.uid, sellerUid, t]);
+  }, [eventRef, title, region, whatsapp, status, pickupLink, pickupNote, messengerId, rewardRecipientMode, rewardRecipient, deliveryDatesText, productIds, productAvailabilityModes, productById, requiredProductIds, featuredProductIds, allProducts, allOffers, offerIds, authUser?.uid, sellerUid, t, lang]);
 
       const deliveryOrders = useMemo(() => {
   return orders.filter((o) => {
@@ -1307,6 +1428,115 @@ const markOrderMessagesAsRead = useCallback(
             <Field label={t("eventPanel.config.field.pickupLink")}><input className="w-full border border-neutral-200 dark:border-neutral-800 rounded-xl px-3 py-2.5 text-sm bg-white dark:bg-neutral-900 text-neutral-900 dark:text-white focus:outline-none" value={pickupLink} onChange={(e) => setPickupLink(e.target.value)} /></Field>
             <div className="sm:col-span-2"><Field label={t("eventPanel.config.field.pickupNote")}><input className="w-full border border-neutral-200 dark:border-neutral-800 rounded-xl px-3 py-2.5 text-sm bg-white dark:bg-neutral-900 text-neutral-900 dark:text-white focus:outline-none" value={pickupNote} onChange={(e) => setPickupNote(e.target.value)} /></Field></div>
             <div className="sm:col-span-2"><Field label={t("eventPanel.config.field.deliveryDates")}><textarea className="w-full border border-neutral-200 dark:border-neutral-800 rounded-xl px-3 py-2.5 text-sm min-h-[100px] bg-white dark:bg-neutral-900 text-neutral-900 dark:text-white focus:outline-none resize-none" value={deliveryDatesText} onChange={(e) => setDeliveryDatesText(e.target.value)} /></Field></div>
+          </div>
+
+          <div className="rounded-3xl border border-violet-200 bg-violet-50/50 p-6 dark:border-violet-900/50 dark:bg-violet-950/10">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+              <div className="flex items-start gap-3">
+                <span className="rounded-2xl bg-violet-600 p-3 text-white"><Sparkles size={22} /></span>
+                <div>
+                  <h3 className="text-sm font-black text-violet-950 dark:text-violet-100">
+                    {lang === "ja" ? "イベントポイントの受取人" : lang === "en" ? "Event points recipient" : "Destino dos pontos do evento"}
+                  </h3>
+                  <p className="mt-1 max-w-2xl text-xs font-bold leading-relaxed text-violet-800/70 dark:text-violet-200/70">
+                    {lang === "ja"
+                      ? "注文ごとの獲得ポイントを購入者に付与するか、イベントを紹介した販売者・プレゼンターのアカウントへまとめて付与するか選択します。"
+                      : lang === "en"
+                        ? "Choose whether purchase points go to each customer or are assigned to the account of the salesperson or presenter promoting this event."
+                        : "Escolha se os pontos das compras irão para cada cliente ou para a conta do vendedor/apresentador que está divulgando este evento."}
+                  </p>
+                </div>
+              </div>
+              <Link href="/seller/rewards" className="inline-flex min-h-10 items-center justify-center rounded-xl border border-violet-300 bg-white px-4 py-2 text-xs font-black text-violet-700 transition hover:bg-violet-50 dark:border-violet-800 dark:bg-neutral-900 dark:text-violet-300">
+                {lang === "ja" ? "ポイント管理" : lang === "en" ? "Manage points" : "Gerenciar pontos"}
+              </Link>
+            </div>
+
+            <div className="mt-5 grid gap-3 sm:grid-cols-2">
+              <label className={`cursor-pointer rounded-2xl border p-4 transition ${rewardRecipientMode === "customer" ? "border-violet-500 bg-white ring-2 ring-violet-500/15 dark:bg-neutral-900" : "border-violet-200 bg-white/60 dark:border-violet-900/50 dark:bg-neutral-900/50"}`}>
+                <div className="flex items-start gap-3">
+                  <input type="radio" name="eventRewardRecipient" checked={rewardRecipientMode === "customer"} onChange={() => setRewardRecipientMode("customer")} className="mt-1 accent-violet-600" />
+                  <div>
+                    <p className="text-sm font-black">{lang === "ja" ? "各購入者" : lang === "en" ? "Each customer" : "Cliente de cada pedido"}</p>
+                    <p className="mt-1 text-xs font-bold text-neutral-500 dark:text-neutral-400">
+                      {lang === "ja" ? "通常どおり、ログインした購入者がポイントを獲得します。" : lang === "en" ? "Signed-in customers earn their own purchase points as usual." : "O cliente autenticado recebe os próprios pontos normalmente."}
+                    </p>
+                  </div>
+                </div>
+              </label>
+              <label className={`cursor-pointer rounded-2xl border p-4 transition ${rewardRecipientMode === "event_presenter" ? "border-violet-500 bg-white ring-2 ring-violet-500/15 dark:bg-neutral-900" : "border-violet-200 bg-white/60 dark:border-violet-900/50 dark:bg-neutral-900/50"}`}>
+                <div className="flex items-start gap-3">
+                  <input type="radio" name="eventRewardRecipient" checked={rewardRecipientMode === "event_presenter"} onChange={() => setRewardRecipientMode("event_presenter")} className="mt-1 accent-violet-600" />
+                  <div>
+                    <p className="text-sm font-black">{lang === "ja" ? "販売者・プレゼンター" : lang === "en" ? "Salesperson or presenter" : "Vendedor ou apresentador"}</p>
+                    <p className="mt-1 text-xs font-bold text-neutral-500 dark:text-neutral-400">
+                      {lang === "ja" ? "このイベントで発生したポイントを選択した1つのアカウントへ付与します。" : lang === "en" ? "All points generated by this event go to one selected account." : "Todos os pontos gerados neste evento vão para uma conta selecionada."}
+                    </p>
+                  </div>
+                </div>
+              </label>
+            </div>
+
+            {rewardRecipientMode === "event_presenter" && (
+              <div className="mt-5 rounded-2xl border border-violet-200 bg-white p-4 dark:border-violet-900/50 dark:bg-neutral-900">
+                <div className="flex flex-col gap-3 sm:flex-row">
+                  <label className="min-w-0 flex-1">
+                    <span className="mb-2 block text-xs font-black text-neutral-600 dark:text-neutral-300">
+                      {lang === "ja" ? "受取アカウントのメール・電話・UID" : lang === "en" ? "Recipient email, phone, or UID" : "E-mail, telefone ou UID do recebedor"}
+                    </span>
+                    <input
+                      value={rewardRecipientIdentifier}
+                      onChange={(inputEvent) => {
+                        setRewardRecipientIdentifier(inputEvent.target.value);
+                        setRewardRecipient(null);
+                        setRewardLookupError("");
+                      }}
+                      onKeyDown={(keyboardEvent) => {
+                        if (keyboardEvent.key === "Enter") {
+                          keyboardEvent.preventDefault();
+                          void handleRewardRecipientLookup();
+                        }
+                      }}
+                      placeholder="name@example.com"
+                      className="min-h-11 w-full rounded-xl border border-neutral-200 bg-white px-3 text-sm font-bold outline-none focus:border-violet-500 dark:border-neutral-700 dark:bg-neutral-950"
+                    />
+                  </label>
+                  <button type="button" onClick={() => void handleRewardRecipientLookup()} disabled={rewardLookupLoading || !rewardRecipientIdentifier.trim()} className="mt-auto inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 text-xs font-black text-white disabled:opacity-40">
+                    {rewardLookupLoading ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}
+                    {lang === "ja" ? "確認" : lang === "en" ? "Verify account" : "Confirmar conta"}
+                  </button>
+                </div>
+                {rewardLookupError && <p className="mt-3 rounded-xl bg-red-50 px-3 py-2 text-xs font-bold text-red-700 dark:bg-red-950/30 dark:text-red-300">{rewardLookupError}</p>}
+                {rewardRecipient && (
+                  <div className="mt-4 flex flex-col gap-3 rounded-xl bg-violet-50 p-4 dark:bg-violet-950/30 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex min-w-0 items-center gap-3">
+                      <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-violet-600 text-white"><UserRound size={21} /></span>
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-black">{rewardRecipient.name || rewardRecipient.email || rewardRecipient.uid}</p>
+                        <p className="truncate text-xs font-bold text-neutral-500 dark:text-neutral-400">{rewardRecipient.email || rewardRecipient.phone || rewardRecipient.uid}</p>
+                      </div>
+                    </div>
+                    <div className="rounded-xl bg-white px-4 py-2 text-right dark:bg-neutral-900">
+                      <p className="text-lg font-black text-violet-700 dark:text-violet-300">{rewardRecipient.pointsBalance}</p>
+                      <p className="text-[10px] font-bold text-neutral-400">{lang === "ja" ? "現在の残高" : lang === "en" ? "Current balance" : "Saldo atual"}</p>
+                    </div>
+                  </div>
+                )}
+                <p className="mt-3 text-[11px] font-bold leading-relaxed text-neutral-500 dark:text-neutral-400">
+                  {lang === "ja"
+                    ? "購入者が自分のポイントを割引に使うことはできますが、新しく発生するポイントは受取人だけに付与され、重複しません。変更後も既存注文は注文時の受取人を保持します。"
+                    : lang === "en"
+                      ? "Customers may still redeem their own balance, but newly generated points are credited only to the selected recipient and are never duplicated. Existing orders keep the recipient saved when they were placed."
+                      : "Os clientes ainda podem usar o próprio saldo como desconto, mas os novos pontos são creditados somente ao recebedor escolhido, sem duplicidade. Pedidos já feitos preservam o recebedor salvo no momento da compra."}
+                </p>
+              </div>
+            )}
+
+            <div className="mt-5 grid gap-3 sm:grid-cols-3">
+              <div className="rounded-xl bg-white p-4 dark:bg-neutral-900"><p className="text-2xl font-black text-violet-700 dark:text-violet-300">{eventRewardSummary.total}</p><p className="text-[11px] font-bold text-neutral-500">{lang === "ja" ? "イベント合計" : lang === "en" ? "Event total" : "Total do evento"}</p></div>
+              <div className="rounded-xl bg-white p-4 dark:bg-neutral-900"><p className="text-2xl font-black text-amber-600">{eventRewardSummary.pending}</p><p className="text-[11px] font-bold text-neutral-500">{lang === "ja" ? "受け渡し待ち" : lang === "en" ? "Pending delivery" : "Aguardando entrega"}</p></div>
+              <div className="rounded-xl bg-white p-4 dark:bg-neutral-900"><p className="text-2xl font-black text-emerald-600">{eventRewardSummary.credited}</p><p className="text-[11px] font-bold text-neutral-500">{lang === "ja" ? "付与済み" : lang === "en" ? "Credited" : "Já creditados"}</p></div>
+            </div>
           </div>
 
           <div className="bg-orange-50/40 dark:bg-orange-950/10 p-6 border border-orange-200 dark:border-orange-900/40 rounded-3xl space-y-4">

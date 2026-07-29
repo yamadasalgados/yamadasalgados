@@ -22,8 +22,12 @@ export type CustomerOrderSummary = {
   readinessReasonCodes: string[];
   pointsRedeemed: number;
   pointsToEarn: number;
+  eventPointsAssigned: number;
+  rewardRecipientType: "customer" | "event_presenter" | "none";
+  rewardRecipientName: string;
   rewardMode: string;
   rewardStatus: string;
+  eventRewardStatus: string;
   createdAt: string;
   updatedAt: string;
   storeHref: string;
