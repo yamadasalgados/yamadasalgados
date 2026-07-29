@@ -571,6 +571,14 @@ function normalizeProductLine(params: {
     nowMillis,
   } = params;
 
+  // Eventos acompanham o catálogo atual para nome, imagem, categoria,
+  // preço e agendamento. O snapshot do evento continua definindo apenas
+  // inclusão e modo de venda (normal ou sob encomenda).
+  const commercialRaw =
+    source === "event" && Object.keys(catalogRaw).length > 0
+      ? catalogRaw
+      : raw;
+
   const explicitAvailabilityMode = cleanString(
     raw.availabilityMode,
     40,
@@ -615,9 +623,15 @@ function normalizeProductLine(params: {
   }
 
   const basePriceMinor =
-    typeof raw.priceMinor === "number" && Number.isFinite(raw.priceMinor)
-      ? Math.max(0, Math.round(raw.priceMinor))
-      : majorToMinor(raw.sellPrice ?? raw.price ?? raw.shadowSell, currency);
+    typeof commercialRaw.priceMinor === "number" &&
+    Number.isFinite(commercialRaw.priceMinor)
+      ? Math.max(0, Math.round(commercialRaw.priceMinor))
+      : majorToMinor(
+          commercialRaw.sellPrice ??
+            commercialRaw.price ??
+            commercialRaw.shadowSell,
+          currency,
+        );
   const priceEvaluation = evaluateProductPrice({
     basePriceMinor,
     scheduledPriceChange: resolveProductScheduledPriceChange(
@@ -692,9 +706,20 @@ function normalizeProductLine(params: {
     basePriceMinor,
     scheduledPriceStatus: priceEvaluation.status,
     scheduledPriceChange: priceEvaluation.scheduledPriceChange,
-    name: resolveLocalizedName(raw, language, defaultLanguage, fallbackName),
-    imageUrl: cleanString(raw.imageUrl ?? raw.image, 2000),
-    category: cleanString(raw.category ?? raw.categoryName, 160),
+    name: resolveLocalizedName(
+      commercialRaw,
+      language,
+      defaultLanguage,
+      fallbackName,
+    ),
+    imageUrl: cleanString(
+      commercialRaw.imageUrl ?? commercialRaw.image,
+      2000,
+    ),
+    category: cleanString(
+      commercialRaw.category ?? commercialRaw.categoryName,
+      160,
+    ),
     availabilityMode: madeToOrder ? "made_to_order" : "normal",
     availabilityStatus: madeToOrder ? "made_to_order" : "active",
     productionMode: madeToOrder ? "made_to_order" : "stock",
@@ -1201,6 +1226,18 @@ export async function POST(request: NextRequest) {
           throw new OrderError(
             "EVENT_UNAVAILABLE",
             "A retirada não está habilitada neste evento.",
+          );
+        }
+
+        const presentationSettings = record(eventData.presentationSettings);
+        if (
+          clean.selectedOfferId &&
+          presentationSettings.showOfferCards === false
+        ) {
+          throw new OrderError(
+            "OFFER_UNAVAILABLE",
+            "As ofertas estão ocultas neste evento.",
+            409,
           );
         }
       }

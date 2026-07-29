@@ -108,6 +108,11 @@ type EventDoc = {
     assignedAt?: Timestamp | null;
     assignedBy?: string | null;
   };
+  presentationSettings?: {
+    schemaVersion?: number;
+    showScheduledPriceCards?: boolean;
+    showOfferCards?: boolean;
+  };
 };
 
 type OrderDoc = {
@@ -361,6 +366,8 @@ const [messageSummaries, setMessageSummaries] = useState<Record<string, MessageS
   const [productAvailabilityModes, setProductAvailabilityModes] = useState<Record<string, EventProductMode>>({});
   const [featuredProductIds, setFeaturedProductIds] = useState<string[]>([]);
   const [offerIds, setOfferIds] = useState<string[]>([]);
+  const [showScheduledPriceCards, setShowScheduledPriceCards] = useState(true);
+  const [showOfferCards, setShowOfferCards] = useState(true);
 
   const [allProducts, setAllProducts] = useState<ProductDoc[]>([]);
   const [allProductsLoading, setAllProductsLoading] = useState(true);
@@ -551,6 +558,12 @@ const [messageSummaries, setMessageSummaries] = useState<Record<string, MessageS
         setProductAvailabilityModes(loadedModes);
         setFeaturedProductIds(Array.isArray(data.featuredProductIds) ? uniqStrings(data.featuredProductIds) : []);
         setOfferIds(Array.isArray(data.offerIds) ? uniqStrings(data.offerIds) : []);
+        const presentationSettings: NonNullable<EventDoc["presentationSettings"]> =
+          data.presentationSettings && typeof data.presentationSettings === "object"
+            ? data.presentationSettings
+            : {};
+        setShowScheduledPriceCards(presentationSettings.showScheduledPriceCards !== false);
+        setShowOfferCards(presentationSettings.showOfferCards !== false);
       } catch (e: any) {
         setError(e?.message || t("eventPanel.err.loadEvent"));
       } finally {
@@ -765,10 +778,8 @@ return validOrders.filter((o) => o.deliveryDate === filterDate);
     if (mode === "excluded" && requiredProductIds.has(productId)) return;
 
     setProductIds((current) => {
-      const next = new Set(current);
-      if (mode === "excluded") next.delete(productId);
-      else next.add(productId);
-      return Array.from(next);
+      if (mode === "excluded") return current.filter((id) => id !== productId);
+      return current.includes(productId) ? current : [...current, productId];
     });
 
     setProductAvailabilityModes((current) => {
@@ -778,6 +789,18 @@ return validOrders.filter((o) => o.deliveryDate === filterDate);
       return next;
     });
   }, [requiredProductIds]);
+
+  const moveEventProduct = useCallback((productId: string, direction: -1 | 1) => {
+    setProductIds((current) => {
+      const index = current.indexOf(productId);
+      if (index < 0) return current;
+      const target = index + direction;
+      if (target < 0 || target >= current.length) return current;
+      const next = [...current];
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
+  }, []);
 
   const selectAllEventProducts = useCallback(() => {
     setProductIds(allProducts.map((product) => product.id));
@@ -969,6 +992,11 @@ return validOrders.filter((o) => o.deliveryDate === filterDate);
         productAvailabilityModes: cleanedAvailabilityModes,
         featuredProductIds: fixedFeatured,
         offerIds: cleanedOfferIds,
+        presentationSettings: {
+          schemaVersion: 1,
+          showScheduledPriceCards,
+          showOfferCards,
+        },
         updatedAt: serverTimestamp(),
       });
 
@@ -984,7 +1012,7 @@ return validOrders.filter((o) => o.deliveryDate === filterDate);
     } finally {
       setSaving(false);
     }
-  }, [eventRef, title, region, whatsapp, status, pickupLink, pickupNote, messengerId, rewardRecipientMode, rewardRecipient, deliveryDatesText, productIds, productAvailabilityModes, productById, requiredProductIds, featuredProductIds, allProducts, allOffers, offerIds, authUser?.uid, sellerUid, t, lang]);
+  }, [eventRef, title, region, whatsapp, status, pickupLink, pickupNote, messengerId, rewardRecipientMode, rewardRecipient, deliveryDatesText, productIds, productAvailabilityModes, productById, requiredProductIds, featuredProductIds, allProducts, allOffers, offerIds, showScheduledPriceCards, showOfferCards, authUser?.uid, sellerUid, t, lang]);
 
       const deliveryOrders = useMemo(() => {
   return orders.filter((o) => {
@@ -1430,6 +1458,67 @@ const markOrderMessagesAsRead = useCallback(
             <div className="sm:col-span-2"><Field label={t("eventPanel.config.field.deliveryDates")}><textarea className="w-full border border-neutral-200 dark:border-neutral-800 rounded-xl px-3 py-2.5 text-sm min-h-[100px] bg-white dark:bg-neutral-900 text-neutral-900 dark:text-white focus:outline-none resize-none" value={deliveryDatesText} onChange={(e) => setDeliveryDatesText(e.target.value)} /></Field></div>
           </div>
 
+          <div className="rounded-3xl border border-sky-200 bg-sky-50/50 p-6 dark:border-sky-900/50 dark:bg-sky-950/10">
+            <div>
+              <h3 className="text-sm font-black text-sky-950 dark:text-sky-100">
+                {lang === "ja" ? "公開ページの表示" : lang === "en" ? "Public event presentation" : "Apresentação da página pública"}
+              </h3>
+              <p className="mt-1 text-xs font-bold leading-relaxed text-sky-800/70 dark:text-sky-200/70">
+                {lang === "ja"
+                  ? "イベントごとに、価格変更のカウントダウンカードと割引・セットカードを表示するか選べます。価格自体とサーバー側の検証は常に正しく維持されます。"
+                  : lang === "en"
+                    ? "Choose whether this event shows scheduled-price countdown cards and discount or kit cards. Effective prices and server validation remain authoritative."
+                    : "Escolha se este evento mostra os cards de countdown de preço e os cards de descontos, ofertas e kits. O preço efetivo e a validação do servidor continuam funcionando normalmente."}
+              </p>
+            </div>
+
+            <div className="mt-5 grid gap-3 sm:grid-cols-2">
+              <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-sky-200 bg-white p-4 dark:border-sky-900/50 dark:bg-neutral-900">
+                <input
+                  type="checkbox"
+                  checked={showScheduledPriceCards}
+                  onChange={(event) => setShowScheduledPriceCards(event.target.checked)}
+                  disabled={saving}
+                  className="mt-1 h-4 w-4 accent-sky-600"
+                />
+                <span>
+                  <span className="block text-sm font-black">
+                    {lang === "ja" ? "価格変更とカウントダウン" : lang === "en" ? "Price-change countdown cards" : "Cards de preço e countdown"}
+                  </span>
+                  <span className="mt-1 block text-xs font-bold text-neutral-500 dark:text-neutral-400">
+                    {lang === "ja"
+                      ? "値上げのお知らせ、残り時間、最終時間のバッジを商品カードに表示します。"
+                      : lang === "en"
+                        ? "Shows price-rise notices, remaining time, and final-hour badges on product cards."
+                        : "Mostra aviso de aumento, tempo restante e destaque de última hora nos produtos."}
+                  </span>
+                </span>
+              </label>
+
+              <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-sky-200 bg-white p-4 dark:border-sky-900/50 dark:bg-neutral-900">
+                <input
+                  type="checkbox"
+                  checked={showOfferCards}
+                  onChange={(event) => setShowOfferCards(event.target.checked)}
+                  disabled={saving}
+                  className="mt-1 h-4 w-4 accent-sky-600"
+                />
+                <span>
+                  <span className="block text-sm font-black">
+                    {lang === "ja" ? "割引・オファー・セット" : lang === "en" ? "Discount, offer, and kit cards" : "Cards de descontos, ofertas e kits"}
+                  </span>
+                  <span className="mt-1 block text-xs font-bold text-neutral-500 dark:text-neutral-400">
+                    {lang === "ja"
+                      ? "公開イベントで選択可能なオファーとセットのセクションを表示します。"
+                      : lang === "en"
+                        ? "Shows the selectable offers and kits section on the public event."
+                        : "Mostra na página pública a seção em que o cliente escolhe ofertas e kits."}
+                  </span>
+                </span>
+              </label>
+            </div>
+          </div>
+
           <div className="rounded-3xl border border-violet-200 bg-violet-50/50 p-6 dark:border-violet-900/50 dark:bg-violet-950/10">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
               <div className="flex items-start gap-3">
@@ -1607,6 +1696,65 @@ const markOrderMessagesAsRead = useCallback(
               </div>
             )}
           </div>
+
+          {productIds.length > 0 && (
+            <div className="rounded-3xl border border-neutral-200 bg-white p-6 dark:border-neutral-800 dark:bg-neutral-900">
+              <div>
+                <h3 className="text-xs font-black uppercase tracking-widest text-neutral-400 dark:text-neutral-500">
+                  {lang === "ja" ? "商品の表示順" : lang === "en" ? "Product display order" : "Ordem de exibição dos produtos"}
+                </h3>
+                <p className="mt-1 text-[11px] font-bold text-neutral-400">
+                  {lang === "ja"
+                    ? "公開イベントではこの順番がそのまま使われます。上下の矢印で並べ替えてから保存してください。"
+                    : lang === "en"
+                      ? "The public event follows this exact order. Use the arrows and save the configuration."
+                      : "A página pública seguirá exatamente esta ordem. Use as setas e depois salve a configuração."}
+                </p>
+              </div>
+
+              <div className="mt-4 space-y-2">
+                {productIds.map((productId, index) => {
+                  const product = productById.get(productId);
+                  return (
+                    <div
+                      key={productId}
+                      className="flex items-center gap-3 rounded-2xl border border-neutral-200 bg-neutral-50 px-3 py-2.5 dark:border-neutral-800 dark:bg-neutral-950/50"
+                    >
+                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-black text-xs font-black text-white dark:bg-white dark:text-black">
+                        {index + 1}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-black text-neutral-900 dark:text-white">
+                          {product?.name || productId}
+                        </p>
+                        <p className="truncate text-[10px] font-bold text-neutral-400">
+                          {product?.category || (lang === "ja" ? "カテゴリなし" : lang === "en" ? "No category" : "Sem categoria")}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => moveEventProduct(productId, -1)}
+                        disabled={saving || index === 0}
+                        aria-label={lang === "ja" ? "上へ移動" : lang === "en" ? "Move up" : "Mover para cima"}
+                        className="flex h-9 w-9 items-center justify-center rounded-xl border border-neutral-200 bg-white text-base font-black disabled:opacity-25 dark:border-neutral-700 dark:bg-neutral-900"
+                      >
+                        ↑
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => moveEventProduct(productId, 1)}
+                        disabled={saving || index === productIds.length - 1}
+                        aria-label={lang === "ja" ? "下へ移動" : lang === "en" ? "Move down" : "Mover para baixo"}
+                        className="flex h-9 w-9 items-center justify-center rounded-xl border border-neutral-200 bg-white text-base font-black disabled:opacity-25 dark:border-neutral-700 dark:bg-neutral-900"
+                      >
+                        ↓
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           <div className="bg-white dark:bg-neutral-900 p-6 border border-neutral-200 dark:border-neutral-800 rounded-3xl space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">

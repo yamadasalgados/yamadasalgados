@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "audit:white-label": "node scripts/audit-white-label.mjs",
-    "audit:firestore-security": "node scripts/audit-firestore-security.mjs"
+    "audit:firestore-security": "node scripts/audit-firestore-security.mjs",
+    "audit:event-experience": "node scripts/audit-event-experience.mjs"
   },
   "dependencies": {
     "firebase": "^12.6.0",
@@ -24,7 +25,6 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "autoprefixer": "^10.4.22",
-    "baseline-browser-mapping": "^2.11.7",
     "eslint": "^9",
     "eslint-config-next": "16.0.7",
     "postcss": "^8.5.6",

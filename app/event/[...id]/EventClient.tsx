@@ -27,6 +27,7 @@ import {
   doc,
   getDoc,
   getDocs,
+  onSnapshot,
   query,
   where,
 } from "firebase/firestore";
@@ -156,6 +157,8 @@ type EventData = {
   rewardRecipientMode: "customer" | "event_presenter";
   rewardRecipientUid: string;
   rewardRecipientName: string;
+  showScheduledPriceCards: boolean;
+  showOfferCards: boolean;
 };
 
 type ProductImageData = {
@@ -388,82 +391,85 @@ async function fetchEventPublishedProducts(
   const wantedNames = uniq(productNames);
   const result: Record<string, ProductImageData> = {};
 
-  const itemsSnap = await getDocs(
-    collection(
-      db,
-      "sellers",
-      sellerId,
-      "events",
-      eventId,
-      "items",
+  const [itemsSnap, eventProductsSnap, catalogSnap] = await Promise.all([
+    getDocs(
+      collection(
+        db,
+        "sellers",
+        sellerId,
+        "events",
+        eventId,
+        "items",
+      ),
     ),
-  );
-  Object.assign(
-    result,
-    mapProductSnapToData(
-      itemsSnap,
-      currency,
+    getDocs(
+      collection(
+        db,
+        "sellers",
+        sellerId,
+        "events",
+        eventId,
+        "products",
+      ),
     ),
-  );
+    getDocs(
+      query(
+        collection(db, "sellers", sellerId, "products"),
+        where("status", "in", ["active", "made_to_order"]),
+      ),
+    ),
+  ]);
 
-  const eventProductsSnap = await getDocs(
-    collection(
-      db,
-      "sellers",
-      sellerId,
-      "events",
-      eventId,
-      "products",
-    ),
-  );
-  Object.assign(
-    result,
-    mapProductSnapToData(
-      eventProductsSnap,
-      currency,
-    ),
-  );
+  // `products` é legado; `items` é a fonte atual e deve ter precedência.
+  Object.assign(result, mapProductSnapToData(eventProductsSnap, currency));
+  Object.assign(result, mapProductSnapToData(itemsSnap, currency));
 
-  // O evento preserva preço e condição comercial, mas o estoque disponível
-  // vem sempre do catálogo atual do seller para considerar reservas abertas.
-  const catalogSnap = await getDocs(
-    query(
-      collection(db, "sellers", sellerId, "products"),
-      where("status", "in", ["active", "made_to_order"]),
-    ),
-  );
-  catalogSnap.docs.forEach((catalogDoc) => {
-    const published = result[catalogDoc.id];
-    if (!published) return;
-    const data = catalogDoc.data() as Record<string, unknown>;
-    const priceEvaluation = evaluateProductPrice({
-      basePriceMinor: published.basePriceMinor,
-      scheduledPriceChange: resolveProductScheduledPriceChange(data, currency).enabled
-        ? resolveProductScheduledPriceChange(data, currency)
-        : published.scheduledPriceChange,
-      currency,
-    });
-    published.basePriceMinor = priceEvaluation.basePriceMinor;
-    published.priceMinor = priceEvaluation.effectivePriceMinor;
-    published.price = minorToMajor(priceEvaluation.effectivePriceMinor, currency);
-    published.scheduledPriceChange = priceEvaluation.scheduledPriceChange;
-    published.scheduledPriceStatus = priceEvaluation.status;
-    const inventory = normalizeProductInventory(
-      data.inventory,
-      data.stockQty ?? data.stock,
-      data.lowStockThreshold,
-    );
-    published.stockQty = inventory.tracked ? inventory.available : undefined;
-    published.lowStockThreshold = inventory.lowStockThreshold;
-    published.productionLeadTimeDays = normalizeProductProductionLeadTime(
-      data.productionLeadTime,
-      data.productionLeadTimeDays,
-      { madeToOrder: published.availabilityMode === "made_to_order" },
-    ).days;
+  /*
+   * O evento mantém apenas decisões editoriais próprias:
+   * - inclusão;
+   * - ordem;
+   * - venda normal ou sob encomenda.
+   *
+   * Nome, imagem, categoria, preço, agendamento, estoque e prazo de produção
+   * acompanham o catálogo atual do seller. Assim uma edição no produto passa
+   * a aparecer no evento sem recriar ou salvar novamente o evento.
+   */
+  const catalogProducts = mapProductSnapToData(catalogSnap, currency);
+  const catalogIds = new Set(Object.keys(catalogProducts));
+
+  Object.entries(result).forEach(([productId, published]) => {
+    const catalog = catalogProducts[productId];
+
+    if (!catalog) {
+      // Produto desativado ou removido deixa de ser vendável no evento.
+      result[productId] = {
+        ...published,
+        status: "inactive",
+      };
+      return;
+    }
+
+    const eventAvailabilityMode = published.availabilityMode;
+    const eventMadeToOrder = eventAvailabilityMode === "made_to_order";
+
+    result[productId] = {
+      ...published,
+      ...catalog,
+      id: productId,
+      availabilityMode: eventAvailabilityMode,
+      availabilityStatus: eventMadeToOrder ? "made_to_order" : "active",
+      productionMode: eventMadeToOrder ? "made_to_order" : "stock",
+      productionLeadTimeDays: normalizeProductProductionLeadTime(
+        catalog.productionLeadTimeDays,
+        catalog.productionLeadTimeDays,
+        { madeToOrder: eventMadeToOrder },
+      ).days,
+    };
   });
 
+  // Compatibilidade com eventos legados que armazenavam somente nomes.
   wantedNames.forEach((name) => {
-    if (!result[name]) {
+    if (!result[name] && !catalogIds.has(name)) {
       result[name] = {
         id: name,
         name,
@@ -601,11 +607,13 @@ const uiLocale =
   const [offers, setOffers] = useState<OfferDoc[]>([]);
   const [selectedOfferId, setSelectedOfferId] = useState("");
   const [activeCategory, setActiveCategory] = useState("__all__");
+  const [checkoutOpen, setCheckoutOpen] = useState(false);
 
   const [submitting, setSubmitting] = useState(false);
   const [sentToast, setSentToast] = useState(false);
   const [formError, setFormError] = useState("");
   const formErrorRef = useRef<HTMLDivElement | null>(null);
+  const checkoutScrollRef = useRef<HTMLDivElement | null>(null);
 
   const showFormError = useCallback((message: string) => {
     setFormError(message);
@@ -641,12 +649,10 @@ const uiLocale =
 
   const sortedProductIds = useMemo(() => {
     if (!event) return [];
-    return uniq([...(event.productIds || []), ...(event.productNames || [])]).sort((a, b) => {
-      const an = (productsData[a]?.name || a).trim();
-      const bn = (productsData[b]?.name || b).trim();
-      return an.localeCompare(bn, locale);
-    });
-  }, [event, productsData, locale]);
+    // A ordem salva em productIds é a ordem editorial do evento.
+    // Nomes legados entram apenas no final, sem reordenar os produtos escolhidos.
+    return uniq([...(event.productIds || []), ...(event.productNames || [])]);
+  }, [event]);
 
   const normalProductIds = useMemo(
     () => sortedProductIds.filter((productId) =>
@@ -683,6 +689,16 @@ const uiLocale =
     if (activeCategory === "__other__") return uncategorized;
     return normalProductIds.filter((pid) => (productsData[pid]?.category || "") === activeCategory);
   }, [normalProductIds, productsData, activeCategory, uncategorized]);
+
+  useEffect(() => {
+    if (
+      activeCategory !== "__all__" &&
+      activeCategory !== "__other__" &&
+      !dynamicCategories.includes(activeCategory)
+    ) {
+      setActiveCategory("__all__");
+    }
+  }, [activeCategory, dynamicCategories]);
 
   const totalItems = useMemo(() => {
     return orderableIds.reduce((sum, pid) => sum + (quantities[pid] || 0), 0);
@@ -1240,6 +1256,14 @@ const uiLocale =
             rewardRecipientMode === "event_presenter"
               ? String(rawRewardAssignment.recipientName || "").trim()
               : "",
+          showScheduledPriceCards:
+            !data.presentationSettings ||
+            typeof data.presentationSettings !== "object" ||
+            data.presentationSettings.showScheduledPriceCards !== false,
+          showOfferCards:
+            !data.presentationSettings ||
+            typeof data.presentationSettings !== "object" ||
+            data.presentationSettings.showOfferCards !== false,
         };
 
         setEvent(nextEvent);
@@ -1313,6 +1337,255 @@ const uiLocale =
       alive = false;
     };
   }, [sellerId, id, tr]);
+
+  useEffect(() => {
+    if (!sellerId || !id) return;
+
+    const eventRef = doc(db, "sellers", sellerId, "events", id);
+    const unsubscribe = onSnapshot(
+      eventRef,
+      (snapshot) => {
+        if (!snapshot.exists()) {
+          setNotFound(true);
+          return;
+        }
+
+        const data = snapshot.data() as Record<string, any>;
+        const storedSellerId =
+          typeof data.sellerId === "string"
+            ? data.sellerId.trim()
+            : "";
+        if (storedSellerId && storedSellerId !== sellerId) {
+          setNotFound(true);
+          return;
+        }
+
+        const deliveryDates = normalizeStringArray(data.deliveryDates);
+        const rawRewardAssignment =
+          data.rewardAssignment && typeof data.rewardAssignment === "object"
+            ? data.rewardAssignment
+            : {};
+        const rewardRecipientMode =
+          rawRewardAssignment.mode === "event_presenter"
+            ? "event_presenter"
+            : "customer";
+        const presentationSettings =
+          data.presentationSettings && typeof data.presentationSettings === "object"
+            ? data.presentationSettings
+            : {};
+
+        setEvent((current) => {
+          if (!current) return current;
+          const deliveryDateLabel =
+            String(data.deliveryDateLabel || data.deliveryDate || "").trim() ||
+            (deliveryDates.length > 0
+              ? deliveryDates.join(" • ")
+              : tr("event.date.undefined", "Data a definir"));
+
+          return {
+            ...current,
+            title: String(data.title || data.name || ""),
+            region: String(data.region || data.regionName || ""),
+            regionId: String(data.regionId || ""),
+            deliveryDates,
+            deliveryDateLabel,
+            productIds: normalizeStringArray(data.productIds),
+            featuredProductIds: normalizeStringArray(data.featuredProductIds),
+            productNames: normalizeStringArray(data.productNames),
+            featuredProductNames: normalizeStringArray(data.featuredProductNames),
+            offerIds: normalizeStringArray(data.offerIds),
+            whatsapp: String(data.whatsapp || ""),
+            messengerId: String(data.messengerId || data.messenger || ""),
+            status: String(data.status || "active"),
+            pickupLink: String(data.pickupLink || data.pickupUrl || ""),
+            pickupNote: String(data.pickupNote || ""),
+            allowDelivery: data.allowDelivery !== false,
+            allowPickup: data.allowPickup !== false,
+            rewardRecipientMode,
+            rewardRecipientUid:
+              rewardRecipientMode === "event_presenter"
+                ? String(rawRewardAssignment.recipientUid || "").trim()
+                : "",
+            rewardRecipientName:
+              rewardRecipientMode === "event_presenter"
+                ? String(rawRewardAssignment.recipientName || "").trim()
+                : "",
+            showScheduledPriceCards:
+              presentationSettings.showScheduledPriceCards !== false,
+            showOfferCards:
+              presentationSettings.showOfferCards !== false,
+          };
+        });
+
+        if (deliveryDates.length > 0) {
+          setSelectedDate((current) =>
+            current && deliveryDates.includes(current)
+              ? current
+              : deliveryDates[0],
+          );
+        }
+      },
+      (listenerError) => {
+        console.warn("[EventClient] Event realtime listener stopped:", listenerError);
+      },
+    );
+
+    return unsubscribe;
+  }, [id, sellerId, tr]);
+
+  useEffect(() => {
+    if (!sellerId || !id || !event) return;
+
+    let disposed = false;
+    let refreshTimer: number | null = null;
+
+    const refreshProducts = async () => {
+      try {
+        const eventProductNames = uniq([
+          ...(event.productNames || []),
+          ...(event.featuredProductNames || []),
+        ]);
+        const nextProducts = await fetchEventPublishedProducts(
+          sellerId,
+          id,
+          eventProductNames,
+          event.currency,
+        );
+        if (!disposed) setProductsData(nextProducts);
+      } catch (refreshError) {
+        if (!disposed) {
+          console.error("[EventClient] Falha ao sincronizar produtos do evento:", refreshError);
+        }
+      }
+    };
+
+    const scheduleRefresh = () => {
+      if (refreshTimer !== null) window.clearTimeout(refreshTimer);
+      refreshTimer = window.setTimeout(() => {
+        void refreshProducts();
+      }, 80);
+    };
+
+    const catalogQuery = query(
+      collection(db, "sellers", sellerId, "products"),
+      where("status", "in", ["active", "made_to_order"]),
+    );
+
+    const unsubscribers = [
+      onSnapshot(
+        collection(db, "sellers", sellerId, "events", id, "items"),
+        scheduleRefresh,
+        (listenerError) =>
+          console.warn("[EventClient] Event items listener stopped:", listenerError),
+      ),
+      onSnapshot(
+        collection(db, "sellers", sellerId, "events", id, "products"),
+        scheduleRefresh,
+        (listenerError) =>
+          console.warn("[EventClient] Event products listener stopped:", listenerError),
+      ),
+      onSnapshot(
+        catalogQuery,
+        scheduleRefresh,
+        (listenerError) =>
+          console.warn("[EventClient] Catalog listener stopped:", listenerError),
+      ),
+    ];
+
+    scheduleRefresh();
+
+    return () => {
+      disposed = true;
+      if (refreshTimer !== null) window.clearTimeout(refreshTimer);
+      unsubscribers.forEach((unsubscribe) => unsubscribe());
+    };
+  }, [
+    event?.currency,
+    event?.featuredProductNames?.join("|"),
+    event?.productNames?.join("|"),
+    id,
+    sellerId,
+  ]);
+
+  useEffect(() => {
+    if (!sellerId || !id || !event) return;
+
+    const unsubscribe = onSnapshot(
+      collection(db, "sellers", sellerId, "events", id, "offers"),
+      (offerSnapshot) => {
+        const allowedOfferIds = new Set(event.offerIds || []);
+        const eventOffers = offerSnapshot.docs
+          .map((document) =>
+            normalizeOffer(
+              document.id,
+              document.data(),
+              event.currency,
+            ),
+          )
+          .filter(
+            (offer): offer is OfferDoc =>
+              offer !== null &&
+              offerIsCurrentlyActive(offer) &&
+              (allowedOfferIds.size === 0 || allowedOfferIds.has(offer.id)),
+          );
+        setOffers(eventOffers);
+        setSelectedOfferId((current) =>
+          event.showOfferCards && eventOffers.some((offer) => offer.id === current)
+            ? current
+            : "",
+        );
+      },
+      (listenerError) => {
+        console.warn("[EventClient] Event offers listener stopped:", listenerError);
+      },
+    );
+
+    return unsubscribe;
+  }, [
+    event?.currency,
+    event?.offerIds?.join("|"),
+    event?.showOfferCards,
+    id,
+    sellerId,
+  ]);
+
+  useEffect(() => {
+    if (event?.showOfferCards !== false) return;
+    setSelectedOfferId("");
+  }, [event?.showOfferCards]);
+
+  useEffect(() => {
+    if (!checkoutOpen || typeof document === "undefined") return;
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    const handleKeyDown = (keyboardEvent: KeyboardEvent) => {
+      if (keyboardEvent.key === "Escape" && !submitting) {
+        setCheckoutOpen(false);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [checkoutOpen, submitting]);
+
+  useEffect(() => {
+    if (!checkoutOpen || !lastOrderId) return;
+    const timer = window.setTimeout(() => {
+      const container = checkoutScrollRef.current;
+      if (container) {
+        container.scrollTo({
+          top: container.scrollHeight,
+          behavior: "smooth",
+        });
+      }
+    }, 120);
+    return () => window.clearTimeout(timer);
+  }, [checkoutOpen, lastOrderId]);
 
   useEffect(() => {
     if (!sellerId || !id || !lastOrderId || !lastChatAccessToken) return;
@@ -1703,48 +1976,59 @@ const uiLocale =
       )}
 
       <header
-        className="space-y-3 border-b pb-5"
+        className="space-y-4 border-b pb-5"
         style={{ borderColor: `${sellerIdentity.primaryColor}55` }}
       >
-        {sellerIdentity.storeName && (
-          <Link
-            href={`/store/${encodeURIComponent(sellerId)}`}
-            className="inline-flex max-w-full items-center gap-3 rounded-2xl border border-neutral-200 bg-white px-3 py-2 shadow-sm dark:border-neutral-800 dark:bg-neutral-900"
-          >
-            {sellerIdentity.logoUrl ? (
-              <img
-                src={sellerIdentity.logoUrl}
-                alt={sellerIdentity.storeName}
-                className="h-10 w-10 shrink-0 rounded-xl object-cover"
-              />
-            ) : (
-              <span
-                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-xs font-black text-white"
-                style={{ backgroundColor: sellerIdentity.primaryColor }}
-                aria-hidden="true"
-              >
-                {sellerInitials(sellerIdentity.storeName)}
-              </span>
-            )}
-            <span className="min-w-0">
-              <span className="block truncate text-sm font-black">
-                {sellerIdentity.storeName}
-              </span>
-              <span className="block text-[10px] font-black uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
-                {tr("event.header.visit_store", "Conheça a loja")}
-              </span>
-            </span>
-          </Link>
-        )}
-        <h1 className="text-3xl font-black tracking-tight text-neutral-900 dark:text-white">{event.title}</h1>
+        <div className="flex flex-col gap-5 md:flex-row md:items-start md:justify-between">
+          <div className="min-w-0 space-y-3">
+            <h1 className="text-3xl font-black tracking-tight text-neutral-900 dark:text-white">
+              {event.title}
+            </h1>
 
-        <p className="text-sm text-neutral-500 font-medium">
-          {tr("event.header.region", "Região")}:{" "}
-          <span className="font-bold text-neutral-800 dark:text-neutral-200">{event.region}</span>
-          <br />
-          {tr("event.header.delivery_dates", "Data(s) de entrega")}:{" "}
-          <span className="font-bold text-neutral-800 dark:text-neutral-200">{event.deliveryDateLabel}</span>
-        </p>
+            <p className="text-sm font-medium text-neutral-500">
+              {tr("event.header.region", "Região")}:{" "}
+              <span className="font-bold text-neutral-800 dark:text-neutral-200">
+                {event.region}
+              </span>
+              <br />
+              {tr("event.header.delivery_dates", "Data(s) de entrega")}:{" "}
+              <span className="font-bold text-neutral-800 dark:text-neutral-200">
+                {event.deliveryDateLabel}
+              </span>
+            </p>
+          </div>
+
+          {sellerIdentity.storeName && (
+            <Link
+              href={`/store/${encodeURIComponent(sellerId)}`}
+              className="inline-flex max-w-full shrink-0 items-center gap-3 self-end rounded-2xl border border-neutral-200 bg-white px-3 py-2 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md dark:border-neutral-800 dark:bg-neutral-900 md:self-start"
+            >
+              {sellerIdentity.logoUrl ? (
+                <img
+                  src={sellerIdentity.logoUrl}
+                  alt={sellerIdentity.storeName}
+                  className="h-10 w-10 shrink-0 rounded-xl object-cover"
+                />
+              ) : (
+                <span
+                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-xs font-black text-white"
+                  style={{ backgroundColor: sellerIdentity.primaryColor }}
+                  aria-hidden="true"
+                >
+                  {sellerInitials(sellerIdentity.storeName)}
+                </span>
+              )}
+              <span className="min-w-0 text-right">
+                <span className="block max-w-56 truncate text-sm font-black">
+                  {sellerIdentity.storeName}
+                </span>
+                <span className="block text-[10px] font-black uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
+                  {tr("event.header.visit_store", "Conheça a loja")}
+                </span>
+              </span>
+            </Link>
+          )}
+        </div>
 
         {eventClosed && (
           <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-xs font-black uppercase tracking-wider text-red-700 dark:border-red-900/30 dark:bg-red-950/20 dark:text-red-400">
@@ -1753,6 +2037,7 @@ const uiLocale =
         )}
       </header>
 
+      {event.showOfferCards && (
       <EventOffersSection
         offers={offers}
         selectedOfferId={selectedOfferId}
@@ -1766,6 +2051,7 @@ const uiLocale =
         onSelect={setSelectedOfferId}
         tr={tr}
       />
+      )}
 
       <section className="space-y-4">
         <div className="flex items-center justify-between border-b border-neutral-100 dark:border-neutral-800/60 pb-2">
@@ -1809,6 +2095,7 @@ const uiLocale =
           acceptOrdersWithoutStock={acceptOrdersWithoutStock}
           language={language}
           madeToOrder={false}
+          showScheduledPriceCards={event.showScheduledPriceCards}
           onAdjust={adjustQuantity}
           tr={tr}
           emptyMessage={tr("event.products.empty", "Nenhum produto normal disponível neste evento.")}
@@ -1838,6 +2125,7 @@ const uiLocale =
             acceptOrdersWithoutStock={acceptOrdersWithoutStock}
             language={language}
             madeToOrder
+            showScheduledPriceCards={event.showScheduledPriceCards}
             onAdjust={adjustQuantity}
             tr={tr}
             emptyMessage={tr("event.products.made_to_order_empty", "Nenhum produto sob encomenda neste evento.")}
@@ -1845,470 +2133,537 @@ const uiLocale =
         </section>
       )}
 
-      <section className="space-y-4 border-t border-neutral-200 dark:border-neutral-800 pt-6">
-        <h2 className="text-sm font-black uppercase tracking-widest text-neutral-400">
-          {tr("event.customer.title", "2. Informe seu nome")}
-        </h2>
+      <div className="sticky bottom-20 z-30 rounded-3xl border border-neutral-200 bg-white/95 p-3 shadow-2xl backdrop-blur dark:border-neutral-800 dark:bg-neutral-950/95">
+        <button
+          type="button"
+          onClick={() => {
+            setFormError("");
+            setCheckoutOpen(true);
+          }}
+          disabled={eventClosed || totalItems <= 0}
+          className="flex w-full items-center justify-between gap-4 rounded-2xl bg-emerald-600 px-5 py-4 text-left text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          <span>
+            <span className="block text-sm font-black uppercase tracking-wider">
+              {tr("event.order.review_cart", "Revisar e finalizar pedido")}
+            </span>
+            <span className="mt-0.5 block text-[11px] font-bold text-emerald-100">
+              {totalItems > 0
+                ? `${totalItems} ${totalItems === 1 ? tr("event.order.item", "item") : tr("event.order.items", "itens")}`
+                : tr("event.order.select_items", "Escolha pelo menos um produto")}
+            </span>
+          </span>
+          <span className="shrink-0 text-lg font-black">
+            {formatMoneyMinor(totalAmountMinor, currency, locale)}
+          </span>
+        </button>
+      </div>
 
-        <div className="space-y-3">
-          <input
-            value={customerName}
-            onChange={(e) => setCustomerName(e.target.value)}
-            placeholder={tr("event.form.customer_name", "Seu nome")}
-            className="w-full rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-4 py-3 text-sm text-neutral-900 dark:text-white focus:outline-none"
-          />
-
-          <input
-            value={customerPhone}
-            onChange={(e) => setCustomerPhone(e.target.value)}
-            placeholder={tr("event.form.customer_phone", "Telefone / WhatsApp")}
-            inputMode="tel"
-            autoComplete="tel"
-            className="w-full rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-4 py-3 text-sm text-neutral-900 dark:text-white focus:outline-none"
-          />
-
-          <textarea
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            placeholder={tr("event.form.note", "Observação")}
-            className="w-full rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-4 py-3 text-sm text-neutral-900 dark:text-white focus:outline-none min-h-[90px]"
-          />
-        </div>
-      </section>
-
-      <section className="bg-neutral-50 dark:bg-neutral-900/40 border border-neutral-200 dark:border-neutral-800 rounded-[2rem] p-5 space-y-4">
-        <h2 className="text-sm font-black uppercase tracking-widest text-neutral-400">
-          {tr("event.delivery.title", "3. Escolha entrega, data e hora")}
-        </h2>
-
-        <div className="space-y-2">
-          <p className="text-[10px] font-black uppercase tracking-widest text-neutral-400">
-            {tr("event.delivery.mode_title", "Tipo de entrega")}
-          </p>
-
-          <div className="flex gap-2 flex-wrap">
-            {canPickup && (
-              <button type="button" onClick={() => setDeliveryMode("pickup")} className={pill(deliveryMode === "pickup")}>
-                {tr("event.delivery.pickup", "Retirada no local")}
-              </button>
-            )}
-
-            {canDelivery && (
-              <button type="button" onClick={() => setDeliveryMode("delivery")} className={pill(deliveryMode === "delivery")}>
-                {tr("event.delivery.delivery", "Entrega")}
-              </button>
-            )}
-
-            <button type="button" onClick={() => setDeliveryMode("none")} className={pill(deliveryMode === "none")}>
-              {tr("event.common.to_be_arranged", "A combinar")}
-            </button>
-          </div>
-        </div>
-
-        <div className="space-y-3 pt-3">
-          {productionSchedule.required && (
-            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm font-bold leading-relaxed text-emerald-900 dark:border-emerald-900/50 dark:bg-emerald-950/20 dark:text-emerald-200">
-              {eventProductionScheduleNotice(
-                language,
-                productionSchedule.maxLeadTimeDays,
-                productionSchedule.earliestDate,
-                locale,
-              )}
-            </div>
-          )}
-
-          {event.deliveryDates.length > 0 && (
-            <div className="space-y-2">
-              <p className="text-[10px] font-black uppercase tracking-widest text-neutral-400">
-                {tr("event.date.title", "Data")}
-              </p>
-
-              <div className="flex flex-wrap gap-2">
-                {event.deliveryDates.map((date) => (
-                  <button
-                    key={date}
-                    type="button"
-                    disabled={
-                      productionSchedule.required &&
-                      compareDateKeys(date, productionSchedule.earliestDate) < 0
-                    }
-                    onClick={() => {
-                      setDateOption("event-date");
-                      setSelectedDate(date);
-                    }}
-                    className={`${pill(dateOption === "event-date" && selectedDate === date)} disabled:cursor-not-allowed disabled:opacity-35`}
-                  >
-                    {date}
-                  </button>
-                ))}
-
-                <button type="button" onClick={() => setDateOption("no-preference")} className={pill(dateOption === "no-preference")}>
-                  {tr("event.common.to_be_arranged", "A combinar")}
-                </button>
-              </div>
-            </div>
-          )}
-
-          <div className="space-y-2">
-            <p className="text-[10px] font-black uppercase tracking-widest text-neutral-400">
-              {tr("event.time.title", "Hora")}
-            </p>
-
-            <div className="flex flex-wrap gap-2">
-              <button type="button" onClick={() => setTimeOption("no-preference")} className={pill(timeOption === "no-preference")}>
-                {tr("event.common.to_be_arranged", "A combinar")}
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setTimeOption("custom");
-                  if (selectedHour == null) setSelectedHour(12);
-                  if (selectedMinute == null) setSelectedMinute(0);
-                }}
-                className={pill(timeOption === "custom")}
-              >
-                {tr("event.time.choose", "Escolher hora")}
-              </button>
-            </div>
-
-            {timeOption === "custom" && (
-              <div className="grid grid-cols-2 gap-3">
-                <select
-                  value={selectedHour ?? 12}
-                  onChange={(e) => setSelectedHour(Number(e.target.value))}
-                  className="rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-4 py-3 text-sm text-neutral-900 dark:text-white"
-                >
-                  {Array.from({ length: 15 }, (_, i) => i + 8).map((h) => (
-                  <option key={h} value={h}>
-                    {lang === "ja"
-                      ? `${String(h).padStart(2, "0")}時`
-                      : `${String(h).padStart(2, "0")}h`}
-                  </option>
-                  ))}
-                </select>
-
-                <select
-                  value={selectedMinute ?? 0}
-                  onChange={(e) => setSelectedMinute(Number(e.target.value))}
-                  className="rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-4 py-3 text-sm text-neutral-900 dark:text-white"
-                >
-                  {[0, 15, 30, 45].map((m) => (
-                  <option key={m} value={m}>
-                    {lang === "ja"
-                      ? `${String(m).padStart(2, "0")}分`
-                      : lang === "en"
-                        ? `${String(m).padStart(2, "0")} min`
-                        : `${String(m).padStart(2, "0")}min`}
-                  </option>
-                  ))}
-                </select>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {deliveryMode === "delivery" && (
-          <div className="space-y-3">
-            <button
-              type="button"
-              onClick={handleGetLocation}
-              disabled={gettingLocation}
-              className="w-full bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 text-neutral-900 dark:text-white rounded-xl py-3 text-xs font-black uppercase tracking-wider shadow-sm transition active:scale-[0.99]"
-            >
-              {gettingLocation ? tr("common.loading", "Carregando...") : tr("event.location.get", "Enviar minha localização")}
-            </button>
-
-            {locationLink && <p className="text-xs text-neutral-500 break-all">{locationLink}</p>}
-          </div>
-        )}
-
-        {deliveryMode === "pickup" && (event.pickupLink || event.pickupNote) && (
-          <div className="rounded-2xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 p-4 space-y-2">
-            {event.pickupNote && <p className="text-xs font-bold text-neutral-500">{event.pickupNote}</p>}
-            {event.pickupLink && (
-              <a href={event.pickupLink} target="_blank" rel="noreferrer" className="text-xs font-black underline text-blue-600 dark:text-blue-400">
-                {tr("event.pickup.open_map", "Abrir local de retirada")}
-              </a>
-            )}
-          </div>
-        )}
-      </section>
-
-      <section className="space-y-4 border-t border-neutral-200 dark:border-neutral-800 pt-6">
-        <div className="rounded-[2rem] border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-5 space-y-3 shadow-sm">
-          <h2 className="text-sm font-black uppercase tracking-widest text-neutral-400">
-            {tr("event.order.summary", "4. Finalizar pedido")}
-          </h2>
-
-          <div className="space-y-1 text-xs font-bold text-neutral-500 dark:text-neutral-400">
-            <p>
-              {tr("event.form.customer_name", "Seu nome")}:{" "}
-              <span className="text-neutral-900 dark:text-white">{customerName.trim() || "—"}</span>
-            </p>
-            <p>
-              {tr("event.form.customer_phone", "Telefone")}: {" "}
-              <span className="text-neutral-900 dark:text-white">{customerPhone.trim() || "—"}</span>
-            </p>
-            <p>
-              {tr("event.whatsapp.mode", "Modo")}:{" "}
-              <span className="text-neutral-900 dark:text-white">{getDeliveryModeLabel(deliveryMode)}</span>
-            </p>
-            <p>
-              {tr("event.whatsapp.date", "Data")}:{" "}
-              <span className="text-neutral-900 dark:text-white">{getChosenDate()}</span>
-            </p>
-            <p>
-              {tr("event.whatsapp.time", "Hora")}:{" "}
-              <span className="text-neutral-900 dark:text-white">{getChosenTimeLabel()}</span>
-            </p>
-            <p>
-              {tr("event.order.items_count", "Itens")}:{" "}
-              <span className="text-neutral-900 dark:text-white">{totalItems}</span>
-            </p>
-          </div>
-
-          {stockConfirmationItems.length > 0 && (
-            <p className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-bold leading-relaxed text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-200">
-              {language === "ja"
-                ? `在庫確認が必要な商品があります: ${stockConfirmationItems
-                    .map((item) => `${item.name} (+${item.shortage})`)
-                    .join("、")}。注文は保留となり、販売者が確認します。`
-                : language === "en"
-                  ? `Some items exceed current stock: ${stockConfirmationItems
-                      .map((item) => `${item.name} (+${item.shortage})`)
-                      .join(", ")}. The order will remain pending for seller confirmation.`
-                  : `Alguns itens ultrapassam o estoque atual: ${stockConfirmationItems
-                      .map((item) => `${item.name} (+${item.shortage})`)
-                      .join(", ")}. O pedido ficará pendente para confirmação do seller.`}
-            </p>
-          )}
-
-          {subtotalAmount > 0 && (
-            <RewardsCheckoutPanel
-              language={language}
-              sellerId={sellerId}
-              returnTo={`/event/${sellerId}/${id}`}
-              registered={customerSession.registered}
-              loading={customerRewards.loading}
-              wallet={customerRewards.wallet}
-              currency={currency}
-              locale={locale}
-              cartLines={orderableIds
-                .map((productId) => ({
-                  productId,
-                  name: productsData[productId]?.name || productId,
-                  quantity: quantities[productId] || 0,
-                  unitPriceMinor: productsData[productId]?.priceMinor || 0,
-                }))
-                .filter((line) => line.quantity > 0)}
-              merchandisePayableMinor={merchandisePayableBeforeRewardsMinor}
-              offerApplied={Boolean(offerEvaluation?.applicable)}
-              selection={rewardSelection}
-              maximumDiscountPoints={rewardEvaluation.maximumDiscountPoints}
-              pointsToEarn={customerVisiblePointsToEarn}
-              onChange={setRewardSelection}
-            />
-          )}
-
-          {subtotalAmount > 0 && eventPointsAssignedToPresenter && !currentCustomerReceivesEventPoints && (
-            <div className="rounded-2xl border border-violet-200 bg-violet-50 px-4 py-3 text-xs font-bold leading-relaxed text-violet-900 dark:border-violet-900/60 dark:bg-violet-950/25 dark:text-violet-200">
-              {language === "ja"
-                ? `このイベントで発生する獲得ポイントは${event?.rewardRecipientName || "担当販売者"}に付与されます。お客様自身の保有ポイントは割引に使用できます。`
-                : language === "en"
-                  ? `Points generated by this event will be credited to ${event?.rewardRecipientName || "the event presenter"}. You can still use your own balance as a discount.`
-                  : `Os pontos gerados por este evento serão creditados a ${event?.rewardRecipientName || "quem está apresentando e vendendo no evento"}. Você ainda pode usar seu próprio saldo como desconto.`}
-            </div>
-          )}
-
-          {subtotalAmount > 0 && (
-            <div className="space-y-1 rounded-2xl bg-neutral-50 p-4 text-sm font-bold dark:bg-neutral-950/60">
-              <div className="flex items-center justify-between text-neutral-500">
-                <span>{tr("event.order.subtotal", "Subtotal")}</span>
-                <span>{formatMoneyMinor(subtotalMinor, currency, locale)}</span>
-              </div>
-              {discountMinor > 0 && (
-                <div className="flex items-center justify-between text-emerald-600 dark:text-emerald-400">
-                  <span>{tr("event.order.discount", "Desconto")}</span>
-                  <span>- {formatMoneyMinor(discountMinor, currency, locale)}</span>
-                </div>
-              )}
-              {rewardEvaluation.discountMinor > 0 && (
-                <div className="flex items-center justify-between text-violet-600 dark:text-violet-400">
-                  <span>{language === "ja" ? "ポイント割引" : language === "en" ? "Points discount" : "Desconto em pontos"}</span>
-                  <span>- {formatMoneyMinor(rewardEvaluation.discountMinor, currency, locale)}</span>
-                </div>
-              )}
-              <div className="flex items-center justify-between border-t border-neutral-200 pt-2 text-base font-black text-neutral-900 dark:border-neutral-800 dark:text-white">
-                <span>{tr("event.order.total", "Total")}</span>
-                <span className="text-xl text-emerald-600 dark:text-emerald-400">
-                  {formatMoneyMinor(totalAmountMinor, currency, locale)}
-                </span>
-              </div>
-            </div>
-          )}
-
-          {formError && (
-            <div
-              ref={formErrorRef}
-              role="alert"
-              aria-live="assertive"
-              className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-black text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300"
-            >
-              {formError}
-            </div>
-          )}
-
+      {checkoutOpen && (
+        <div className="fixed inset-0 z-[90] flex items-end justify-center p-0 sm:items-center sm:p-4">
           <button
             type="button"
-            onClick={handleFinalize}
-            disabled={!canSubmit}
-            className="w-full bg-green-600 text-white py-4 rounded-2xl font-black text-sm uppercase tracking-wider transition hover:opacity-95 shadow-xl disabled:opacity-30"
+            aria-label={tr("common.close", "Fechar")}
+            onClick={() => {
+              if (!submitting) setCheckoutOpen(false);
+            }}
+            className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+          />
+
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label={tr("event.order.checkout_modal", "Finalizar pedido")}
+            className="relative z-10 flex max-h-[94vh] w-full max-w-2xl flex-col overflow-hidden rounded-t-[2rem] border border-neutral-200 bg-white shadow-2xl dark:border-neutral-800 dark:bg-neutral-950 sm:rounded-[2rem]"
           >
-            {submitting ? tr("event.order.finalizing", "Finalizando...") : tr("event.order.finalize_pwa", "Finalizar pedido")}
-          </button>
-
-          {!canSubmit && (
-            <p className="text-[11px] font-bold text-neutral-400 text-center">
-              {tr("event.order.fill_required_hint", "Escolha produtos, informe nome e telefone e selecione entrega/data/hora para finalizar.")}
-            </p>
-          )}
-        </div>
-
-        {lastOrderId && (
-          <div className="rounded-3xl border border-emerald-200 bg-emerald-50 p-5 shadow-sm animate-fade-in dark:border-emerald-900/60 dark:bg-emerald-950/30">
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center justify-between gap-4 border-b border-neutral-200 px-5 py-4 dark:border-neutral-800">
               <div>
-                <p className="text-xs font-black uppercase tracking-widest text-emerald-600 dark:text-emerald-300">
-                  {tr("event.order.confirmation_title", "Pedido recebido")}
+                <p className="text-[10px] font-black uppercase tracking-widest text-neutral-400">
+                  {tr("event.order.checkout", "Checkout do evento")}
                 </p>
-                <p className="mt-1 text-sm font-black text-emerald-950 dark:text-emerald-100">
-                  {tr("event.order.number", "Pedido")} #{lastOrderId}
-                </p>
-                <p className="mt-1 text-xs font-medium text-emerald-800/80 dark:text-emerald-200/70">
-                  {lastCustomerOrderRefId
-                    ? tr("event.order.saved_account", "O pedido foi salvo na sua conta e poderá ser acompanhado em Meus pedidos.")
-                    : tr("event.order.guest_saved", "Guarde o número do pedido para falar com o vendedor.")}
-                </p>
-                {(lastPointsRedeemed > 0 || lastPointsToEarn > 0 || lastPointsAssignedToPresenter > 0) && (
-                  <div className="mt-3 rounded-xl bg-violet-100/80 p-3 text-xs font-bold text-violet-800 dark:bg-violet-950/50 dark:text-violet-200">
-                    {lastPointsRedeemed > 0 && (
-                      <p>{language === "ja" ? `${lastPointsRedeemed}ポイント使用しました。` : language === "en" ? `${lastPointsRedeemed} points used.` : `${lastPointsRedeemed} pontos utilizados.`}</p>
-                    )}
-                    {lastPointsToEarn > 0 && (
-                      <p className={lastPointsRedeemed > 0 ? "mt-1" : ""}>{language === "ja" ? `受け渡し完了後に${lastPointsToEarn}ポイント獲得します。` : language === "en" ? `You will earn ${lastPointsToEarn} points after delivery.` : `Você ganhará ${lastPointsToEarn} pontos após a entrega.`}</p>
-                    )}
-                    {lastPointsAssignedToPresenter > 0 && (
-                      <p className={lastPointsRedeemed > 0 || lastPointsToEarn > 0 ? "mt-1" : ""}>
-                        {language === "ja"
-                          ? `${lastPointsAssignedToPresenter}ポイントは受け渡し完了後に${lastRewardRecipientName || "イベント担当者"}へ付与されます。`
-                          : language === "en"
-                            ? `${lastPointsAssignedToPresenter} points will be credited to ${lastRewardRecipientName || "the event presenter"} after delivery.`
-                            : `${lastPointsAssignedToPresenter} pontos serão creditados a ${lastRewardRecipientName || "quem apresentou o evento"} após a entrega.`}
-                      </p>
-                    )}
-                  </div>
-                )}
+                <h2 className="text-lg font-black text-neutral-900 dark:text-white">
+                  {event.title}
+                </h2>
               </div>
-
-              <div className="flex flex-wrap gap-2">
-                {lastCustomerOrderRefId && (
-                  <Link
-                    href={`/customer/orders/${encodeURIComponent(lastCustomerOrderRefId)}`}
-                    className="inline-flex min-h-10 items-center justify-center rounded-xl bg-emerald-600 px-4 py-2 text-xs font-black text-white transition hover:bg-emerald-700"
-                  >
-                    {tr("event.order.track", "Acompanhar pedido")}
-                  </Link>
-                )}
-                {customerSession.registered && (
-                  <Link
-                    href="/customer/orders"
-                    className="inline-flex min-h-10 items-center justify-center rounded-xl border border-emerald-300 px-4 py-2 text-xs font-black text-emerald-800 dark:border-emerald-800 dark:text-emerald-200"
-                  >
-                    {tr("event.order.my_orders", "Meus pedidos")}
-                  </Link>
-                )}
-                <Link
-                  href={`/store/${encodeURIComponent(sellerId)}`}
-                  className="inline-flex min-h-10 items-center justify-center rounded-xl border border-emerald-300 px-4 py-2 text-xs font-black text-emerald-800 dark:border-emerald-800 dark:text-emerald-200"
-                >
-                  {tr("event.order.visit_store", "Conheça a loja")}
-                </Link>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {lastOrderId && (
-          <div className="border border-neutral-200 dark:border-neutral-800 rounded-3xl bg-neutral-50 dark:bg-neutral-900/30 p-5 space-y-4 shadow-sm animate-fade-in">
-            <div className="flex items-center justify-between border-b border-neutral-100 dark:border-neutral-800 pb-2">
-              <span className="text-xs font-black uppercase text-neutral-400">{tr("event.chat.title", "Chat")}</span>
-
-              <button type="button" onClick={() => setChatOpen(!chatOpen)} className="text-xs font-black underline text-neutral-800 dark:text-white">
-                {chatOpen ? tr("event.chat.close", "Fechar") : tr("event.chat.open", "Abrir")}
+              <button
+                type="button"
+                onClick={() => setCheckoutOpen(false)}
+                disabled={submitting}
+                className="flex h-10 w-10 items-center justify-center rounded-xl border border-neutral-200 bg-white text-lg font-black text-neutral-600 disabled:opacity-30 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300"
+              >
+                ×
               </button>
             </div>
 
-            {chatOpen && (
-              <div className="space-y-3">
-                <div className="h-[250px] overflow-y-auto rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-4 space-y-3 flex flex-col scrollbar-none">
-                  {chatLoading ? (
-                    <p className="text-xs font-bold text-neutral-400 text-center py-6">
-                      {tr("event.chat.loading", "Carregando...")}
-                    </p>
-                  ) : messages.length === 0 ? (
-                    <p className="text-xs font-bold text-neutral-400 text-center py-6">
-                      {tr("event.chat.empty", "Pedido recebido. Se precisar, envie uma mensagem ao vendedor.")}
-                    </p>
-                  ) : (
-                    messages.map((m) => {
-                      const mine = m.senderRole === "customer";
-
-                      return (
-                        <div key={m.id} className={cn("flex w-full", mine ? "justify-end" : "justify-start")}>
-                          <div
-                            className={cn(
-                              "max-w-[80%] rounded-2xl px-3.5 py-2 text-xs font-bold leading-relaxed shadow-sm",
-                              mine
-                                ? "bg-black text-white dark:bg-white dark:text-black rounded-tr-none"
-                                : "bg-neutral-100 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-200 rounded-tl-none"
+            <div ref={checkoutScrollRef} className="overflow-y-auto p-5 sm:p-6">
+      <section className="space-y-4 border-t border-neutral-200 dark:border-neutral-800 pt-6">
+                      <h2 className="text-sm font-black uppercase tracking-widest text-neutral-400">
+                        {tr("event.customer.title", "2. Informe seu nome")}
+                      </h2>
+              
+                      <div className="space-y-3">
+                        <input
+                          value={customerName}
+                          onChange={(e) => setCustomerName(e.target.value)}
+                          placeholder={tr("event.form.customer_name", "Seu nome")}
+                          className="w-full rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-4 py-3 text-sm text-neutral-900 dark:text-white focus:outline-none"
+                        />
+              
+                        <input
+                          value={customerPhone}
+                          onChange={(e) => setCustomerPhone(e.target.value)}
+                          placeholder={tr("event.form.customer_phone", "Telefone / WhatsApp")}
+                          inputMode="tel"
+                          autoComplete="tel"
+                          className="w-full rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-4 py-3 text-sm text-neutral-900 dark:text-white focus:outline-none"
+                        />
+              
+                        <textarea
+                          value={note}
+                          onChange={(e) => setNote(e.target.value)}
+                          placeholder={tr("event.form.note", "Observação")}
+                          className="w-full rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-4 py-3 text-sm text-neutral-900 dark:text-white focus:outline-none min-h-[90px]"
+                        />
+                      </div>
+                    </section>
+              
+                    <section className="bg-neutral-50 dark:bg-neutral-900/40 border border-neutral-200 dark:border-neutral-800 rounded-[2rem] p-5 space-y-4">
+                      <h2 className="text-sm font-black uppercase tracking-widest text-neutral-400">
+                        {tr("event.delivery.title", "3. Escolha entrega, data e hora")}
+                      </h2>
+              
+                      <div className="space-y-2">
+                        <p className="text-[10px] font-black uppercase tracking-widest text-neutral-400">
+                          {tr("event.delivery.mode_title", "Tipo de entrega")}
+                        </p>
+              
+                        <div className="flex gap-2 flex-wrap">
+                          {canPickup && (
+                            <button type="button" onClick={() => setDeliveryMode("pickup")} className={pill(deliveryMode === "pickup")}>
+                              {tr("event.delivery.pickup", "Retirada no local")}
+                            </button>
+                          )}
+              
+                          {canDelivery && (
+                            <button type="button" onClick={() => setDeliveryMode("delivery")} className={pill(deliveryMode === "delivery")}>
+                              {tr("event.delivery.delivery", "Entrega")}
+                            </button>
+                          )}
+              
+                          <button type="button" onClick={() => setDeliveryMode("none")} className={pill(deliveryMode === "none")}>
+                            {tr("event.common.to_be_arranged", "A combinar")}
+                          </button>
+                        </div>
+                      </div>
+              
+                      <div className="space-y-3 pt-3">
+                        {productionSchedule.required && (
+                          <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm font-bold leading-relaxed text-emerald-900 dark:border-emerald-900/50 dark:bg-emerald-950/20 dark:text-emerald-200">
+                            {eventProductionScheduleNotice(
+                              language,
+                              productionSchedule.maxLeadTimeDays,
+                              productionSchedule.earliestDate,
+                              locale,
                             )}
+                          </div>
+                        )}
+              
+                        {event.deliveryDates.length > 0 && (
+                          <div className="space-y-2">
+                            <p className="text-[10px] font-black uppercase tracking-widest text-neutral-400">
+                              {tr("event.date.title", "Data")}
+                            </p>
+              
+                            <div className="flex flex-wrap gap-2">
+                              {event.deliveryDates.map((date) => (
+                                <button
+                                  key={date}
+                                  type="button"
+                                  disabled={
+                                    productionSchedule.required &&
+                                    compareDateKeys(date, productionSchedule.earliestDate) < 0
+                                  }
+                                  onClick={() => {
+                                    setDateOption("event-date");
+                                    setSelectedDate(date);
+                                  }}
+                                  className={`${pill(dateOption === "event-date" && selectedDate === date)} disabled:cursor-not-allowed disabled:opacity-35`}
+                                >
+                                  {date}
+                                </button>
+                              ))}
+              
+                              <button type="button" onClick={() => setDateOption("no-preference")} className={pill(dateOption === "no-preference")}>
+                                {tr("event.common.to_be_arranged", "A combinar")}
+                              </button>
+                            </div>
+                          </div>
+                        )}
+              
+                        <div className="space-y-2">
+                          <p className="text-[10px] font-black uppercase tracking-widest text-neutral-400">
+                            {tr("event.time.title", "Hora")}
+                          </p>
+              
+                          <div className="flex flex-wrap gap-2">
+                            <button type="button" onClick={() => setTimeOption("no-preference")} className={pill(timeOption === "no-preference")}>
+                              {tr("event.common.to_be_arranged", "A combinar")}
+                            </button>
+              
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setTimeOption("custom");
+                                if (selectedHour == null) setSelectedHour(12);
+                                if (selectedMinute == null) setSelectedMinute(0);
+                              }}
+                              className={pill(timeOption === "custom")}
+                            >
+                              {tr("event.time.choose", "Escolher hora")}
+                            </button>
+                          </div>
+              
+                          {timeOption === "custom" && (
+                            <div className="grid grid-cols-2 gap-3">
+                              <select
+                                value={selectedHour ?? 12}
+                                onChange={(e) => setSelectedHour(Number(e.target.value))}
+                                className="rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-4 py-3 text-sm text-neutral-900 dark:text-white"
+                              >
+                                {Array.from({ length: 15 }, (_, i) => i + 8).map((h) => (
+                                <option key={h} value={h}>
+                                  {lang === "ja"
+                                    ? `${String(h).padStart(2, "0")}時`
+                                    : `${String(h).padStart(2, "0")}h`}
+                                </option>
+                                ))}
+                              </select>
+              
+                              <select
+                                value={selectedMinute ?? 0}
+                                onChange={(e) => setSelectedMinute(Number(e.target.value))}
+                                className="rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-4 py-3 text-sm text-neutral-900 dark:text-white"
+                              >
+                                {[0, 15, 30, 45].map((m) => (
+                                <option key={m} value={m}>
+                                  {lang === "ja"
+                                    ? `${String(m).padStart(2, "0")}分`
+                                    : lang === "en"
+                                      ? `${String(m).padStart(2, "0")} min`
+                                      : `${String(m).padStart(2, "0")}min`}
+                                </option>
+                                ))}
+                              </select>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+              
+                      {deliveryMode === "delivery" && (
+                        <div className="space-y-3">
+                          <button
+                            type="button"
+                            onClick={handleGetLocation}
+                            disabled={gettingLocation}
+                            className="w-full bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 text-neutral-900 dark:text-white rounded-xl py-3 text-xs font-black uppercase tracking-wider shadow-sm transition active:scale-[0.99]"
                           >
-                            <p className="whitespace-pre-wrap break-words">{m.text}</p>
-                            <span className="text-[9px] font-mono block text-right mt-1 opacity-60">
-                              {m.createdAt ? fmtChatTime(m.createdAt) : ""}
-                            </span>
+                            {gettingLocation ? tr("common.loading", "Carregando...") : tr("event.location.get", "Enviar minha localização")}
+                          </button>
+              
+                          {locationLink && <p className="text-xs text-neutral-500 break-all">{locationLink}</p>}
+                        </div>
+                      )}
+              
+                      {deliveryMode === "pickup" && (event.pickupLink || event.pickupNote) && (
+                        <div className="rounded-2xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 p-4 space-y-2">
+                          {event.pickupNote && <p className="text-xs font-bold text-neutral-500">{event.pickupNote}</p>}
+                          {event.pickupLink && (
+                            <a href={event.pickupLink} target="_blank" rel="noreferrer" className="text-xs font-black underline text-blue-600 dark:text-blue-400">
+                              {tr("event.pickup.open_map", "Abrir local de retirada")}
+                            </a>
+                          )}
+                        </div>
+                      )}
+                    </section>
+              
+                    <section className="space-y-4 border-t border-neutral-200 dark:border-neutral-800 pt-6">
+                      <div className="rounded-[2rem] border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-5 space-y-3 shadow-sm">
+                        <h2 className="text-sm font-black uppercase tracking-widest text-neutral-400">
+                          {tr("event.order.summary", "4. Finalizar pedido")}
+                        </h2>
+              
+                        <div className="space-y-1 text-xs font-bold text-neutral-500 dark:text-neutral-400">
+                          <p>
+                            {tr("event.form.customer_name", "Seu nome")}:{" "}
+                            <span className="text-neutral-900 dark:text-white">{customerName.trim() || "—"}</span>
+                          </p>
+                          <p>
+                            {tr("event.form.customer_phone", "Telefone")}: {" "}
+                            <span className="text-neutral-900 dark:text-white">{customerPhone.trim() || "—"}</span>
+                          </p>
+                          <p>
+                            {tr("event.whatsapp.mode", "Modo")}:{" "}
+                            <span className="text-neutral-900 dark:text-white">{getDeliveryModeLabel(deliveryMode)}</span>
+                          </p>
+                          <p>
+                            {tr("event.whatsapp.date", "Data")}:{" "}
+                            <span className="text-neutral-900 dark:text-white">{getChosenDate()}</span>
+                          </p>
+                          <p>
+                            {tr("event.whatsapp.time", "Hora")}:{" "}
+                            <span className="text-neutral-900 dark:text-white">{getChosenTimeLabel()}</span>
+                          </p>
+                          <p>
+                            {tr("event.order.items_count", "Itens")}:{" "}
+                            <span className="text-neutral-900 dark:text-white">{totalItems}</span>
+                          </p>
+                        </div>
+              
+                        {stockConfirmationItems.length > 0 && (
+                          <p className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-bold leading-relaxed text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-200">
+                            {language === "ja"
+                              ? `在庫確認が必要な商品があります: ${stockConfirmationItems
+                                  .map((item) => `${item.name} (+${item.shortage})`)
+                                  .join("、")}。注文は保留となり、販売者が確認します。`
+                              : language === "en"
+                                ? `Some items exceed current stock: ${stockConfirmationItems
+                                    .map((item) => `${item.name} (+${item.shortage})`)
+                                    .join(", ")}. The order will remain pending for seller confirmation.`
+                                : `Alguns itens ultrapassam o estoque atual: ${stockConfirmationItems
+                                    .map((item) => `${item.name} (+${item.shortage})`)
+                                    .join(", ")}. O pedido ficará pendente para confirmação do seller.`}
+                          </p>
+                        )}
+              
+                        {subtotalAmount > 0 && (
+                          <RewardsCheckoutPanel
+                            language={language}
+                            sellerId={sellerId}
+                            returnTo={`/event/${sellerId}/${id}`}
+                            registered={customerSession.registered}
+                            loading={customerRewards.loading}
+                            wallet={customerRewards.wallet}
+                            currency={currency}
+                            locale={locale}
+                            cartLines={orderableIds
+                              .map((productId) => ({
+                                productId,
+                                name: productsData[productId]?.name || productId,
+                                quantity: quantities[productId] || 0,
+                                unitPriceMinor: productsData[productId]?.priceMinor || 0,
+                              }))
+                              .filter((line) => line.quantity > 0)}
+                            merchandisePayableMinor={merchandisePayableBeforeRewardsMinor}
+                            offerApplied={Boolean(offerEvaluation?.applicable)}
+                            selection={rewardSelection}
+                            maximumDiscountPoints={rewardEvaluation.maximumDiscountPoints}
+                            pointsToEarn={customerVisiblePointsToEarn}
+                            onChange={setRewardSelection}
+                          />
+                        )}
+              
+                        {subtotalAmount > 0 && eventPointsAssignedToPresenter && !currentCustomerReceivesEventPoints && (
+                          <div className="rounded-2xl border border-violet-200 bg-violet-50 px-4 py-3 text-xs font-bold leading-relaxed text-violet-900 dark:border-violet-900/60 dark:bg-violet-950/25 dark:text-violet-200">
+                            {language === "ja"
+                              ? `このイベントで発生する獲得ポイントは${event?.rewardRecipientName || "担当販売者"}に付与されます。お客様自身の保有ポイントは割引に使用できます。`
+                              : language === "en"
+                                ? `Points generated by this event will be credited to ${event?.rewardRecipientName || "the event presenter"}. You can still use your own balance as a discount.`
+                                : `Os pontos gerados por este evento serão creditados a ${event?.rewardRecipientName || "quem está apresentando e vendendo no evento"}. Você ainda pode usar seu próprio saldo como desconto.`}
+                          </div>
+                        )}
+              
+                        {subtotalAmount > 0 && (
+                          <div className="space-y-1 rounded-2xl bg-neutral-50 p-4 text-sm font-bold dark:bg-neutral-950/60">
+                            <div className="flex items-center justify-between text-neutral-500">
+                              <span>{tr("event.order.subtotal", "Subtotal")}</span>
+                              <span>{formatMoneyMinor(subtotalMinor, currency, locale)}</span>
+                            </div>
+                            {discountMinor > 0 && (
+                              <div className="flex items-center justify-between text-emerald-600 dark:text-emerald-400">
+                                <span>{tr("event.order.discount", "Desconto")}</span>
+                                <span>- {formatMoneyMinor(discountMinor, currency, locale)}</span>
+                              </div>
+                            )}
+                            {rewardEvaluation.discountMinor > 0 && (
+                              <div className="flex items-center justify-between text-violet-600 dark:text-violet-400">
+                                <span>{language === "ja" ? "ポイント割引" : language === "en" ? "Points discount" : "Desconto em pontos"}</span>
+                                <span>- {formatMoneyMinor(rewardEvaluation.discountMinor, currency, locale)}</span>
+                              </div>
+                            )}
+                            <div className="flex items-center justify-between border-t border-neutral-200 pt-2 text-base font-black text-neutral-900 dark:border-neutral-800 dark:text-white">
+                              <span>{tr("event.order.total", "Total")}</span>
+                              <span className="text-xl text-emerald-600 dark:text-emerald-400">
+                                {formatMoneyMinor(totalAmountMinor, currency, locale)}
+                              </span>
+                            </div>
+                          </div>
+                        )}
+              
+                        {formError && (
+                          <div
+                            ref={formErrorRef}
+                            role="alert"
+                            aria-live="assertive"
+                            className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-black text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300"
+                          >
+                            {formError}
+                          </div>
+                        )}
+              
+                        <button
+                          type="button"
+                          onClick={handleFinalize}
+                          disabled={!canSubmit}
+                          className="w-full bg-green-600 text-white py-4 rounded-2xl font-black text-sm uppercase tracking-wider transition hover:opacity-95 shadow-xl disabled:opacity-30"
+                        >
+                          {submitting ? tr("event.order.finalizing", "Finalizando...") : tr("event.order.finalize_pwa", "Finalizar pedido")}
+                        </button>
+              
+                        {!canSubmit && (
+                          <p className="text-[11px] font-bold text-neutral-400 text-center">
+                            {tr("event.order.fill_required_hint", "Escolha produtos, informe nome e telefone e selecione entrega/data/hora para finalizar.")}
+                          </p>
+                        )}
+                      </div>
+              
+                      {lastOrderId && (
+                        <div className="rounded-3xl border border-emerald-200 bg-emerald-50 p-5 shadow-sm animate-fade-in dark:border-emerald-900/60 dark:bg-emerald-950/30">
+                          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                            <div>
+                              <p className="text-xs font-black uppercase tracking-widest text-emerald-600 dark:text-emerald-300">
+                                {tr("event.order.confirmation_title", "Pedido recebido")}
+                              </p>
+                              <p className="mt-1 text-sm font-black text-emerald-950 dark:text-emerald-100">
+                                {tr("event.order.number", "Pedido")} #{lastOrderId}
+                              </p>
+                              <p className="mt-1 text-xs font-medium text-emerald-800/80 dark:text-emerald-200/70">
+                                {lastCustomerOrderRefId
+                                  ? tr("event.order.saved_account", "O pedido foi salvo na sua conta e poderá ser acompanhado em Meus pedidos.")
+                                  : tr("event.order.guest_saved", "Guarde o número do pedido para falar com o vendedor.")}
+                              </p>
+                              {(lastPointsRedeemed > 0 || lastPointsToEarn > 0 || lastPointsAssignedToPresenter > 0) && (
+                                <div className="mt-3 rounded-xl bg-violet-100/80 p-3 text-xs font-bold text-violet-800 dark:bg-violet-950/50 dark:text-violet-200">
+                                  {lastPointsRedeemed > 0 && (
+                                    <p>{language === "ja" ? `${lastPointsRedeemed}ポイント使用しました。` : language === "en" ? `${lastPointsRedeemed} points used.` : `${lastPointsRedeemed} pontos utilizados.`}</p>
+                                  )}
+                                  {lastPointsToEarn > 0 && (
+                                    <p className={lastPointsRedeemed > 0 ? "mt-1" : ""}>{language === "ja" ? `受け渡し完了後に${lastPointsToEarn}ポイント獲得します。` : language === "en" ? `You will earn ${lastPointsToEarn} points after delivery.` : `Você ganhará ${lastPointsToEarn} pontos após a entrega.`}</p>
+                                  )}
+                                  {lastPointsAssignedToPresenter > 0 && (
+                                    <p className={lastPointsRedeemed > 0 || lastPointsToEarn > 0 ? "mt-1" : ""}>
+                                      {language === "ja"
+                                        ? `${lastPointsAssignedToPresenter}ポイントは受け渡し完了後に${lastRewardRecipientName || "イベント担当者"}へ付与されます。`
+                                        : language === "en"
+                                          ? `${lastPointsAssignedToPresenter} points will be credited to ${lastRewardRecipientName || "the event presenter"} after delivery.`
+                                          : `${lastPointsAssignedToPresenter} pontos serão creditados a ${lastRewardRecipientName || "quem apresentou o evento"} após a entrega.`}
+                                    </p>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+              
+                            <div className="flex flex-wrap gap-2">
+                              {lastCustomerOrderRefId && (
+                                <Link
+                                  href={`/customer/orders/${encodeURIComponent(lastCustomerOrderRefId)}`}
+                                  className="inline-flex min-h-10 items-center justify-center rounded-xl bg-emerald-600 px-4 py-2 text-xs font-black text-white transition hover:bg-emerald-700"
+                                >
+                                  {tr("event.order.track", "Acompanhar pedido")}
+                                </Link>
+                              )}
+                              {customerSession.registered && (
+                                <Link
+                                  href="/customer/orders"
+                                  className="inline-flex min-h-10 items-center justify-center rounded-xl border border-emerald-300 px-4 py-2 text-xs font-black text-emerald-800 dark:border-emerald-800 dark:text-emerald-200"
+                                >
+                                  {tr("event.order.my_orders", "Meus pedidos")}
+                                </Link>
+                              )}
+                              <Link
+                                href={`/store/${encodeURIComponent(sellerId)}`}
+                                className="inline-flex min-h-10 items-center justify-center rounded-xl border border-emerald-300 px-4 py-2 text-xs font-black text-emerald-800 dark:border-emerald-800 dark:text-emerald-200"
+                              >
+                                {tr("event.order.visit_store", "Conheça a loja")}
+                              </Link>
+                            </div>
                           </div>
                         </div>
-                      );
-                    })
-                  )}
-
-                  <div ref={chatEndRef} />
-                </div>
-
-                <div className="flex gap-2 bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 p-1.5 rounded-xl">
-                  <input
-                    className="flex-1 bg-transparent px-2.5 text-xs text-neutral-900 dark:text-white focus:outline-none"
-                    value={chatText}
-                    onChange={(e) => setChatText(e.target.value)}
-                    placeholder={tr("event.chat.placeholder", "Digite sua mensagem...")}
-                  />
-
-                  <button
-                    type="button"
-                    onClick={handleSendChat}
-                    disabled={!chatText.trim()}
-                    className="rounded-lg bg-black dark:bg-white text-white dark:text-black text-xs font-black uppercase tracking-wider px-4 py-2 disabled:opacity-40"
-                  >
-                    {tr("event.chat.send", "Enviar")}
-                  </button>
-                </div>
-              </div>
-            )}
+                      )}
+              
+                      {lastOrderId && (
+                        <div className="border border-neutral-200 dark:border-neutral-800 rounded-3xl bg-neutral-50 dark:bg-neutral-900/30 p-5 space-y-4 shadow-sm animate-fade-in">
+                          <div className="flex items-center justify-between border-b border-neutral-100 dark:border-neutral-800 pb-2">
+                            <span className="text-xs font-black uppercase text-neutral-400">{tr("event.chat.title", "Chat")}</span>
+              
+                            <button type="button" onClick={() => setChatOpen(!chatOpen)} className="text-xs font-black underline text-neutral-800 dark:text-white">
+                              {chatOpen ? tr("event.chat.close", "Fechar") : tr("event.chat.open", "Abrir")}
+                            </button>
+                          </div>
+              
+                          {chatOpen && (
+                            <div className="space-y-3">
+                              <div className="h-[250px] overflow-y-auto rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-4 space-y-3 flex flex-col scrollbar-none">
+                                {chatLoading ? (
+                                  <p className="text-xs font-bold text-neutral-400 text-center py-6">
+                                    {tr("event.chat.loading", "Carregando...")}
+                                  </p>
+                                ) : messages.length === 0 ? (
+                                  <p className="text-xs font-bold text-neutral-400 text-center py-6">
+                                    {tr("event.chat.empty", "Pedido recebido. Se precisar, envie uma mensagem ao vendedor.")}
+                                  </p>
+                                ) : (
+                                  messages.map((m) => {
+                                    const mine = m.senderRole === "customer";
+              
+                                    return (
+                                      <div key={m.id} className={cn("flex w-full", mine ? "justify-end" : "justify-start")}>
+                                        <div
+                                          className={cn(
+                                            "max-w-[80%] rounded-2xl px-3.5 py-2 text-xs font-bold leading-relaxed shadow-sm",
+                                            mine
+                                              ? "bg-black text-white dark:bg-white dark:text-black rounded-tr-none"
+                                              : "bg-neutral-100 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-200 rounded-tl-none"
+                                          )}
+                                        >
+                                          <p className="whitespace-pre-wrap break-words">{m.text}</p>
+                                          <span className="text-[9px] font-mono block text-right mt-1 opacity-60">
+                                            {m.createdAt ? fmtChatTime(m.createdAt) : ""}
+                                          </span>
+                                        </div>
+                                      </div>
+                                    );
+                                  })
+                                )}
+              
+                                <div ref={chatEndRef} />
+                              </div>
+              
+                              <div className="flex gap-2 bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 p-1.5 rounded-xl">
+                                <input
+                                  className="flex-1 bg-transparent px-2.5 text-xs text-neutral-900 dark:text-white focus:outline-none"
+                                  value={chatText}
+                                  onChange={(e) => setChatText(e.target.value)}
+                                  placeholder={tr("event.chat.placeholder", "Digite sua mensagem...")}
+                                />
+              
+                                <button
+                                  type="button"
+                                  onClick={handleSendChat}
+                                  disabled={!chatText.trim()}
+                                  className="rounded-lg bg-black dark:bg-white text-white dark:text-black text-xs font-black uppercase tracking-wider px-4 py-2 disabled:opacity-40"
+                                >
+                                  {tr("event.chat.send", "Enviar")}
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </section>
+            </div>
           </div>
-        )}
-      </section>
+        </div>
+      )}
     </main>
   );
 }
@@ -2325,6 +2680,7 @@ function EventProductGrid({
   acceptOrdersWithoutStock,
   language,
   madeToOrder,
+  showScheduledPriceCards,
   onAdjust,
   tr,
   emptyMessage,
@@ -2340,6 +2696,7 @@ function EventProductGrid({
   acceptOrdersWithoutStock: boolean;
   language: "pt" | "en" | "ja";
   madeToOrder: boolean;
+  showScheduledPriceCards: boolean;
   onAdjust: (productId: string, delta: number) => void;
   tr: (key: string, fallback: string) => string;
   emptyMessage: string;
@@ -2424,7 +2781,7 @@ function EventProductGrid({
                   </span>
                 )}
 
-                {info?.scheduledPriceStatus === "upcoming" && scheduledEvaluation.shouldShowNotice && (
+                {showScheduledPriceCards && info?.scheduledPriceStatus === "upcoming" && scheduledEvaluation.shouldShowNotice && (
                   <span className={`absolute right-2 top-2 rounded-full px-2 py-1 text-[9px] font-black uppercase tracking-wider shadow-lg ${scheduledPresentation.badgeClassName}`}>
                     {scheduledPresentation.title}
                   </span>
@@ -2472,7 +2829,7 @@ function EventProductGrid({
                     )}
                 </div>
 
-                {info?.scheduledPriceStatus === "upcoming" && schedule?.nextPriceMinor && scheduledEvaluation.shouldShowNotice && (
+                {showScheduledPriceCards && info?.scheduledPriceStatus === "upcoming" && schedule?.nextPriceMinor && scheduledEvaluation.shouldShowNotice && (
                   <div className={`rounded-xl border px-3 py-2 text-[10px] font-bold leading-relaxed ${scheduledPresentation.cardClassName}`}>
                     <p className="font-black uppercase tracking-wider">{scheduledPresentation.title}</p>
                     <p className="font-black">
@@ -2502,7 +2859,7 @@ function EventProductGrid({
                   </div>
                 )}
 
-                {info?.scheduledPriceStatus === "active" && scheduledEvaluation.noticePhase === "active_recent" && (
+                {showScheduledPriceCards && info?.scheduledPriceStatus === "active" && scheduledEvaluation.noticePhase === "active_recent" && (
                   <p className={`rounded-xl border px-3 py-2 text-[10px] font-bold ${scheduledPresentation.cardClassName}`}>
                     <span className="mb-1 block font-black uppercase tracking-wider">{scheduledPresentation.title}</span>
                     {language === "ja"
