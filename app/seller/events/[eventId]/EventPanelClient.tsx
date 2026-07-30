@@ -25,7 +25,7 @@ import {
   formatMoneyMinor,
 } from "@/app/lib/money";
 import { normalizeProductInventory } from "@/app/lib/inventory-schema";
-import { Gift, Loader2, Search, Sparkles, UserRound } from "lucide-react";
+import { Gift, Loader2, Printer, Search, Sparkles, UserRound } from "lucide-react";
 import {
   normalizeOffer,
   offerIsCurrentlyActive,
@@ -432,6 +432,11 @@ const [messageSummaries, setMessageSummaries] = useState<Record<string, MessageS
   const [ordersError, setOrdersError] = useState<string | null>(null);
 
   const [filterDate, setFilterDate] = useState<string>("todas");
+  const [printingProduction, setPrintingProduction] = useState(false);
+  const [productionPrintFeedback, setProductionPrintFeedback] = useState<{
+    tone: "success" | "error";
+    message: string;
+  } | null>(null);
 
   useEffect(() => {
     if (!sellerUid || !safeId || !authUser) return;
@@ -776,6 +781,108 @@ return validOrders.filter((o) => o.deliveryDate === filterDate);
     });
     return Object.entries(map).map(([name, totalQty]) => ({ name, totalQty })).sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
   }, [filteredOrders, resolveItemLabel]);
+
+  const handlePrintProduction = useCallback(async () => {
+    setProductionPrintFeedback(null);
+
+    if (!authUser || !sellerUid || !safeId) {
+      setProductionPrintFeedback({
+        tone: "error",
+        message:
+          lang === "ja"
+            ? "印刷するには再度ログインしてください。"
+            : lang === "en"
+              ? "Sign in again before printing."
+              : "Entre novamente antes de imprimir.",
+      });
+      return;
+    }
+
+    if (productionSummary.length === 0) {
+      setProductionPrintFeedback({
+        tone: "error",
+        message:
+          lang === "ja"
+            ? "この条件では印刷する商品がありません。"
+            : lang === "en"
+              ? "There are no items to print for this filter."
+              : "Não há itens para imprimir neste filtro.",
+      });
+      return;
+    }
+
+    try {
+      setPrintingProduction(true);
+      const token = await authUser.getIdToken();
+      const requestId =
+        typeof window !== "undefined" && typeof window.crypto?.randomUUID === "function"
+          ? window.crypto.randomUUID()
+          : `event-production-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+      const response = await fetch("/api/print/event-production", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          sellerId: sellerUid,
+          eventId: safeId,
+          deliveryDate: filterDate === "todas" ? null : filterDate,
+          requestId,
+        }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as {
+        error?: string;
+        totalUnits?: number;
+        orderCount?: number;
+        jobs?: Array<{ profileName?: string }>;
+      };
+
+      if (!response.ok) {
+        throw new Error(
+          payload.error ||
+            (lang === "ja"
+              ? "製造リストを印刷キューに送信できませんでした。"
+              : lang === "en"
+                ? "Could not send the production list to the print queue."
+                : "Não foi possível enviar a lista de produção para a fila de impressão."),
+        );
+      }
+
+      const printerCount = Array.isArray(payload.jobs) ? payload.jobs.length : 0;
+      const totalUnits = Math.max(0, Math.floor(Number(payload.totalUnits) || 0));
+      const orderCount = Math.max(0, Math.floor(Number(payload.orderCount) || 0));
+      const message =
+        lang === "ja"
+          ? `${orderCount}件の注文、合計${totalUnits}個を${printerCount}台のプリンターへ送信しました。`
+          : lang === "en"
+            ? `Queued ${totalUnits} units from ${orderCount} orders on ${printerCount} production printer${printerCount === 1 ? "" : "s"}.`
+            : `${totalUnits} unidades de ${orderCount} pedidos foram enviadas para ${printerCount} impressora${printerCount === 1 ? "" : "s"} de produção.`;
+
+      setProductionPrintFeedback({ tone: "success", message });
+    } catch (printError) {
+      setProductionPrintFeedback({
+        tone: "error",
+        message:
+          printError instanceof Error
+            ? printError.message
+            : lang === "ja"
+              ? "製造リストを印刷できませんでした。"
+              : lang === "en"
+                ? "Could not print the production list."
+                : "Não foi possível imprimir a lista de produção.",
+      });
+    } finally {
+      setPrintingProduction(false);
+    }
+  }, [
+    authUser,
+    filterDate,
+    lang,
+    productionSummary.length,
+    safeId,
+    sellerUid,
+  ]);
 
   const selectedProductSet = useMemo(() => new Set(productIds), [productIds]);
   const selectedOfferSet = useMemo(() => new Set(offerIds), [offerIds]);
@@ -1388,11 +1495,50 @@ const markOrderMessagesAsRead = useCallback(
               <h2 className="text-sm font-black uppercase tracking-widest text-neutral-400 dark:text-neutral-500">{t("eventPanel.production.title")}</h2>
               <p className="text-xs text-neutral-400 font-medium">{t("eventPanel.production.subtitle")}</p>
             </div>
-            <select className="border border-neutral-200 dark:border-neutral-800 rounded-xl px-3 py-2 text-xs bg-white dark:bg-neutral-900 font-bold h-[38px]" value={filterDate} onChange={(e) => setFilterDate(e.target.value)}>
-              <option value="todas">{t("eventPanel.production.filterAll")}</option>
-              {uniqueOrderDates.map((d) => <option key={d} value={d}>{d}</option>)}
-            </select>
+            <div className="grid w-full grid-cols-1 items-stretch gap-2 sm:w-auto sm:grid-cols-[minmax(132px,auto)_auto] sm:items-center">
+              <select
+                className="box-border h-11 w-full rounded-xl border border-neutral-200 bg-white px-3 text-xs font-bold leading-none text-neutral-900 dark:border-neutral-800 dark:bg-neutral-900 dark:text-white"
+                value={filterDate}
+                onChange={(e) => {
+                  setFilterDate(e.target.value);
+                  setProductionPrintFeedback(null);
+                }}
+              >
+                <option value="todas">{t("eventPanel.production.filterAll")}</option>
+                {uniqueOrderDates.map((d) => <option key={d} value={d}>{d}</option>)}
+              </select>
+              <button
+                type="button"
+                onClick={() => void handlePrintProduction()}
+                disabled={printingProduction || productionSummary.length === 0}
+                className="box-border inline-flex h-11 w-full items-center justify-center gap-2 whitespace-nowrap rounded-xl bg-black px-4 text-xs font-black uppercase leading-none tracking-wider text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40 sm:w-auto dark:bg-white dark:text-black"
+              >
+                {printingProduction ? (
+                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                ) : (
+                  <Printer className="h-4 w-4" aria-hidden="true" />
+                )}
+                {printingProduction
+                  ? t("eventPanel.production.printing")
+                  : filterDate === "todas"
+                    ? t("eventPanel.production.printAll")
+                    : t("eventPanel.production.printDate")}
+              </button>
+            </div>
           </div>
+
+          {productionPrintFeedback && (
+            <div
+              className={`rounded-2xl border px-4 py-3 text-xs font-bold leading-relaxed ${
+                productionPrintFeedback.tone === "success"
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900/50 dark:bg-emerald-950/20 dark:text-emerald-200"
+                  : "border-red-200 bg-red-50 text-red-800 dark:border-red-900/50 dark:bg-red-950/20 dark:text-red-200"
+              }`}
+              role={productionPrintFeedback.tone === "error" ? "alert" : "status"}
+            >
+              {productionPrintFeedback.message}
+            </div>
+          )}
 
           <div className="overflow-hidden border border-neutral-200 dark:border-neutral-800 rounded-2xl bg-white dark:bg-neutral-900 shadow-sm">
             {productionSummary.length === 0 ? (

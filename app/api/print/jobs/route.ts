@@ -292,6 +292,84 @@ async function buildClaimPayload(params: {
     };
   }
 
+  if (job.type === "event_production_summary") {
+    const payload = asRecord(job.eventProductionPayload);
+    const eventId = cleanString(payload.eventId ?? job.eventId, 160);
+    const eventTitle = cleanString(payload.eventTitle, 240) || "Evento";
+    const items = (Array.isArray(payload.items) ? payload.items : [])
+      .map((entry) => {
+        const item = asRecord(entry);
+        const quantity = nonNegativeInteger(item.quantity);
+        const name = cleanString(item.name, 240);
+        if (!name || quantity <= 0) return null;
+        return {
+          productId: cleanString(item.productId, 180),
+          name,
+          quantity,
+          category: cleanString(item.category, 160),
+        };
+      })
+      .filter((item): item is {
+        productId: string;
+        name: string;
+        quantity: number;
+        category: string;
+      } => item !== null)
+      .slice(0, 500);
+
+    if (!eventId || items.length === 0) {
+      throw new PrintApiError(
+        "INVALID_EVENT_PRODUCTION_SUMMARY",
+        "Resumo de produção do evento inválido.",
+        409,
+      );
+    }
+
+    const panelUrl = absoluteAppUrl(
+      origin,
+      `/seller/events/${encodeURIComponent(eventId)}?tab=production`,
+    );
+    const productionSettings: ReceiptCopySettings = {
+      ...receiptSettings.production,
+      qrDestination: "custom",
+      qrCustomUrl: panelUrl,
+      qrLabel: receiptSettings.production.qrLabel || "Abrir produção do evento",
+    };
+    const common = {
+      identity,
+      origin,
+      sellerId,
+      source: "event" as const,
+      eventId,
+      orderId: "production-summary",
+      customerOrderRefId: "",
+    };
+    const generatedAtMillis = timestampMillis(payload.generatedAt);
+
+    return {
+      jobId,
+      type: "event_production_summary",
+      copies: "production",
+      eventProduction: {
+        sellerId,
+        storeName,
+        eventId,
+        eventTitle,
+        deliveryDate: cleanString(payload.deliveryDate, 40),
+        orderCount: nonNegativeInteger(payload.orderCount),
+        totalUnits: nonNegativeInteger(payload.totalUnits) ||
+          items.reduce((sum, item) => sum + item.quantity, 0),
+        generatedAt: generatedAtMillis
+          ? new Date(generatedAtMillis).toISOString()
+          : new Date().toISOString(),
+        items,
+      },
+      receipt: {
+        production: receiptCopyPayload({ ...common, settings: productionSettings }),
+      },
+    };
+  }
+
   const orderPath = cleanString(job.orderPath, 500);
   if (!orderPathAllowed(orderPath, sellerId)) {
     throw new PrintApiError("INVALID_ORDER_PATH", "Caminho do pedido inválido.", 409);
@@ -352,15 +430,16 @@ export async function POST(request: NextRequest) {
     const db = getAdminDb();
     const sellerRef = db.collection("sellers").doc(sellerId);
     const now = admin.firestore.Timestamp.now();
+    const stationCapabilities = Array.isArray(body.capabilities)
+      ? body.capabilities.map((value) => cleanString(value, 40)).filter(Boolean).slice(0, 20)
+      : [];
     const stationStatus = {
       lastSeenAt: now,
       stationName,
       stationVersion: cleanString(body.version, 40) || null,
       platform: cleanString(body.platform, 40) || null,
       arch: cleanString(body.arch, 40) || null,
-      capabilities: Array.isArray(body.capabilities)
-        ? body.capabilities.map((value) => cleanString(value, 40)).filter(Boolean).slice(0, 20)
-        : [],
+      capabilities: stationCapabilities,
       updatedAt: now,
     };
 
@@ -425,7 +504,14 @@ export async function POST(request: NextRequest) {
         .filter((document) => {
           const data = document.data();
           const targetProfileId = cleanString(data.profileId, 100) || "legacy";
-          return targetProfileId === profile.id;
+          if (targetProfileId !== profile.id) return false;
+          if (
+            data.type === "event_production_summary" &&
+            !stationCapabilities.includes("event-production-summary")
+          ) {
+            return false;
+          }
+          return true;
         })
         .sort(
           (left, right) => timestampMillis(left.data().createdAt) - timestampMillis(right.data().createdAt),

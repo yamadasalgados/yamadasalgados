@@ -70,6 +70,21 @@ function itemRows(order, operational, receipt) {
   }).join("");
 }
 
+function productionSummaryRows(summary, receipt) {
+  let previousCategory = "";
+  return (summary.items || []).map((item) => {
+    const category = String(item.category || "").trim();
+    const categoryHeading = category && category !== previousCategory
+      ? `<div class="summary-category">${htmlEscape(category)}</div>`
+      : "";
+    if (category) previousCategory = category;
+    const checklist = receipt.checkboxEnabled
+      ? `<span class="item-check">${htmlEscape(checkboxGlyph(receipt.checkboxStyle))}</span>`
+      : "";
+    return `${categoryHeading}<div class="item summary-item"><div class="item-main"><div class="item-description">${checklist}<div><b>${htmlEscape(item.quantity)}x ${htmlEscape(item.name)}</b></div></div><span class="badge">PRODUZIR</span></div></div>`;
+  }).join("");
+}
+
 function logoBlock(receipt, storeName) {
   if (!receipt.showLogo || !receipt.logoUrl) return "";
   return `<img class="receipt-logo" src="${htmlEscape(receipt.logoUrl)}" alt="${htmlEscape(storeName)}" />`;
@@ -109,6 +124,40 @@ export function receiptDocument(job, copyType, profile = {}) {
       estimatedMm: 100 + (receipt.qrEnabled ? 50 : 0) + (receipt.logoUrl ? 20 : 0),
       profile: shellProfile,
     });
+  }
+
+  if (job.type === "event_production_summary") {
+    const summary = job.eventProduction;
+    const filterLabel = summary.deliveryDate || "Todas as datas";
+    const generatedAt = summary.generatedAt
+      ? new Date(summary.generatedAt).toLocaleString()
+      : new Date().toLocaleString();
+    const body = `
+      <div class="center">
+        ${logoBlock(receipt, summary.storeName)}
+        <h1>${htmlEscape(summary.storeName)}</h1>
+        ${headerTextBlock(receipt)}
+        <h2>RESUMO DE PRODUÇÃO</h2>
+        <div class="order-id">${htmlEscape(summary.eventTitle)}</div>
+      </div>
+      <div class="divider"></div>
+      ${line("Evento", summary.eventTitle)}
+      ${line("Data", filterLabel)}
+      ${line("Pedidos", summary.orderCount)}
+      ${line("Total de unidades", summary.totalUnits, true)}
+      <div class="divider"></div>
+      <h3>ITENS PARA PRODUÇÃO</h3>
+      ${productionSummaryRows(summary, receipt)}
+      ${qrBlock(receipt)}
+      ${footerTextBlock(receipt)}
+      <div class="divider"></div>
+      <div class="center small">Resumo gerado em ${htmlEscape(generatedAt)}</div>
+    `;
+    const categoryCount = new Set((summary.items || []).map((item) => item.category).filter(Boolean)).size;
+    const narrowExtra = shellProfile.paperWidthMm === 58 ? 30 : 0;
+    const customExtra = (receipt.qrEnabled ? 52 : 0) + (receipt.logoUrl ? 22 : 0) + (receipt.headerText ? 12 : 0) + (receipt.footerText ? 18 : 0);
+    const estimatedMm = Math.max(130, 98 + narrowExtra + customExtra + (summary.items?.length || 0) * 17 + categoryCount * 8);
+    return documentShell({ title: "RESUMO DE PRODUÇÃO", body, estimatedMm, profile: shellProfile });
   }
 
   const order = job.order;
@@ -186,6 +235,8 @@ function sharedCss({ width, padding, base, h1, h2, h3, small, orderId, gap, rowL
     .price { font-weight: 900; white-space: nowrap; }
     .options { margin-top: 2px; padding-left: ${optionIndent}; font-size: ${small}; }
     .warning { margin-top: 2px; padding-left: ${optionIndent}; font-size: ${small}; font-weight: 900; }
+    .summary-category { margin: 8px 0 2px; padding: 3px 4px; border-top: ${divider} solid #000; border-bottom: 1px solid #777; font-size: ${small}; font-weight: 900; text-transform: uppercase; letter-spacing: .08em; }
+    .summary-item .badge { min-width: 4.8em; text-align: center; }
     .thanks { margin-top: 8px; font-weight: 900; }
     .qr-block { margin: 10px auto 2px; text-align:center; break-inside:avoid; }
     .qr-image { display:block; width:${qrSize}; height:${qrSize}; margin:0 auto; object-fit:contain; image-rendering:pixelated; }
