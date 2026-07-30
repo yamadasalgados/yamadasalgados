@@ -10,7 +10,8 @@
     "audit:white-label": "node scripts/audit-white-label.mjs",
     "audit:firestore-security": "node scripts/audit-firestore-security.mjs",
     "audit:event-experience": "node scripts/audit-event-experience.mjs",
-    "audit:store-cart-experience": "node scripts/audit-store-cart-experience.mjs"
+    "audit:store-cart-experience": "node scripts/audit-store-cart-experience.mjs",
+    "audit:event-catalog-checkout": "node scripts/audit-event-catalog-checkout.mjs"
   },
   "dependencies": {
     "firebase": "^12.6.0",

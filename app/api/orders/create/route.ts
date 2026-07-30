@@ -204,6 +204,26 @@ function cleanDeliveryMode(value: unknown): DeliveryMode {
   return value === "delivery" || value === "postal" || value === "none" ? value : "pickup";
 }
 
+function cleanDeliveryDate(value: unknown): string {
+  const cleaned = cleanString(value, 80);
+  if (!cleaned) return "";
+
+  const normalized = cleaned.toLocaleLowerCase("pt-BR");
+  const nonDateLabels = new Set([
+    "a combinar",
+    "sem preferência",
+    "sem preferencia",
+    "no preference",
+    "to be arranged",
+    "arranged by seller",
+    "organizado pelo seller",
+    "指定なし",
+    "販売者が手配",
+  ]);
+
+  return nonDateLabels.has(normalized) ? "" : cleaned;
+}
+
 function cleanCurrency(value: unknown): Currency {
   return value === "BRL" || value === "USD" ? value : "JPY";
 }
@@ -380,7 +400,7 @@ function cleanRequest(value: unknown): CleanOrderRequest {
   }
 
   const deliveryMode = cleanDeliveryMode(delivery.mode);
-  const deliveryDate = cleanString(delivery.date, 80);
+  const deliveryDate = cleanDeliveryDate(delivery.date);
   if (deliveryDate && !isValidDateKey(deliveryDate)) {
     throw new OrderError(
       "INVALID_REQUEST",

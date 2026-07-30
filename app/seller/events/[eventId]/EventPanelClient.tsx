@@ -60,6 +60,7 @@ type EventStatus = "active" | "closed" | "cancelled";
 type EventProductMode = "normal" | "made_to_order";
 type ProductSelectionMode = "excluded" | EventProductMode;
 type EventRewardRecipientMode = "customer" | "event_presenter";
+type EventFulfillmentChoice = "none" | "delivery" | "pickup" | "both";
 
 type UserDoc = {
   role?: "seller" | "admin";
@@ -92,6 +93,8 @@ type EventDoc = {
   status?: EventStatus | string;
   pickupLink?: string;
   pickupNote?: string;
+  allowDelivery?: boolean;
+  allowPickup?: boolean;
   messengerId?: string;
   sellerId?: string;
   revenueYen?: number;
@@ -214,6 +217,53 @@ function normalizeEventProductMode(
   fallback: EventProductMode = "normal",
 ): EventProductMode {
   return value === "made_to_order" ? "made_to_order" : value === "normal" ? "normal" : fallback;
+}
+
+function eventFulfillmentChoiceFromFlags(
+  allowDelivery: unknown,
+  allowPickup: unknown,
+): EventFulfillmentChoice {
+  // Legacy events without flags used both options.
+  const delivery = allowDelivery !== false;
+  const pickup = allowPickup !== false;
+  if (delivery && pickup) return "both";
+  if (delivery) return "delivery";
+  if (pickup) return "pickup";
+  return "none";
+}
+
+function eventFulfillmentFlags(choice: EventFulfillmentChoice): {
+  allowDelivery: boolean;
+  allowPickup: boolean;
+} {
+  return {
+    allowDelivery: choice === "delivery" || choice === "both",
+    allowPickup: choice === "pickup" || choice === "both",
+  };
+}
+
+function eventFulfillmentChoiceLabel(
+  choice: EventFulfillmentChoice,
+  language: "pt" | "en" | "ja",
+): string {
+  if (choice === "none") {
+    return language === "ja"
+      ? "お客様に受取方法を聞かない（販売者が手配）"
+      : language === "en"
+        ? "Do not ask the customer (arranged by seller)"
+        : "Não perguntar ao cliente (organizado pelo seller)";
+  }
+  if (choice === "delivery") {
+    return language === "ja" ? "配達" : language === "en" ? "Delivery" : "Entrega";
+  }
+  if (choice === "pickup") {
+    return language === "ja" ? "受取" : language === "en" ? "Pickup" : "Retirada";
+  }
+  return language === "ja"
+    ? "配達または受取"
+    : language === "en"
+      ? "Delivery or pickup"
+      : "Entrega ou retirada";
 }
 
 function buildEventItemPayload(p: ProductDoc, availabilityMode: EventProductMode) {
@@ -366,6 +416,7 @@ const [messageSummaries, setMessageSummaries] = useState<Record<string, MessageS
   const [productAvailabilityModes, setProductAvailabilityModes] = useState<Record<string, EventProductMode>>({});
   const [featuredProductIds, setFeaturedProductIds] = useState<string[]>([]);
   const [offerIds, setOfferIds] = useState<string[]>([]);
+  const [fulfillmentChoice, setFulfillmentChoice] = useState<EventFulfillmentChoice>("both");
   const [showScheduledPriceCards, setShowScheduledPriceCards] = useState(true);
   const [showOfferCards, setShowOfferCards] = useState(true);
 
@@ -502,6 +553,9 @@ const [messageSummaries, setMessageSummaries] = useState<Record<string, MessageS
         setPickupNote(String(data.pickupNote || ""));
         setMessengerId(String(data.messengerId || ""));
         setDeliveryDatesText(Array.isArray(data.deliveryDates) ? data.deliveryDates.join("\n") : "");
+        setFulfillmentChoice(
+          eventFulfillmentChoiceFromFlags(data.allowDelivery, data.allowPickup),
+        );
         const storedRewardAssignment: NonNullable<EventDoc["rewardAssignment"]> =
           data.rewardAssignment && typeof data.rewardAssignment === "object"
             ? data.rewardAssignment
@@ -911,6 +965,7 @@ return validOrders.filter((o) => o.deliveryDate === filterDate);
       const offersById = new Map(allOffers.map((offer) => [offer.id, offer]));
       const cleanedOfferIds = uniqStrings(offerIds).filter((offerId) => offersById.has(offerId));
       const selectedOfferIdSet = new Set(cleanedOfferIds);
+      const fulfillmentFlags = eventFulfillmentFlags(fulfillmentChoice);
 
       const batch = writeBatch(db);
 
@@ -972,6 +1027,8 @@ return validOrders.filter((o) => o.deliveryDate === filterDate);
         pickupLink: pickupLink.trim(),
         pickupNote: pickupNote.trim(),
         messengerId: messengerId.trim(),
+        allowDelivery: fulfillmentFlags.allowDelivery,
+        allowPickup: fulfillmentFlags.allowPickup,
         rewardAssignment: {
           schemaVersion: 1,
           mode: rewardRecipientMode,
@@ -1012,7 +1069,7 @@ return validOrders.filter((o) => o.deliveryDate === filterDate);
     } finally {
       setSaving(false);
     }
-  }, [eventRef, title, region, whatsapp, status, pickupLink, pickupNote, messengerId, rewardRecipientMode, rewardRecipient, deliveryDatesText, productIds, productAvailabilityModes, productById, requiredProductIds, featuredProductIds, allProducts, allOffers, offerIds, showScheduledPriceCards, showOfferCards, authUser?.uid, sellerUid, t, lang]);
+  }, [eventRef, title, region, whatsapp, status, pickupLink, pickupNote, messengerId, fulfillmentChoice, rewardRecipientMode, rewardRecipient, deliveryDatesText, productIds, productAvailabilityModes, productById, requiredProductIds, featuredProductIds, allProducts, allOffers, offerIds, showScheduledPriceCards, showOfferCards, authUser?.uid, sellerUid, t, lang]);
 
       const deliveryOrders = useMemo(() => {
   return orders.filter((o) => {
@@ -1456,6 +1513,53 @@ const markOrderMessagesAsRead = useCallback(
             <Field label={t("eventPanel.config.field.pickupLink")}><input className="w-full border border-neutral-200 dark:border-neutral-800 rounded-xl px-3 py-2.5 text-sm bg-white dark:bg-neutral-900 text-neutral-900 dark:text-white focus:outline-none" value={pickupLink} onChange={(e) => setPickupLink(e.target.value)} /></Field>
             <div className="sm:col-span-2"><Field label={t("eventPanel.config.field.pickupNote")}><input className="w-full border border-neutral-200 dark:border-neutral-800 rounded-xl px-3 py-2.5 text-sm bg-white dark:bg-neutral-900 text-neutral-900 dark:text-white focus:outline-none" value={pickupNote} onChange={(e) => setPickupNote(e.target.value)} /></Field></div>
             <div className="sm:col-span-2"><Field label={t("eventPanel.config.field.deliveryDates")}><textarea className="w-full border border-neutral-200 dark:border-neutral-800 rounded-xl px-3 py-2.5 text-sm min-h-[100px] bg-white dark:bg-neutral-900 text-neutral-900 dark:text-white focus:outline-none resize-none" value={deliveryDatesText} onChange={(e) => setDeliveryDatesText(e.target.value)} /></Field></div>
+          </div>
+
+          <div className="rounded-3xl border border-emerald-200 bg-emerald-50/50 p-6 dark:border-emerald-900/50 dark:bg-emerald-950/10">
+            <div>
+              <h3 className="text-sm font-black text-emerald-950 dark:text-emerald-100">
+                {lang === "ja"
+                  ? "お客様に表示する受取方法"
+                  : lang === "en"
+                    ? "Fulfillment details shown to the customer"
+                    : "Dados de entrega mostrados ao cliente"}
+              </h3>
+              <p className="mt-1 text-xs font-bold leading-relaxed text-emerald-800/70 dark:text-emerald-200/70">
+                {lang === "ja"
+                  ? "販売者が場所と受け渡しをすでに決めている場合は、最初の選択肢を使用すると、公開ページから配達・日付・時間の質問が消えます。"
+                  : lang === "en"
+                    ? "When the seller already knows the location and fulfillment arrangement, choose the first option to hide delivery, date, and time questions from checkout."
+                    : "Quando o seller já sabe onde e como entregará os pedidos, escolha a primeira opção para esconder entrega, data e hora do checkout."}
+              </p>
+            </div>
+
+            <div className="mt-5 grid gap-2 sm:grid-cols-2">
+              {(["none", "delivery", "pickup", "both"] as const).map((choice) => (
+                <label
+                  key={choice}
+                  className={`flex cursor-pointer items-start gap-3 rounded-2xl border bg-white p-4 transition dark:bg-neutral-900 ${
+                    fulfillmentChoice === choice
+                      ? "border-emerald-600 ring-2 ring-emerald-200 dark:border-emerald-400 dark:ring-emerald-950"
+                      : "border-emerald-200 dark:border-emerald-900/50"
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="eventFulfillmentChoice"
+                    checked={fulfillmentChoice === choice}
+                    onChange={() => setFulfillmentChoice(choice)}
+                    disabled={saving}
+                    className="mt-1 h-4 w-4 accent-emerald-600"
+                  />
+                  <span className="text-sm font-black text-neutral-900 dark:text-white">
+                    {eventFulfillmentChoiceLabel(
+                      choice,
+                      lang === "en" || lang === "ja" ? lang : "pt",
+                    )}
+                  </span>
+                </label>
+              ))}
+            </div>
           </div>
 
           <div className="rounded-3xl border border-sky-200 bg-sky-50/50 p-6 dark:border-sky-900/50 dark:bg-sky-950/10">

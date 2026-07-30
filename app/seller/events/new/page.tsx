@@ -39,7 +39,7 @@ import type {
   SupportedCurrency,
 } from "@/app/types/regional";
 
-type DeliveryChoice = "delivery" | "pickup" | "both";
+type DeliveryChoice = "none" | "delivery" | "pickup" | "both";
 type ProductStatus = "active" | "inactive" | "made_to_order" | "hidden";
 type EventProductMode = "normal" | "made_to_order";
 type ProductSelectionMode = "excluded" | EventProductMode;
@@ -124,6 +124,30 @@ function defaultEventProductMode(product?: ProductDoc): EventProductMode {
   return product?.status === "made_to_order" ? "made_to_order" : "normal";
 }
 
+function eventFulfillmentChoiceLabel(
+  choice: DeliveryChoice,
+  language: "pt" | "en" | "ja",
+): string {
+  if (choice === "none") {
+    return language === "ja"
+      ? "お客様に受取方法を聞かない（販売者が手配）"
+      : language === "en"
+        ? "Do not ask the customer (arranged by seller)"
+        : "Não perguntar ao cliente (organizado pelo seller)";
+  }
+  if (choice === "delivery") {
+    return language === "ja" ? "配達" : language === "en" ? "Delivery" : "Entrega";
+  }
+  if (choice === "pickup") {
+    return language === "ja" ? "受取" : language === "en" ? "Pickup" : "Retirada";
+  }
+  return language === "ja"
+    ? "配達または受取"
+    : language === "en"
+      ? "Delivery or pickup"
+      : "Entrega ou retirada";
+}
+
 export default function CreateNewEventPage() {
   const router = useRouter();
   const { t, lang } = useI18n();
@@ -135,7 +159,7 @@ export default function CreateNewEventPage() {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [regionName, setRegionName] = useState("");
-  const [deliveryChoice, setDeliveryChoice] = useState<DeliveryChoice>("pickup");
+  const [deliveryChoice, setDeliveryChoice] = useState<DeliveryChoice>("none");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
 
@@ -582,14 +606,30 @@ export default function CreateNewEventPage() {
 
         <div className="space-y-2">
           <label className="text-xs font-black text-neutral-700 dark:text-neutral-300 uppercase tracking-wider">
-            {t("events.create.form.delivery.label")} *
+            {lang === "ja"
+              ? "お客様に表示する受取方法"
+              : lang === "en"
+                ? "Fulfillment details shown to the customer"
+                : "Dados de entrega mostrados ao cliente"}
           </label>
 
-          <div className="flex gap-4 flex-wrap bg-white dark:bg-neutral-900 p-4 border border-neutral-200 dark:border-neutral-800 rounded-xl">
-            {(["delivery", "pickup", "both"] as const).map((choice) => (
+          <p className="text-[11px] font-bold leading-relaxed text-neutral-500 dark:text-neutral-400">
+            {lang === "ja"
+              ? "販売者が受取場所や配達をすでに決めている場合は、最初の選択肢を使用するとチェックアウトが簡潔になります。"
+              : lang === "en"
+                ? "When the seller already knows where the order will be delivered, choose the first option to keep checkout clean."
+                : "Quando o seller já sabe onde levará os pedidos, escolha a primeira opção para não exibir entrega, data e hora no checkout."}
+          </p>
+
+          <div className="grid gap-2 bg-white p-4 dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-xl sm:grid-cols-2">
+            {(["none", "delivery", "pickup", "both"] as const).map((choice) => (
               <label
                 key={choice}
-                className="flex items-center gap-2 text-xs font-bold text-neutral-800 dark:text-neutral-200 cursor-pointer"
+                className={`flex cursor-pointer items-start gap-2 rounded-xl border p-3 text-xs font-bold transition ${
+                  deliveryChoice === choice
+                    ? "border-black bg-neutral-50 text-neutral-950 dark:border-white dark:bg-neutral-800 dark:text-white"
+                    : "border-neutral-200 text-neutral-600 dark:border-neutral-800 dark:text-neutral-300"
+                }`}
               >
                 <input
                   type="radio"
@@ -597,9 +637,9 @@ export default function CreateNewEventPage() {
                   value={choice}
                   checked={deliveryChoice === choice}
                   onChange={() => setDeliveryChoice(choice)}
-                  className="accent-black dark:accent-white"
+                  className="mt-0.5 accent-black dark:accent-white"
                 />
-                <span>{t(`events.create.form.delivery.${choice}`)}</span>
+                <span>{eventFulfillmentChoiceLabel(choice, lang === "en" || lang === "ja" ? lang : "pt")}</span>
               </label>
             ))}
           </div>

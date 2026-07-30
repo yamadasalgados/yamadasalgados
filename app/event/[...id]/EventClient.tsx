@@ -31,7 +31,7 @@ import {
   query,
   where,
 } from "firebase/firestore";
-import { Gift } from "lucide-react";
+import { Gift, ShoppingCart } from "lucide-react";
 import {
   evaluateOfferForCart,
   normalizeOffer,
@@ -189,7 +189,13 @@ type ChatMessage = {
   createdAt: string;
 };
 
-const MAIN_CLASS = "p-4 space-y-6 max-w-3xl mx-auto animate-fade-in";
+type EventCategorySection = {
+  key: string;
+  label: string;
+  productIds: string[];
+};
+
+const MAIN_CLASS = "p-4 pb-40 space-y-6 max-w-3xl mx-auto animate-fade-in sm:pb-28";
 
 const normalizeStringArray = (value: any): string[] =>
   Array.isArray(value)
@@ -539,6 +545,9 @@ const uiLocale =
   const locale = event?.regionalLocale ?? uiLocale;
   const currency = event?.currency ?? "JPY";
   const language = lang === "en" || lang === "ja" ? lang : "pt";
+  const collectsFulfillmentDetails = Boolean(
+    event && (event.allowDelivery !== false || event.allowPickup !== false),
+  );
   const customerSession = useCustomerSession();
   const customerRewards = useCustomerRewards(sellerId, customerSession.registered);
   const customerId = customerSession.clientId;
@@ -670,30 +679,55 @@ const uiLocale =
     [productsData, sortedProductIds],
   );
 
-  const dynamicCategories = useMemo(() => {
-    const set = new Set<string>();
-    for (const pid of normalProductIds) {
-      const c = productsData[pid]?.category;
-      if (typeof c === "string" && c.trim()) set.add(c.trim());
-    }
-    return Array.from(set).sort((a, b) => a.localeCompare(b, locale));
-  }, [normalProductIds, productsData, locale]);
+  const groupProductsByCategory = useCallback(
+    (productIds: string[]): EventCategorySection[] => {
+      const grouped = new Map<string, EventCategorySection>();
 
-  const uncategorized = useMemo(
-    () => normalProductIds.filter((pid) => !productsData[pid]?.category),
-    [normalProductIds, productsData],
+      for (const productId of productIds) {
+        const category = productsData[productId]?.category?.trim() || "";
+        const key = category || "__other__";
+        const label =
+          category ||
+          tr("event.categories.other", language === "ja" ? "その他" : language === "en" ? "Other" : "Outros");
+        const current = grouped.get(key);
+
+        if (current) {
+          current.productIds.push(productId);
+        } else {
+          grouped.set(key, { key, label, productIds: [productId] });
+        }
+      }
+
+      // Map preserves the editorial order: category order follows the first
+      // product of that category, and products preserve the seller-defined order.
+      return Array.from(grouped.values());
+    },
+    [language, productsData, tr],
   );
 
-  const visibleNormalProductIds = useMemo(() => {
-    if (activeCategory === "__all__") return normalProductIds;
-    if (activeCategory === "__other__") return uncategorized;
-    return normalProductIds.filter((pid) => (productsData[pid]?.category || "") === activeCategory);
-  }, [normalProductIds, productsData, activeCategory, uncategorized]);
+  const normalCategorySections = useMemo(
+    () => groupProductsByCategory(normalProductIds),
+    [groupProductsByCategory, normalProductIds],
+  );
+
+  const madeToOrderCategorySections = useMemo(
+    () => groupProductsByCategory(madeToOrderProductIds),
+    [groupProductsByCategory, madeToOrderProductIds],
+  );
+
+  const dynamicCategories = useMemo(
+    () => normalCategorySections.map((section) => section.key),
+    [normalCategorySections],
+  );
+
+  const visibleNormalCategorySections = useMemo(() => {
+    if (activeCategory === "__all__") return normalCategorySections;
+    return normalCategorySections.filter((section) => section.key === activeCategory);
+  }, [activeCategory, normalCategorySections]);
 
   useEffect(() => {
     if (
       activeCategory !== "__all__" &&
-      activeCategory !== "__other__" &&
       !dynamicCategories.includes(activeCategory)
     ) {
       setActiveCategory("__all__");
@@ -967,19 +1001,46 @@ const uiLocale =
     );
   }, [tr]);
 
-  const getChosenDate = useCallback(() => {
+  const getOrderDeliveryDate = useCallback(() => {
     if (!event) return "";
-    if (dateOption === "event-date" && selectedDate) return selectedDate;
-    return tr("event.common.to_be_arranged", "A combinar");
-  }, [event, dateOption, selectedDate, tr]);
 
-  const getChosenTimeLabel = useCallback(() => {
+    if (!collectsFulfillmentDetails) {
+      // The seller already knows the event fulfillment. Keep a real date when
+      // one exists, but never send UI labels such as "A combinar" to the API.
+      return event.deliveryDates[0] || "";
+    }
+
+    return dateOption === "event-date" && selectedDate ? selectedDate : "";
+  }, [collectsFulfillmentDetails, dateOption, event, selectedDate]);
+
+  const getChosenDate = useCallback(() => {
+    const date = getOrderDeliveryDate();
+    if (date) return date;
+
+    if (!collectsFulfillmentDetails) {
+      return language === "ja"
+        ? "販売者が手配"
+        : language === "en"
+          ? "Arranged by seller"
+          : "Organizado pelo seller";
+    }
+
+    return tr("event.common.to_be_arranged", "A combinar");
+  }, [collectsFulfillmentDetails, getOrderDeliveryDate, language, tr]);
+
+  const getOrderDeliveryTime = useCallback(() => {
+    if (!collectsFulfillmentDetails) return "";
     if (timeOption === "no-preference" || selectedHour == null || selectedMinute == null) {
-      return tr("event.common.to_be_arranged", "A combinar");
+      return "";
     }
 
     return `${String(selectedHour).padStart(2, "0")}:${String(selectedMinute).padStart(2, "0")}`;
-  }, [timeOption, selectedHour, selectedMinute, tr]);
+  }, [collectsFulfillmentDetails, selectedHour, selectedMinute, timeOption]);
+
+  const getChosenTimeLabel = useCallback(() => {
+    const time = getOrderDeliveryTime();
+    return time || tr("event.common.to_be_arranged", "A combinar");
+  }, [getOrderDeliveryTime, tr]);
 
   const getDeliveryModeLabel = useCallback(
     (mode: DeliveryMode) => {
@@ -1434,6 +1495,30 @@ const uiLocale =
   }, [id, sellerId, tr]);
 
   useEffect(() => {
+    if (!event) return;
+
+    if (event.allowPickup !== false) {
+      setDeliveryMode((current) =>
+        current === "pickup" || (current === "delivery" && event.allowDelivery !== false)
+          ? current
+          : "pickup",
+      );
+      return;
+    }
+
+    if (event.allowDelivery !== false) {
+      setDeliveryMode("delivery");
+      return;
+    }
+
+    setDeliveryMode("none");
+    setTimeOption("no-preference");
+    setSelectedHour(null);
+    setSelectedMinute(null);
+    setLocationLink("");
+  }, [event?.allowDelivery, event?.allowPickup]);
+
+  useEffect(() => {
     if (!sellerId || !id || !event) return;
 
     let disposed = false;
@@ -1639,14 +1724,25 @@ const uiLocale =
     if (!customerName.trim()) return false;
     if (!customerPhone.trim()) return false;
     if (totalItems <= 0 || totalAmount < 0) return false;
-    if (!deliveryMode) return false;
-    if (event.deliveryDates.length > 0 && dateOption === "event-date" && !selectedDate) return false;
+    if (collectsFulfillmentDetails && !deliveryMode) return false;
     if (
+      collectsFulfillmentDetails &&
+      event.deliveryDates.length > 0 &&
+      dateOption === "event-date" &&
+      !selectedDate
+    ) return false;
+    if (
+      collectsFulfillmentDetails &&
       productionSchedule.required &&
       dateOption === "event-date" &&
+      selectedDate &&
       compareDateKeys(selectedDate, productionSchedule.earliestDate) < 0
     ) return false;
-    if (timeOption === "custom" && (selectedHour == null || selectedMinute == null)) return false;
+    if (
+      collectsFulfillmentDetails &&
+      timeOption === "custom" &&
+      (selectedHour == null || selectedMinute == null)
+    ) return false;
     return true;
   }, [
     submitting,
@@ -1655,6 +1751,7 @@ const uiLocale =
     customerPhone,
     totalItems,
     totalAmount,
+    collectsFulfillmentDetails,
     deliveryMode,
     dateOption,
     selectedDate,
@@ -1707,11 +1804,11 @@ const uiLocale =
         phone: customerPhone,
       },
       delivery: {
-        mode: deliveryMode,
-        date: getChosenDate(),
-        time: getChosenTimeLabel(),
+        mode: collectsFulfillmentDetails ? deliveryMode : "none",
+        date: getOrderDeliveryDate() || undefined,
+        time: getOrderDeliveryTime() || undefined,
         locationLink:
-          deliveryMode === "delivery"
+          collectsFulfillmentDetails && deliveryMode === "delivery"
             ? locationLink
             : undefined,
         note: note || undefined,
@@ -1743,8 +1840,9 @@ const uiLocale =
     deliveryMode,
     locationLink,
     customerId,
-    getChosenDate,
-    getChosenTimeLabel,
+    collectsFulfillmentDetails,
+    getOrderDeliveryDate,
+    getOrderDeliveryTime,
     language,
     rewardEvaluation,
     customerRewards,
@@ -1764,6 +1862,7 @@ const uiLocale =
     }
 
     if (
+      collectsFulfillmentDetails &&
       productionSchedule.required &&
       dateOption === "event-date" &&
       selectedDate &&
@@ -1776,7 +1875,18 @@ const uiLocale =
     }
 
     if (!canSubmit) {
-      showFormError(tr("event.error.fill_required", "Escolha produtos, informe nome e telefone e selecione entrega/data/hora antes de finalizar."));
+      showFormError(
+        collectsFulfillmentDetails
+          ? tr(
+              "event.error.fill_required",
+              "Escolha produtos, informe nome e telefone e selecione entrega/data/hora antes de finalizar.",
+            )
+          : language === "ja"
+            ? "商品を選び、氏名と電話番号を入力してから注文を確定してください。"
+            : language === "en"
+              ? "Choose products and enter your name and phone number before placing the order."
+              : "Escolha os produtos e informe nome e telefone antes de finalizar.",
+      );
       return;
     }
 
@@ -1828,10 +1938,13 @@ const uiLocale =
             : language === "en"
               ? "Your points balance is insufficient."
               : "Seu saldo de pontos é insuficiente."
-          : errorCode === "REWARDS_UNAVAILABLE"
-            ? err instanceof Error
+          : errorCode === "REWARDS_UNAVAILABLE" ||
+              errorCode === "INVALID_REQUEST" ||
+              errorCode === "NETWORK_ERROR" ||
+              errorCode === "TOO_MANY_REQUESTS"
+            ? err instanceof Error && err.message
               ? err.message
-              : tr("event.error.register_order", "Não foi possível usar os pontos.")
+              : tr("event.error.register_order", "Não foi possível registrar o pedido.")
           : errorCode === "AUTH_REQUIRED"
           ? tr(
               "event.error.session_expired",
@@ -1880,6 +1993,7 @@ const uiLocale =
     customerName,
     customerPhone,
     customerSession.profile?.email,
+    collectsFulfillmentDetails,
     currency,
     language,
     locale,
@@ -2053,57 +2167,86 @@ const uiLocale =
       />
       )}
 
-      <section className="space-y-4">
-        <div className="flex items-center justify-between border-b border-neutral-100 dark:border-neutral-800/60 pb-2">
+      <section className="space-y-5">
+        <div className="flex items-center justify-between border-b border-neutral-100 pb-2 dark:border-neutral-800/60">
           <div>
             <h2 className="text-sm font-black uppercase tracking-widest text-neutral-400">
               {tr("event.products.title", "1. Produtos disponíveis")}
             </h2>
-            <p className="text-[11px] font-bold text-neutral-400 mt-1">
+            <p className="mt-1 text-[11px] font-bold text-neutral-400">
               {tr("event.products.subtitle", "Escolha os itens de venda normal. Pedidos acima do estoque ficam pendentes.")}
             </p>
           </div>
         </div>
 
-        <div className="flex flex-wrap gap-1.5 overflow-x-auto pb-1 scrollbar-none">
-          <button type="button" onClick={() => setActiveCategory("__all__")} className={pill(activeCategory === "__all__")}>
-            {tr("event.categories.all", "Todos")}
-          </button>
-
-          {dynamicCategories.map((cat) => (
-            <button key={cat} type="button" onClick={() => setActiveCategory(cat)} className={pill(activeCategory === cat)}>
-              {cat}
+        {normalCategorySections.length > 1 && (
+          <div className="flex flex-wrap gap-1.5 overflow-x-auto pb-1 scrollbar-none">
+            <button
+              type="button"
+              onClick={() => setActiveCategory("__all__")}
+              className={pill(activeCategory === "__all__")}
+            >
+              {tr("event.categories.all", "Todos")}
             </button>
-          ))}
 
-          {uncategorized.length > 0 && (
-            <button type="button" onClick={() => setActiveCategory("__other__")} className={pill(activeCategory === "__other__")}>
-              {tr("event.categories.other", "Outros")}
-            </button>
+            {normalCategorySections.map((section) => (
+              <button
+                key={section.key}
+                type="button"
+                onClick={() => setActiveCategory(section.key)}
+                className={pill(activeCategory === section.key)}
+              >
+                {section.label}
+              </button>
+            ))}
+          </div>
+        )}
+
+        <div className="space-y-8">
+          {visibleNormalCategorySections.length === 0 ? (
+            <p className="rounded-3xl border border-dashed border-neutral-300 p-7 text-center text-sm font-bold text-neutral-400 dark:border-neutral-700">
+              {tr("event.products.empty", "Nenhum produto normal disponível neste evento.")}
+            </p>
+          ) : (
+            visibleNormalCategorySections.map((section) => (
+              <section key={section.key} className="space-y-3">
+                {(normalCategorySections.length > 1 || activeCategory !== "__all__") && (
+                  <div className="flex items-center gap-3">
+                    <h3 className="shrink-0 text-xs font-black uppercase tracking-[0.18em] text-neutral-600 dark:text-neutral-300">
+                      {section.label}
+                    </h3>
+                    <span className="h-px flex-1 bg-neutral-200 dark:bg-neutral-800" />
+                    <span className="text-[10px] font-black text-neutral-400">
+                      {section.productIds.length}
+                    </span>
+                  </div>
+                )}
+
+                <EventProductGrid
+                  productIds={section.productIds}
+                  productsData={productsData}
+                  quantities={quantities}
+                  currency={currency}
+                  locale={locale}
+                  timeZone={event?.timeZone || "Asia/Tokyo"}
+                  now={pricingNow}
+                  eventClosed={eventClosed}
+                  acceptOrdersWithoutStock={acceptOrdersWithoutStock}
+                  language={language}
+                  madeToOrder={false}
+                  showScheduledPriceCards={event.showScheduledPriceCards}
+                  onAdjust={adjustQuantity}
+                  tr={tr}
+                  emptyMessage={tr("event.products.empty", "Nenhum produto normal disponível neste evento.")}
+                />
+              </section>
+            ))
           )}
         </div>
-
-        <EventProductGrid
-          productIds={visibleNormalProductIds}
-          productsData={productsData}
-          quantities={quantities}
-          currency={currency}
-          locale={locale}
-          timeZone={event?.timeZone || "Asia/Tokyo"}
-          now={pricingNow}
-          eventClosed={eventClosed}
-          acceptOrdersWithoutStock={acceptOrdersWithoutStock}
-          language={language}
-          madeToOrder={false}
-          showScheduledPriceCards={event.showScheduledPriceCards}
-          onAdjust={adjustQuantity}
-          tr={tr}
-          emptyMessage={tr("event.products.empty", "Nenhum produto normal disponível neste evento.")}
-        />
       </section>
 
       {madeToOrderProductIds.length > 0 && (
-        <section className="space-y-4 border-t border-violet-200 pt-6 dark:border-violet-900/50">
+        <section className="space-y-5 border-t border-violet-200 pt-6 dark:border-violet-900/50">
           <div>
             <h2 className="text-sm font-black uppercase tracking-widest text-violet-600 dark:text-violet-300">
               {tr("event.products.made_to_order_title", "Produtos sob encomenda")}
@@ -2113,51 +2256,83 @@ const uiLocale =
             </p>
           </div>
 
-          <EventProductGrid
-            productIds={madeToOrderProductIds}
-            productsData={productsData}
-            quantities={quantities}
-            currency={currency}
-            locale={locale}
-            timeZone={event?.timeZone || "Asia/Tokyo"}
-            now={pricingNow}
-            eventClosed={eventClosed}
-            acceptOrdersWithoutStock={acceptOrdersWithoutStock}
-            language={language}
-            madeToOrder
-            showScheduledPriceCards={event.showScheduledPriceCards}
-            onAdjust={adjustQuantity}
-            tr={tr}
-            emptyMessage={tr("event.products.made_to_order_empty", "Nenhum produto sob encomenda neste evento.")}
-          />
+          <div className="space-y-8">
+            {madeToOrderCategorySections.map((section) => (
+              <section key={section.key} className="space-y-3">
+                {madeToOrderCategorySections.length > 1 && (
+                  <div className="flex items-center gap-3">
+                    <h3 className="shrink-0 text-xs font-black uppercase tracking-[0.18em] text-violet-600 dark:text-violet-300">
+                      {section.label}
+                    </h3>
+                    <span className="h-px flex-1 bg-violet-200 dark:bg-violet-900/60" />
+                    <span className="text-[10px] font-black text-violet-400">
+                      {section.productIds.length}
+                    </span>
+                  </div>
+                )}
+
+                <EventProductGrid
+                  productIds={section.productIds}
+                  productsData={productsData}
+                  quantities={quantities}
+                  currency={currency}
+                  locale={locale}
+                  timeZone={event?.timeZone || "Asia/Tokyo"}
+                  now={pricingNow}
+                  eventClosed={eventClosed}
+                  acceptOrdersWithoutStock={acceptOrdersWithoutStock}
+                  language={language}
+                  madeToOrder
+                  showScheduledPriceCards={event.showScheduledPriceCards}
+                  onAdjust={adjustQuantity}
+                  tr={tr}
+                  emptyMessage={tr("event.products.made_to_order_empty", "Nenhum produto sob encomenda neste evento.")}
+                />
+              </section>
+            ))}
+          </div>
         </section>
       )}
 
-      <div className="sticky bottom-20 z-30 rounded-3xl border border-neutral-200 bg-white/95 p-3 shadow-2xl backdrop-blur dark:border-neutral-800 dark:bg-neutral-950/95">
-        <button
-          type="button"
-          onClick={() => {
-            setFormError("");
-            setCheckoutOpen(true);
-          }}
-          disabled={eventClosed || totalItems <= 0}
-          className="flex w-full items-center justify-between gap-4 rounded-2xl bg-emerald-600 px-5 py-4 text-left text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          <span>
-            <span className="block text-sm font-black uppercase tracking-wider">
-              {tr("event.order.review_cart", "Revisar e finalizar pedido")}
-            </span>
-            <span className="mt-0.5 block text-[11px] font-bold text-emerald-100">
-              {totalItems > 0
-                ? `${totalItems} ${totalItems === 1 ? tr("event.order.item", "item") : tr("event.order.items", "itens")}`
-                : tr("event.order.select_items", "Escolha pelo menos um produto")}
-            </span>
-          </span>
-          <span className="shrink-0 text-lg font-black">
-            {formatMoneyMinor(totalAmountMinor, currency, locale)}
-          </span>
-        </button>
-      </div>
+      {!checkoutOpen && (
+        <div className="fixed inset-x-0 bottom-[calc(4.75rem+env(safe-area-inset-bottom))] z-[70] px-3 sm:bottom-4 sm:px-4">
+          <div className="mx-auto max-w-3xl rounded-3xl border border-neutral-200 bg-white/95 p-3 shadow-2xl backdrop-blur dark:border-neutral-800 dark:bg-neutral-950/95">
+            <button
+              type="button"
+              onClick={() => {
+                setFormError("");
+                setCheckoutOpen(true);
+              }}
+              disabled={eventClosed || totalItems <= 0}
+              className="flex w-full items-center justify-between gap-4 rounded-2xl bg-emerald-600 px-5 py-4 text-left text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-45"
+            >
+              <span className="flex min-w-0 items-center gap-3">
+                <span className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white/15">
+                  <ShoppingCart size={21} />
+                  {totalItems > 0 && (
+                    <span className="absolute -right-2 -top-2 flex min-h-5 min-w-5 items-center justify-center rounded-full bg-white px-1 text-[10px] font-black text-emerald-700 shadow">
+                      {totalItems > 99 ? "99+" : totalItems}
+                    </span>
+                  )}
+                </span>
+                <span className="min-w-0">
+                  <span className="block truncate text-sm font-black uppercase tracking-wider">
+                    {tr("event.order.review_cart", "Revisar e finalizar pedido")}
+                  </span>
+                  <span className="mt-0.5 block truncate text-[11px] font-bold text-emerald-100">
+                    {totalItems > 0
+                      ? `${totalItems} ${totalItems === 1 ? tr("event.order.item", "item") : tr("event.order.items", "itens")}`
+                      : tr("event.order.select_items", "Escolha pelo menos um produto")}
+                  </span>
+                </span>
+              </span>
+              <span className="shrink-0 text-lg font-black">
+                {formatMoneyMinor(totalAmountMinor, currency, locale)}
+              </span>
+            </button>
+          </div>
+        </div>
+      )}
 
       {checkoutOpen && (
         <div className="fixed inset-0 z-[90] flex items-end justify-center p-0 sm:items-center sm:p-4">
@@ -2227,6 +2402,7 @@ const uiLocale =
                       </div>
                     </section>
               
+                    {collectsFulfillmentDetails && (
                     <section className="bg-neutral-50 dark:bg-neutral-900/40 border border-neutral-200 dark:border-neutral-800 rounded-[2rem] p-5 space-y-4">
                       <h2 className="text-sm font-black uppercase tracking-widest text-neutral-400">
                         {tr("event.delivery.title", "3. Escolha entrega, data e hora")}
@@ -2386,10 +2562,18 @@ const uiLocale =
                       )}
                     </section>
               
+                    )}
+              
                     <section className="space-y-4 border-t border-neutral-200 dark:border-neutral-800 pt-6">
                       <div className="rounded-[2rem] border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-5 space-y-3 shadow-sm">
                         <h2 className="text-sm font-black uppercase tracking-widest text-neutral-400">
-                          {tr("event.order.summary", "4. Finalizar pedido")}
+                          {collectsFulfillmentDetails
+                            ? tr("event.order.summary", "4. Finalizar pedido")
+                            : language === "ja"
+                              ? "3. 注文を確定"
+                              : language === "en"
+                                ? "3. Place order"
+                                : "3. Finalizar pedido"}
                         </h2>
               
                         <div className="space-y-1 text-xs font-bold text-neutral-500 dark:text-neutral-400">
@@ -2401,18 +2585,22 @@ const uiLocale =
                             {tr("event.form.customer_phone", "Telefone")}: {" "}
                             <span className="text-neutral-900 dark:text-white">{customerPhone.trim() || "—"}</span>
                           </p>
-                          <p>
-                            {tr("event.whatsapp.mode", "Modo")}:{" "}
-                            <span className="text-neutral-900 dark:text-white">{getDeliveryModeLabel(deliveryMode)}</span>
-                          </p>
-                          <p>
-                            {tr("event.whatsapp.date", "Data")}:{" "}
-                            <span className="text-neutral-900 dark:text-white">{getChosenDate()}</span>
-                          </p>
-                          <p>
-                            {tr("event.whatsapp.time", "Hora")}:{" "}
-                            <span className="text-neutral-900 dark:text-white">{getChosenTimeLabel()}</span>
-                          </p>
+                          {collectsFulfillmentDetails && (
+                            <>
+                              <p>
+                                {tr("event.whatsapp.mode", "Modo")}:{" "}
+                                <span className="text-neutral-900 dark:text-white">{getDeliveryModeLabel(deliveryMode)}</span>
+                              </p>
+                              <p>
+                                {tr("event.whatsapp.date", "Data")}:{" "}
+                                <span className="text-neutral-900 dark:text-white">{getChosenDate()}</span>
+                              </p>
+                              <p>
+                                {tr("event.whatsapp.time", "Hora")}:{" "}
+                                <span className="text-neutral-900 dark:text-white">{getChosenTimeLabel()}</span>
+                              </p>
+                            </>
+                          )}
                           <p>
                             {tr("event.order.items_count", "Itens")}:{" "}
                             <span className="text-neutral-900 dark:text-white">{totalItems}</span>
