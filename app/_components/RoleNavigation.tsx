@@ -16,6 +16,7 @@ import {
   PackageSearch,
   Settings,
   ShoppingBag,
+  ShoppingCart,
   Sparkles,
   Store,
   Sun,
@@ -37,6 +38,13 @@ import { useI18n } from "@/app/lib/i18n";
 import { sellerInitials } from "@/app/lib/seller-identity";
 import { PLATFORM_LOGO_PATH, PLATFORM_NAME } from "@/app/lib/platform-brand";
 import { initTheme, onThemeChanged, setTheme, type Theme } from "@/app/lib/theme";
+import {
+  PUBLIC_CART_SUMMARY_EVENT,
+  publicCartSummaryStorageKey,
+  readPublicCartCount,
+  requestPublicCartOpen,
+  type PublicCartSummaryDetail,
+} from "@/app/lib/cart-navigation";
 
 const LAST_STORE_KEY = "yamada_customer_last_store_v1";
 const LAST_SELLER_KEY = "yamada_customer_last_seller_v1";
@@ -56,6 +64,8 @@ type NavItem = {
   icon: LucideIcon;
   exact?: boolean;
   badge?: number;
+  disableActive?: boolean;
+  onActivate?: () => void;
 };
 
 type BaseProps = {
@@ -74,12 +84,17 @@ function isActive(pathname: string, item: NavItem): boolean {
 
 function NavLink({ item, compact = false }: { item: NavItem; compact?: boolean }) {
   const pathname = usePathname();
-  const active = isActive(pathname, item);
+  const active = item.disableActive ? false : isActive(pathname, item);
   const Icon = item.icon;
 
   return (
     <Link
       href={item.href}
+      onClick={(event) => {
+        if (!item.onActivate) return;
+        event.preventDefault();
+        item.onActivate();
+      }}
       aria-current={active ? "page" : undefined}
       className={[
         "inline-flex items-center justify-center gap-2 rounded-xl font-black transition",
@@ -284,6 +299,7 @@ function useCopy() {
         settings: "設定",
         cleanup: "管理",
         orders: "注文",
+        cart: "カート",
         production: "製造",
         products: "商品",
         offers: "オファー",
@@ -308,6 +324,7 @@ function useCopy() {
           settings: "Settings",
           cleanup: "Tools",
           orders: "Orders",
+          cart: "Cart",
           production: "Production",
           products: "Products",
           offers: "Offers",
@@ -331,6 +348,7 @@ function useCopy() {
           settings: "Configurações",
           cleanup: "Ferramentas",
           orders: "Pedidos",
+          cart: "Carrinho",
           production: "Produção",
           products: "Produtos",
           offers: "Ofertas",
@@ -612,9 +630,12 @@ export function CustomerNav() {
 export function PublicStoreNav({ sellerId, storeHref, contextLabel = "" }: BaseProps) {
   const copy = useCopy();
   const pathname = usePathname();
+  const router = useRouter();
   const session = useCustomerSession();
   const sellerIdentity = useSellerIdentity(sellerId || "");
   const resolvedStoreHref = storeHref || (sellerId ? `/store/${encodeURIComponent(sellerId)}` : "/");
+  const permanentStorePage = pathname.startsWith("/store/");
+  const [cartCount, setCartCount] = useState(0);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -622,12 +643,61 @@ export function PublicStoreNav({ sellerId, storeHref, contextLabel = "" }: BaseP
     if (sellerId) window.localStorage.setItem(LAST_SELLER_KEY, sellerId);
   }, [resolvedStoreHref, sellerId]);
 
+  useEffect(() => {
+    if (!sellerId) {
+      setCartCount(0);
+      return;
+    }
+
+    setCartCount(readPublicCartCount(sellerId));
+
+    const onSummary = (event: Event) => {
+      const detail = (event as CustomEvent<PublicCartSummaryDetail>).detail;
+      if (!detail || detail.sellerId !== sellerId) return;
+      setCartCount(Math.max(0, Math.floor(Number(detail.totalItems) || 0)));
+    };
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== publicCartSummaryStorageKey(sellerId)) return;
+      setCartCount(readPublicCartCount(sellerId));
+    };
+
+    window.addEventListener(PUBLIC_CART_SUMMARY_EVENT, onSummary);
+    window.addEventListener("storage", onStorage);
+    return () => {
+      window.removeEventListener(PUBLIC_CART_SUMMARY_EVENT, onSummary);
+      window.removeEventListener("storage", onStorage);
+    };
+  }, [sellerId]);
+
+  const openStoreCart = useCallback(() => {
+    if (!sellerId) return;
+
+    const storePath = resolvedStoreHref.split(/[?#]/)[0] || resolvedStoreHref;
+    if (pathname === storePath) {
+      requestPublicCartOpen(sellerId);
+      return;
+    }
+
+    const separator = resolvedStoreHref.includes("?") ? "&" : "?";
+    router.push(`${resolvedStoreHref}${separator}openCart=1`);
+  }, [pathname, resolvedStoreHref, router, sellerId]);
+
   const rewardsHref = sellerId
     ? `/customer/rewards?sellerId=${encodeURIComponent(sellerId)}&next=${encodeURIComponent(pathname || resolvedStoreHref)}`
     : "/customer/rewards";
+  const secondItem: NavItem = permanentStorePage
+    ? {
+        href: `${resolvedStoreHref}${resolvedStoreHref.includes("?") ? "&" : "?"}openCart=1`,
+        label: copy.cart,
+        icon: ShoppingCart,
+        badge: cartCount,
+        disableActive: true,
+        onActivate: openStoreCart,
+      }
+    : { href: "/customer/orders", label: copy.orders, icon: ShoppingBag };
   const items: NavItem[] = [
     { href: resolvedStoreHref, label: copy.store, icon: Store, exact: true },
-    { href: "/customer/orders", label: copy.orders, icon: ShoppingBag },
+    secondItem,
     { href: rewardsHref, label: copy.rewards, icon: Sparkles },
     { href: `/customer/profile?next=${encodeURIComponent(pathname || resolvedStoreHref)}`, label: copy.profile, icon: UserRound },
   ];

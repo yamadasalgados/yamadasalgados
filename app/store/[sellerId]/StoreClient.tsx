@@ -24,6 +24,7 @@ import {
 
 import {
   Check,
+  Clock3,
   ChevronLeft,
   ChevronRight,
   Flame,
@@ -35,6 +36,7 @@ import {
   Minus,
   Package,
   Plus,
+  RefreshCw,
   Search,
   ShoppingBag,
   ShoppingCart,
@@ -64,6 +66,15 @@ import {
   createPublicOrder,
   getPublicOrderErrorCode,
 } from "@/app/lib/public-order-client";
+import {
+  PUBLIC_CART_OPEN_EVENT,
+  publishPublicCartSummary,
+  type PublicCartOpenDetail,
+} from "@/app/lib/cart-navigation";
+import {
+  loadCustomerOrders,
+  type CustomerOrderSummary,
+} from "@/app/lib/customer-order-client";
 
 import {
   normalizeSellerOrderSettings,
@@ -2215,6 +2226,33 @@ const visibleProducts =
       [cartItems],
     );
 
+  useEffect(() => {
+    publishPublicCartSummary(sellerId, totalItems);
+  }, [sellerId, totalItems]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !sellerId) return;
+
+    const openCart = (event?: Event) => {
+      const detail = event
+        ? (event as CustomEvent<PublicCartOpenDetail>).detail
+        : null;
+      if (detail?.sellerId && detail.sellerId !== sellerId) return;
+      setCartOpen(true);
+    };
+
+    window.addEventListener(PUBLIC_CART_OPEN_EVENT, openCart);
+
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("openCart") === "1") {
+      openCart();
+      url.searchParams.delete("openCart");
+      window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+    }
+
+    return () => window.removeEventListener(PUBLIC_CART_OPEN_EVENT, openCart);
+  }, [sellerId]);
+
   const subtotal =
     useMemo(
       () =>
@@ -2279,6 +2317,14 @@ const visibleProducts =
 
   const selectedOfferEvaluation =
     appliedOfferEvaluation ?? suggestedOfferEvaluation;
+
+  const selectedOfferProducts = useMemo(() => {
+    if (!selectedOfferEvaluation) return [];
+    const eligibleIds = new Set(selectedOfferEvaluation.offer.eligibleProductIds);
+    return products
+      .filter((product) => product.publiclyVisible && eligibleIds.has(product.id))
+      .sort((left, right) => compareStorefrontProducts(left, right, storeProfile.regionalLocale));
+  }, [products, selectedOfferEvaluation, storeProfile.regionalLocale]);
 
   useEffect(() => {
     const automaticOfferId = appliedOfferEvaluation?.offer.id ?? "";
@@ -2950,6 +2996,24 @@ const visibleProducts =
     goToTop();
   }
 
+  const handleStoreToolbarBack = useCallback(() => {
+    if (selectedCategory || fulfillmentFilter || search.trim()) {
+      setSelectedCategory(null);
+      setFulfillmentFilter(null);
+      setSearch("");
+      setSearchOpen(false);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      return;
+    }
+
+    if (window.history.length > 1) {
+      window.history.back();
+      return;
+    }
+
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }, [fulfillmentFilter, search, selectedCategory]);
+
   const productGallery =
     selectedProduct
       ? [
@@ -3131,27 +3195,16 @@ const visibleProducts =
 
 {step === "products" && (
   <>
-    <section className="sticky top-0 z-20 -mx-4 border-b border-neutral-200 bg-neutral-50/95 px-4 py-3 backdrop-blur dark:border-neutral-800 dark:bg-neutral-950/95 sm:static sm:mx-0 sm:rounded-2xl sm:border sm:bg-white sm:px-4 sm:dark:bg-neutral-900">
+    <section className="sticky top-16 z-30 -mx-4 border-b border-neutral-200 bg-neutral-50/95 px-4 py-3 backdrop-blur dark:border-neutral-800 dark:bg-neutral-950/95 sm:mx-0 sm:rounded-2xl sm:border sm:bg-white sm:px-4 sm:dark:bg-neutral-900">
       <div className="flex items-center gap-2">
-        {(selectedCategory || fulfillmentFilter || search.trim()) && (
-          <button
-            type="button"
-            onClick={() => {
-              setSelectedCategory(null);
-              setFulfillmentFilter(null);
-              setSearch("");
-              setSearchOpen(false);
-              window.scrollTo({
-                top: 0,
-                behavior: "smooth",
-              });
-            }}
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-neutral-200 bg-white transition hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800"
-            aria-label={text.backToCategories}
-          >
-            <ChevronLeft size={18} />
-          </button>
-        )}
+        <button
+          type="button"
+          onClick={handleStoreToolbarBack}
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-neutral-200 bg-white transition hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800"
+          aria-label={text.back}
+        >
+          <ChevronLeft size={18} />
+        </button>
 
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-black">
@@ -3175,6 +3228,20 @@ const visibleProducts =
           aria-label={text.openSearch}
         >
           <Search size={18} />
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setCartOpen(true)}
+          className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-neutral-200 bg-white transition hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800"
+          aria-label={text.cart}
+        >
+          <ShoppingCart size={18} />
+          {totalItems > 0 && (
+            <span className="absolute -right-1.5 -top-1.5 inline-flex min-w-5 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-black leading-5 text-white ring-2 ring-neutral-50 dark:ring-neutral-950">
+              {totalItems > 99 ? "99+" : totalItems}
+            </span>
+          )}
         </button>
       </div>
 
@@ -3223,6 +3290,7 @@ const visibleProducts =
             cart={cart}
             bundleSelections={bundleSelections}
             offers={offers}
+            offerEvaluation={selectedOfferEvaluation}
             language={language}
             text={text}
             locale={storeProfile.regionalLocale}
@@ -3245,6 +3313,7 @@ const visibleProducts =
             cart={cart}
             bundleSelections={bundleSelections}
             offers={offers}
+            offerEvaluation={selectedOfferEvaluation}
             language={language}
             text={text}
             locale={storeProfile.regionalLocale}
@@ -3282,6 +3351,7 @@ const visibleProducts =
             cart={cart}
             bundleSelections={bundleSelections}
             offers={offers}
+            offerEvaluation={selectedOfferEvaluation}
             language={language}
             text={text}
             locale={storeProfile.regionalLocale}
@@ -3304,6 +3374,7 @@ const visibleProducts =
               cart={cart}
               bundleSelections={bundleSelections}
               offers={offers}
+              offerEvaluation={selectedOfferEvaluation}
               language={language}
               text={text}
               locale={storeProfile.regionalLocale}
@@ -3364,42 +3435,108 @@ const visibleProducts =
                   storeProfile.regionalLocale,
                   storeProfile.timeZone,
                 );
+                const qty = cart[product.id] ?? 0;
+                const configurableBundle =
+                  product.bundleConfig.enabled && product.bundleConfig.optionProductIds.length >= 2;
+                const soldOut =
+                  !storeProfile.acceptOrdersWithoutStock &&
+                  product.availabilityStatus !== "made_to_order" &&
+                  typeof product.stock === "number" &&
+                  product.stock <= 0;
+                const reachedCartLimit =
+                  !storeProfile.acceptOrdersWithoutStock &&
+                  product.availabilityStatus !== "made_to_order" &&
+                  typeof product.stock === "number" &&
+                  qty >= product.stock;
                 return (
-                  <button
+                  <article
                     key={`last-chance-${product.id}`}
-                    type="button"
-                    onClick={() => {
-                      setSelectedProduct(product);
-                      setSelectedImageIndex(0);
-                    }}
-                    className="w-[230px] shrink-0 snap-start overflow-hidden rounded-2xl border border-amber-200 bg-white text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md dark:border-amber-900/60 dark:bg-neutral-900"
+                    className="w-[230px] shrink-0 snap-start overflow-hidden rounded-2xl border border-amber-200 bg-white shadow-sm transition hover:-translate-y-0.5 hover:shadow-md dark:border-amber-900/60 dark:bg-neutral-900"
                   >
-                    <div className="aspect-[16/10] bg-neutral-100 dark:bg-neutral-800">
-                      {product.imageUrl ? (
-                        <img src={product.imageUrl} alt={product.name} className="h-full w-full object-cover" />
-                      ) : (
-                        <div className="flex h-full items-center justify-center"><Package size={34} className="text-neutral-400" /></div>
-                      )}
-                    </div>
-                    <div className="p-3">
-                      <p className="line-clamp-2 text-sm font-black">{product.name}</p>
-                      <p className="mt-2 text-base font-black text-orange-700 dark:text-orange-300">
-                        {formatMoneyMinor(product.basePriceMinor, storeProfile.currency, storeProfile.regionalLocale)}
-                      </p>
-                      <p className="mt-1 text-[11px] font-bold text-neutral-500 dark:text-neutral-400">
-                        {language === "ja"
-                          ? `${dateLabel}まで`
-                          : language === "en"
-                            ? `Current price until ${dateLabel}`
-                            : `Preço atual até ${dateLabel}`}
-                      </p>
-                      {countdown && (
-                        <p className="mt-2 rounded-lg bg-red-600 px-2 py-1.5 text-[11px] font-black uppercase tracking-wide text-white">
-                          {countdown}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedProduct(product);
+                        setSelectedImageIndex(0);
+                      }}
+                      className="block w-full text-left"
+                    >
+                      <div className="aspect-[16/10] bg-neutral-100 dark:bg-neutral-800">
+                        {product.imageUrl ? (
+                          <img src={product.imageUrl} alt={product.name} className="h-full w-full object-cover" />
+                        ) : (
+                          <div className="flex h-full items-center justify-center"><Package size={34} className="text-neutral-400" /></div>
+                        )}
+                      </div>
+                      <div className="p-3 pb-2">
+                        <p className="line-clamp-2 text-sm font-black">{product.name}</p>
+                        <p className="mt-2 text-base font-black text-orange-700 dark:text-orange-300">
+                          {formatMoneyMinor(product.basePriceMinor, storeProfile.currency, storeProfile.regionalLocale)}
                         </p>
+                        <p className="mt-1 text-[11px] font-bold text-neutral-500 dark:text-neutral-400">
+                          {language === "ja"
+                            ? `${dateLabel}まで`
+                            : language === "en"
+                              ? `Current price until ${dateLabel}`
+                              : `Preço atual até ${dateLabel}`}
+                        </p>
+                        {countdown && (
+                          <p className="mt-2 rounded-lg bg-red-600 px-2 py-1.5 text-[11px] font-black uppercase tracking-wide text-white">
+                            {countdown}
+                          </p>
+                        )}
+                      </div>
+                    </button>
+
+                    <div className="p-3 pt-1">
+                      {configurableBundle ? (
+                        <button
+                          type="button"
+                          onClick={() => setConfiguringBundle(product)}
+                          disabled={soldOut}
+                          className="inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-xl bg-violet-600 px-3 text-xs font-black text-white disabled:opacity-40"
+                        >
+                          <Gift size={16} />
+                          {qty > 0 ? text.editKit : text.configureKit}
+                        </button>
+                      ) : qty > 0 ? (
+                        <div className="flex items-center justify-between rounded-xl border border-amber-200 p-1.5 dark:border-amber-900/60">
+                          <button
+                            type="button"
+                            onClick={() => setQuantity(product, qty - 1)}
+                            className="flex h-9 w-9 items-center justify-center rounded-lg bg-neutral-100 dark:bg-neutral-800"
+                            aria-label="Decrease"
+                          >
+                            <Minus size={16} />
+                          </button>
+                          <span className="text-sm font-black">{qty}</span>
+                          <button
+                            type="button"
+                            onClick={() => setQuantity(product, qty + 1)}
+                            disabled={reachedCartLimit}
+                            className="flex h-9 w-9 items-center justify-center rounded-lg bg-orange-600 text-white disabled:opacity-30"
+                            aria-label="Increase"
+                          >
+                            <Plus size={16} />
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setQuantity(product, 1)}
+                          disabled={soldOut}
+                          className="inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-xl bg-orange-600 px-3 text-xs font-black text-white transition hover:bg-orange-700 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          <ShoppingCart size={16} />
+                          {language === "ja"
+                            ? "カートに追加"
+                            : language === "en"
+                              ? "Add to cart"
+                              : "Adicionar ao carrinho"}
+                        </button>
                       )}
                     </div>
-                  </button>
+                  </article>
                 );
               })}
             </div>
@@ -3519,6 +3656,7 @@ const visibleProducts =
           cart={cart}
           bundleSelections={bundleSelections}
           offers={offers}
+          offerEvaluation={selectedOfferEvaluation}
           language={language}
           text={text}
           locale={storeProfile.regionalLocale}
@@ -4069,9 +4207,14 @@ const visibleProducts =
               subtotalLabel={text.subtotal}
               discountLabel={text.discount}
               offerEvaluation={selectedOfferEvaluation}
+              offerProducts={selectedOfferProducts}
+              cart={cart}
+              acceptOrdersWithoutStock={storeProfile.acceptOrdersWithoutStock}
               stockConfirmationMessage={stockConfirmationMessage}
               language={language}
               text={text}
+              onChangeQuantity={setQuantity}
+              onConfigureBundle={setConfiguringBundle}
             />
 
             <button
@@ -4175,8 +4318,13 @@ const visibleProducts =
           currency={storeProfile.currency}
           text={text}
           offerEvaluation={selectedOfferEvaluation}
+          offerProducts={selectedOfferProducts}
+          cart={cart}
+          acceptOrdersWithoutStock={storeProfile.acceptOrdersWithoutStock}
           stockConfirmationMessage={stockConfirmationMessage}
           language={language}
+          sellerId={sellerId}
+          customerRegistered={customerSession.registered}
           onClose={() =>
             setCartOpen(false)
           }
@@ -4440,6 +4588,211 @@ function offerHeadline(
       : `Leve ${quantity} com ${percentage}% de desconto`;
 }
 
+function localizedOfferName(
+  evaluation: OfferEvaluation,
+  language: Language,
+): string {
+  return resolveLocalizedOfferText(
+    evaluation.offer.content,
+    language,
+    language,
+  ).name;
+}
+
+function offerProgressMessage(
+  evaluation: OfferEvaluation,
+  language: Language,
+): string {
+  const name = localizedOfferName(evaluation, language);
+
+  if (evaluation.applicable) {
+    return language === "ja"
+      ? `オファー適用中：${name}`
+      : language === "en"
+        ? `Offer active: ${name}`
+        : `Oferta ativada: ${name}`;
+  }
+
+  if (evaluation.eligibleQuantity > 0 && evaluation.nextBundleRemaining > 0) {
+    return language === "ja"
+      ? `あと${evaluation.nextBundleRemaining}点で「${name}」が適用されます`
+      : language === "en"
+        ? `Add ${evaluation.nextBundleRemaining} more to unlock ${name}`
+        : `Faltam ${evaluation.nextBundleRemaining} itens para ativar ${name}`;
+  }
+
+  return language === "ja"
+    ? `対象商品：${name}`
+    : language === "en"
+      ? `Eligible for ${name}`
+      : `Item participante: ${name}`;
+}
+
+function OfferProgressBadge({
+  evaluation,
+  productId,
+  language,
+}: {
+  evaluation: OfferEvaluation | null;
+  productId: string;
+  language: Language;
+}) {
+  if (!evaluation || !evaluation.offer.eligibleProductIds.includes(productId)) {
+    return null;
+  }
+
+  const active = evaluation.applicable;
+  const pending = evaluation.eligibleQuantity > 0 && evaluation.nextBundleRemaining > 0;
+
+  return (
+    <p
+      className={[
+        "inline-flex max-w-full items-center rounded-full border px-3 py-1.5 text-[10px] font-black uppercase tracking-wide",
+        active
+          ? "border-emerald-300 bg-emerald-100 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-200"
+          : pending
+            ? "border-orange-300 bg-orange-100 text-orange-900 dark:border-orange-800 dark:bg-orange-950/50 dark:text-orange-200"
+            : "border-violet-300 bg-violet-100 text-violet-800 dark:border-violet-800 dark:bg-violet-950/40 dark:text-violet-200",
+      ].join(" ")}
+    >
+      <Gift className="mr-1.5 shrink-0" size={13} />
+      <span className="truncate">{offerProgressMessage(evaluation, language)}</span>
+    </p>
+  );
+}
+
+function OfferCompletionPanel({
+  evaluation,
+  products,
+  cart,
+  language,
+  locale,
+  currency,
+  acceptOrdersWithoutStock,
+  text,
+  onSetQuantity,
+  onConfigureBundle,
+}: {
+  evaluation: OfferEvaluation | null;
+  products: Product[];
+  cart: Record<string, number>;
+  language: Language;
+  locale: RegionalLocale;
+  currency: SupportedCurrency;
+  acceptOrdersWithoutStock: boolean;
+  text: (typeof TEXT)[Language];
+  onSetQuantity: (product: Product, quantity: number) => void;
+  onConfigureBundle: (product: Product) => void;
+}) {
+  if (
+    !evaluation ||
+    evaluation.applicable ||
+    evaluation.eligibleQuantity <= 0 ||
+    evaluation.nextBundleRemaining <= 0 ||
+    products.length === 0
+  ) {
+    return null;
+  }
+
+  return (
+    <section className="rounded-2xl border-2 border-orange-400 bg-orange-50 p-4 dark:border-orange-700 dark:bg-orange-950/25">
+      <div className="flex items-start gap-3">
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-orange-600 text-white">
+          <Gift size={19} />
+        </span>
+        <div className="min-w-0">
+          <p className="text-sm font-black text-orange-950 dark:text-orange-100">
+            {offerProgressMessage(evaluation, language)}
+          </p>
+          <p className="mt-1 text-xs font-semibold text-orange-800/80 dark:text-orange-200/80">
+            {language === "ja"
+              ? "この画面から対象商品の数量を調整できます。"
+              : language === "en"
+                ? "Adjust eligible products here without returning to the catalog."
+                : "Ajuste os produtos participantes aqui, sem voltar ao catálogo."}
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-4 space-y-2">
+        {products.map((product) => {
+          const qty = cart[product.id] ?? 0;
+          const configurableBundle =
+            product.bundleConfig.enabled && product.bundleConfig.optionProductIds.length >= 2;
+          const soldOut =
+            !acceptOrdersWithoutStock &&
+            product.availabilityStatus !== "made_to_order" &&
+            typeof product.stock === "number" &&
+            product.stock <= 0;
+          const increaseDisabled =
+            !acceptOrdersWithoutStock &&
+            product.availabilityStatus !== "made_to_order" &&
+            typeof product.stock === "number" &&
+            qty >= product.stock;
+
+          return (
+            <div
+              key={`offer-completion-${product.id}`}
+              className="flex items-center gap-3 rounded-xl border border-orange-200 bg-white p-3 dark:border-orange-900/60 dark:bg-neutral-900"
+            >
+              {product.imageUrl ? (
+                <img
+                  src={product.imageUrl}
+                  alt={product.name}
+                  className="h-12 w-12 shrink-0 rounded-lg object-cover"
+                />
+              ) : (
+                <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-neutral-100 text-neutral-400 dark:bg-neutral-800">
+                  <Package size={20} />
+                </span>
+              )}
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-black">{product.name}</p>
+                <p className="mt-0.5 text-xs font-bold text-neutral-500">
+                  {formatMoneyMajor(product.price, currency, locale)}
+                </p>
+              </div>
+
+              {configurableBundle ? (
+                <button
+                  type="button"
+                  onClick={() => onConfigureBundle(product)}
+                  disabled={soldOut}
+                  className="min-h-10 rounded-xl bg-violet-600 px-3 text-xs font-black text-white disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {qty > 0 ? text.editKit : text.configureKit}
+                </button>
+              ) : (
+                <div className="flex shrink-0 items-center gap-1.5 rounded-xl border border-neutral-200 p-1 dark:border-neutral-700">
+                  <button
+                    type="button"
+                    onClick={() => onSetQuantity(product, qty - 1)}
+                    disabled={qty <= 0}
+                    className="flex h-8 w-8 items-center justify-center rounded-lg bg-neutral-100 disabled:opacity-30 dark:bg-neutral-800"
+                    aria-label="Decrease"
+                  >
+                    <Minus size={15} />
+                  </button>
+                  <span className="min-w-7 text-center text-sm font-black">{qty}</span>
+                  <button
+                    type="button"
+                    onClick={() => onSetQuantity(product, qty + 1)}
+                    disabled={increaseDisabled}
+                    className="flex h-8 w-8 items-center justify-center rounded-lg bg-orange-600 text-white disabled:opacity-30"
+                    aria-label="Increase"
+                  >
+                    <Plus size={15} />
+                  </button>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 function StoreProductGrid({
   title,
   help,
@@ -4447,6 +4800,7 @@ function StoreProductGrid({
   cart,
   bundleSelections,
   offers,
+  offerEvaluation,
   language,
   text,
   locale,
@@ -4465,6 +4819,7 @@ function StoreProductGrid({
   cart: Record<string, number>;
   bundleSelections: Record<string, BundleSelection>;
   offers: OfferDoc[];
+  offerEvaluation: OfferEvaluation | null;
   language: Language;
   text: (typeof TEXT)[Language];
   locale: RegionalLocale;
@@ -4556,6 +4911,10 @@ function StoreProductGrid({
           const highlightedOfferText = highlightedOffer
             ? offerHeadline(highlightedOffer, language, currency, locale)
             : "";
+          const productOfferEvaluation =
+            offerEvaluation?.offer.eligibleProductIds.includes(product.id)
+              ? offerEvaluation
+              : null;
           const scheduledPriceDate = formatScheduledPriceDate(
             product.scheduledPriceChange.startsAtMillis,
             locale,
@@ -4598,9 +4957,13 @@ function StoreProductGrid({
                     ? "border-red-300 bg-red-50/40 opacity-80 dark:border-red-900/70 dark:bg-red-950/10"
                     : needsConfirmation
                       ? "border-amber-400 bg-amber-50/40 dark:border-amber-700 dark:bg-amber-950/10"
-                    : highlightedOffer
-                      ? "border-orange-400 bg-orange-50/30 shadow-orange-100 dark:border-orange-700 dark:bg-orange-950/10"
-                      : lastUnits
+                    : productOfferEvaluation?.applicable
+                      ? "border-emerald-400 bg-emerald-50/30 shadow-emerald-100 dark:border-emerald-700 dark:bg-emerald-950/10"
+                      : productOfferEvaluation && productOfferEvaluation.eligibleQuantity > 0
+                        ? "border-orange-500 bg-orange-50/40 shadow-orange-100 dark:border-orange-700 dark:bg-orange-950/15"
+                        : highlightedOffer
+                          ? "border-orange-400 bg-orange-50/30 shadow-orange-100 dark:border-orange-700 dark:bg-orange-950/10"
+                          : lastUnits
                         ? "border-amber-400 bg-amber-50/50 shadow-amber-100 dark:border-amber-700 dark:bg-amber-950/10"
                         : "border-neutral-200 dark:border-neutral-800",
               ].join(" ")}
@@ -4730,12 +5093,20 @@ function StoreProductGrid({
                   </p>
                 )}
 
-                {highlightedOffer && !soldOut && (
+                {!soldOut && productOfferEvaluation ? (
+                  <div className="mt-3">
+                    <OfferProgressBadge
+                      evaluation={productOfferEvaluation}
+                      productId={product.id}
+                      language={language}
+                    />
+                  </div>
+                ) : highlightedOffer && !soldOut ? (
                   <div className="mt-3 rounded-xl border border-orange-300 bg-orange-50 px-3 py-2 text-orange-900 dark:border-orange-800 dark:bg-orange-950/20 dark:text-orange-200">
                     <p className="text-[10px] font-black uppercase tracking-wider">{text.offerBadge}</p>
                     <p className="mt-0.5 text-xs font-black sm:text-sm">{highlightedOfferText}</p>
                   </div>
-                )}
+                ) : null}
 
                 {configurableBundle && qty > 0 ? (
                   <div className="mt-3 space-y-2">
@@ -5037,9 +5408,14 @@ function OrderSummary({
   subtotalLabel,
   discountLabel,
   offerEvaluation,
+  offerProducts,
+  cart,
+  acceptOrdersWithoutStock,
   stockConfirmationMessage,
   language,
   text,
+  onChangeQuantity,
+  onConfigureBundle,
 }: {
   items: CartItem[];
   subtotal: number;
@@ -5048,38 +5424,122 @@ function OrderSummary({
   showShipping: boolean;
   shippingLabel: string;
   total: number;
-  locale: string;
+  locale: RegionalLocale;
   currency: SupportedCurrency;
   totalLabel: string;
   subtotalLabel: string;
   discountLabel: string;
   offerEvaluation: OfferEvaluation | null;
+  offerProducts: Product[];
+  cart: Record<string, number>;
+  acceptOrdersWithoutStock: boolean;
   stockConfirmationMessage: string;
   language: Language;
   text: (typeof TEXT)[Language];
+  onChangeQuantity: (product: Product, qty: number) => void;
+  onConfigureBundle: (product: Product) => void;
 }) {
   return (
     <section className="mt-6 rounded-2xl bg-neutral-100 p-5 dark:bg-neutral-800">
       <div className="space-y-3">
-        {items.map((item) => (
-          <div key={item.id} className="text-sm">
-            <div className="flex items-center justify-between gap-4">
-              <span className="min-w-0 break-words">
-                {item.qty}× {item.name}
-              </span>
-              <span className="shrink-0 font-bold">
-                {formatCurrency(item.subtotal, locale, currency)}
-              </span>
-            </div>
-            {item.bundleSelection && (
-              <ul className="mt-1 space-y-0.5 pl-3 text-xs text-neutral-500 dark:text-neutral-400">
-                {item.bundleSelection.items.map((selection) => (
-                  <li key={selection.productId}>+ {selection.quantity}× {selection.name}</li>
-                ))}
-              </ul>
-            )}
-          </div>
-        ))}
+        {items.map((item) => {
+          const eligibleForOffer = Boolean(
+            offerEvaluation?.offer.eligibleProductIds.includes(item.id),
+          );
+          const reachedCartLimit =
+            !acceptOrdersWithoutStock &&
+            item.availabilityStatus !== "made_to_order" &&
+            typeof item.stock === "number" &&
+            item.qty >= item.stock;
+
+          return (
+            <article
+              key={item.id}
+              className={[
+                "rounded-2xl border p-4 text-sm",
+                eligibleForOffer
+                  ? offerEvaluation?.applicable
+                    ? "border-emerald-300 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950/20"
+                    : "border-orange-300 bg-orange-50 dark:border-orange-800 dark:bg-orange-950/20"
+                  : "border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-900",
+              ].join(" ")}
+            >
+              <div className="flex items-center justify-between gap-4">
+                <span className="min-w-0 break-words font-bold">
+                  {item.qty}× {item.name}
+                </span>
+                <span className="shrink-0 font-black">
+                  {formatCurrency(item.subtotal, locale, currency)}
+                </span>
+              </div>
+
+              {eligibleForOffer && (
+                <div className="mt-3">
+                  <OfferProgressBadge
+                    evaluation={offerEvaluation}
+                    productId={item.id}
+                    language={language}
+                  />
+                </div>
+              )}
+
+              {item.bundleSelection ? (
+                <div className="mt-3">
+                  <ul className="space-y-0.5 text-xs text-neutral-500 dark:text-neutral-400">
+                    {item.bundleSelection.items.map((selection) => (
+                      <li key={selection.productId}>+ {selection.quantity}× {selection.name}</li>
+                    ))}
+                  </ul>
+                  {eligibleForOffer && (
+                    <button
+                      type="button"
+                      onClick={() => onConfigureBundle(item)}
+                      className="mt-3 min-h-10 w-full rounded-xl border border-violet-300 px-3 text-xs font-black text-violet-700 dark:border-violet-800 dark:text-violet-200"
+                    >
+                      {text.editKit}
+                    </button>
+                  )}
+                </div>
+              ) : eligibleForOffer ? (
+                <div className="mt-3 flex items-center justify-between rounded-xl border border-neutral-200 bg-white p-1.5 dark:border-neutral-700 dark:bg-neutral-900">
+                  <button
+                    type="button"
+                    onClick={() => onChangeQuantity(item, item.qty - 1)}
+                    className="flex h-9 w-9 items-center justify-center rounded-lg bg-neutral-100 dark:bg-neutral-800"
+                    aria-label="Decrease"
+                  >
+                    <Minus size={16} />
+                  </button>
+                  <span className="text-sm font-black">{item.qty}</span>
+                  <button
+                    type="button"
+                    onClick={() => onChangeQuantity(item, item.qty + 1)}
+                    disabled={reachedCartLimit}
+                    className="flex h-9 w-9 items-center justify-center rounded-lg bg-orange-600 text-white disabled:opacity-30"
+                    aria-label="Increase"
+                  >
+                    <Plus size={16} />
+                  </button>
+                </div>
+              ) : null}
+            </article>
+          );
+        })}
+      </div>
+
+      <div className="mt-4">
+        <OfferCompletionPanel
+          evaluation={offerEvaluation}
+          products={offerProducts}
+          cart={cart}
+          language={language}
+          locale={locale}
+          currency={currency}
+          acceptOrdersWithoutStock={acceptOrdersWithoutStock}
+          text={text}
+          onSetQuantity={onChangeQuantity}
+          onConfigureBundle={onConfigureBundle}
+        />
       </div>
 
       {stockConfirmationMessage && (
@@ -5096,32 +5556,11 @@ function OrderSummary({
           </span>
         </div>
 
-        {offerEvaluation &&
-          !offerEvaluation.applicable &&
-          offerEvaluation.eligibleQuantity > 0 && (
-            <p className="rounded-xl border border-orange-200 bg-orange-50 px-3 py-2 text-xs font-semibold text-orange-800 dark:border-orange-900/50 dark:bg-orange-950/20 dark:text-orange-200">
-              {text.offerSuggestion
-                .replace("{count}", String(offerEvaluation.nextBundleRemaining))
-                .replace(
-                  "{offer}",
-                  resolveLocalizedOfferText(
-                    offerEvaluation.offer.content,
-                    language,
-                    language,
-                  ).name,
-                )}
-            </p>
-          )}
-
         {discount > 0 && (
           <>
             {offerEvaluation?.applicable && (
-              <p className="text-xs font-bold text-orange-700 dark:text-orange-300">
-                {resolveLocalizedOfferText(
-                  offerEvaluation.offer.content,
-                  language,
-                  language,
-                ).name}
+              <p className="text-xs font-bold text-emerald-700 dark:text-emerald-300">
+                {offerProgressMessage(offerEvaluation, language)}
               </p>
             )}
 
@@ -5164,8 +5603,13 @@ function CartDrawer({
   currency,
   text,
   offerEvaluation,
+  offerProducts,
+  cart,
+  acceptOrdersWithoutStock,
   stockConfirmationMessage,
   language,
+  sellerId,
+  customerRegistered,
   onClose,
   onContinue,
   onChangeQuantity,
@@ -5177,95 +5621,155 @@ function CartDrawer({
   subtotal: number;
   discount: number;
   total: number;
-  locale: string;
+  locale: RegionalLocale;
   currency: SupportedCurrency;
   text: (typeof TEXT)[Language];
   offerEvaluation: OfferEvaluation | null;
+  offerProducts: Product[];
+  cart: Record<string, number>;
+  acceptOrdersWithoutStock: boolean;
   stockConfirmationMessage: string;
   language: Language;
+  sellerId: string;
+  customerRegistered: boolean;
   onClose: () => void;
   onContinue: () => void;
-  onChangeQuantity: (
-    product: Product,
-    qty: number,
-  ) => void;
+  onChangeQuantity: (product: Product, qty: number) => void;
   onConfigureBundle: (product: Product) => void;
   onRemoveBundle: (productId: string) => void;
 }) {
+  const [view, setView] = useState<"cart" | "orders">("cart");
+  const cartLabel = language === "ja" ? "カート" : language === "en" ? "Cart" : "Carrinho";
+  const ordersLabel = language === "ja" ? "注文" : language === "en" ? "Orders" : "Pedidos";
+
   return (
     <div className="fixed inset-0 z-[70] flex justify-end bg-black/50">
       <button
         type="button"
         onClick={onClose}
         className="absolute inset-0 cursor-default"
-        aria-label={
-          text.closeCart
-        }
+        aria-label={text.closeCart}
       />
 
       <aside className="relative flex h-full w-full max-w-md flex-col bg-white text-neutral-950 shadow-2xl dark:bg-neutral-900 dark:text-neutral-100">
-        <header className="flex items-center justify-between border-b border-neutral-200 p-5 dark:border-neutral-800">
-          <div>
-            <h2 className="text-2xl font-black">
-              {text.cart}
-            </h2>
+        <header className="border-b border-neutral-200 p-5 dark:border-neutral-800">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-2xl font-black">
+                {view === "cart" ? cartLabel : ordersLabel}
+              </h2>
+              <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
+                {view === "cart"
+                  ? `${totalItems} ${totalItems === 1 ? text.item : text.items}`
+                  : language === "ja"
+                    ? "注文状況と履歴"
+                    : language === "en"
+                      ? "Order status and history"
+                      : "Status e histórico de compras"}
+              </p>
+            </div>
 
-            <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
-              {totalItems}{" "}
-              {totalItems === 1
-                ? text.item
-                : text.items}
-            </p>
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-xl border border-neutral-200 p-2 transition hover:bg-neutral-50 dark:border-neutral-700 dark:hover:bg-neutral-800"
+              aria-label={text.closeCart}
+            >
+              <X size={20} />
+            </button>
           </div>
 
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-xl border border-neutral-200 p-2 transition hover:bg-neutral-50 dark:border-neutral-700 dark:hover:bg-neutral-800"
-            aria-label={
-              text.closeCart
-            }
-          >
-            <X size={20} />
-          </button>
+          <div className="mt-4 grid grid-cols-2 gap-2 rounded-2xl bg-neutral-100 p-1 dark:bg-neutral-800">
+            <button
+              type="button"
+              onClick={() => setView("cart")}
+              className={[
+                "relative min-h-10 rounded-xl px-3 text-xs font-black transition",
+                view === "cart"
+                  ? "bg-white text-neutral-950 shadow-sm dark:bg-neutral-900 dark:text-white"
+                  : "text-neutral-500",
+              ].join(" ")}
+            >
+              <span className="inline-flex items-center gap-2">
+                <ShoppingCart size={16} />
+                {cartLabel}
+                {totalItems > 0 && (
+                  <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] leading-5 text-white">
+                    {totalItems > 99 ? "99+" : totalItems}
+                  </span>
+                )}
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setView("orders")}
+              className={[
+                "min-h-10 rounded-xl px-3 text-xs font-black transition",
+                view === "orders"
+                  ? "bg-white text-neutral-950 shadow-sm dark:bg-neutral-900 dark:text-white"
+                  : "text-neutral-500",
+              ].join(" ")}
+            >
+              <span className="inline-flex items-center gap-2">
+                <ShoppingBag size={16} />
+                {ordersLabel}
+              </span>
+            </button>
+          </div>
         </header>
 
         <div className="flex-1 overflow-y-auto p-5">
-          {items.length === 0 ? (
+          {view === "orders" ? (
+            <CustomerOrdersPreview
+              registered={customerRegistered}
+              sellerId={sellerId}
+              language={language}
+              locale={locale}
+            />
+          ) : items.length === 0 ? (
             <p className="rounded-2xl bg-neutral-100 p-6 text-center text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">
               {text.emptyCart}
             </p>
           ) : (
             <div className="space-y-4">
-              {items.map(
-                (item) => (
+              {items.map((item) => {
+                const eligibleForOffer = Boolean(
+                  offerEvaluation?.offer.eligibleProductIds.includes(item.id),
+                );
+
+                return (
                   <article
                     key={item.id}
-                    className="rounded-2xl border border-neutral-200 p-4 dark:border-neutral-700"
+                    className={[
+                      "rounded-2xl border p-4",
+                      eligibleForOffer
+                        ? offerEvaluation?.applicable
+                          ? "border-emerald-300 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950/20"
+                          : "border-orange-300 bg-orange-50 dark:border-orange-800 dark:bg-orange-950/20"
+                        : "border-neutral-200 dark:border-neutral-700",
+                    ].join(" ")}
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
-                        <h3 className="break-words font-black">
-                          {item.name}
-                        </h3>
-
+                        <h3 className="break-words font-black">{item.name}</h3>
                         <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
-                          {formatCurrency(
-                            item.price,
-                            locale,
-                            currency,
-                          )}
+                          {formatCurrency(item.price, locale, currency)}
                         </p>
                       </div>
-
                       <p className="shrink-0 font-black">
-                        {formatCurrency(
-                          item.subtotal,
-                          locale,
-                          currency,
-                        )}
+                        {formatCurrency(item.subtotal, locale, currency)}
                       </p>
                     </div>
+
+                    {eligibleForOffer && (
+                      <div className="mt-3">
+                        <OfferProgressBadge
+                          evaluation={offerEvaluation}
+                          productId={item.id}
+                          language={language}
+                        />
+                      </div>
+                    )}
 
                     {item.bundleSelection ? (
                       <div className="mt-4 space-y-3">
@@ -5300,107 +5804,348 @@ function CartDrawer({
                     ) : (
                       <QuantitySelector
                         qty={item.qty}
-                        onDecrease={() =>
-                          onChangeQuantity(
-                            item,
-                            item.qty - 1,
-                          )
-                        }
-                        onIncrease={() =>
-                          onChangeQuantity(
-                            item,
-                            item.qty + 1,
-                          )
+                        onDecrease={() => onChangeQuantity(item, item.qty - 1)}
+                        onIncrease={() => onChangeQuantity(item, item.qty + 1)}
+                        disableIncrease={
+                          !acceptOrdersWithoutStock &&
+                          item.availabilityStatus !== "made_to_order" &&
+                          typeof item.stock === "number" &&
+                          item.qty >= item.stock
                         }
                       />
                     )}
                   </article>
-                ),
-              )}
+                );
+              })}
+
+              <OfferCompletionPanel
+                evaluation={offerEvaluation}
+                products={offerProducts}
+                cart={cart}
+                language={language}
+                locale={locale}
+                currency={currency}
+                acceptOrdersWithoutStock={acceptOrdersWithoutStock}
+                text={text}
+                onSetQuantity={onChangeQuantity}
+                onConfigureBundle={onConfigureBundle}
+              />
             </div>
           )}
         </div>
 
-        <footer className="border-t border-neutral-200 p-5 pb-[max(env(safe-area-inset-bottom),1.25rem)] dark:border-neutral-800">
-          <div className="space-y-2 text-sm">
-            <div className="flex items-center justify-between gap-4">
-              <span className="text-neutral-500">{text.subtotal}</span>
-              <span className="font-bold">
-                {formatCurrency(subtotal, locale, currency)}
-              </span>
-            </div>
+        {view === "cart" && (
+          <footer className="border-t border-neutral-200 p-5 pb-[max(env(safe-area-inset-bottom),1.25rem)] dark:border-neutral-800">
+            <div className="space-y-2 text-sm">
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-neutral-500">{text.subtotal}</span>
+                <span className="font-bold">
+                  {formatCurrency(subtotal, locale, currency)}
+                </span>
+              </div>
 
-            {stockConfirmationMessage && (
-              <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold leading-relaxed text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-200">
-                {stockConfirmationMessage}
-              </p>
-            )}
-
-            {offerEvaluation &&
-              !offerEvaluation.applicable &&
-              offerEvaluation.eligibleQuantity > 0 && (
-                <p className="rounded-xl border border-orange-200 bg-orange-50 px-3 py-2 text-xs font-semibold text-orange-800 dark:border-orange-900/50 dark:bg-orange-950/20 dark:text-orange-200">
-                  {text.offerSuggestion
-                    .replace("{count}", String(offerEvaluation.nextBundleRemaining))
-                    .replace(
-                      "{offer}",
-                      resolveLocalizedOfferText(
-                        offerEvaluation.offer.content,
-                        language,
-                        language,
-                      ).name,
-                    )}
+              {stockConfirmationMessage && (
+                <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold leading-relaxed text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-200">
+                  {stockConfirmationMessage}
                 </p>
               )}
 
-            {discount > 0 && (
-              <>
-                {offerEvaluation?.applicable && (
-                  <p className="text-xs font-bold text-orange-700 dark:text-orange-300">
-                    {resolveLocalizedOfferText(
-                      offerEvaluation.offer.content,
-                      language,
-                      language,
-                    ).name}
-                  </p>
-                )}
-                <div className="flex items-center justify-between gap-4 text-green-700 dark:text-green-300">
-                  <span>{text.discount}</span>
-                  <span className="font-black">
-                    - {formatCurrency(discount, locale, currency)}
-                  </span>
-                </div>
-              </>
-            )}
-          </div>
-
-          <div className="mt-4 flex items-center justify-between border-t border-neutral-200 pt-4 text-xl font-black dark:border-neutral-800">
-            <span>{text.total}</span>
-
-            <span>
-              {formatCurrency(
-                total,
-                locale,
-                currency,
+              {discount > 0 && (
+                <>
+                  {offerEvaluation?.applicable && (
+                    <p className="text-xs font-bold text-emerald-700 dark:text-emerald-300">
+                      {offerProgressMessage(offerEvaluation, language)}
+                    </p>
+                  )}
+                  <div className="flex items-center justify-between gap-4 text-green-700 dark:text-green-300">
+                    <span>{text.discount}</span>
+                    <span className="font-black">
+                      - {formatCurrency(discount, locale, currency)}
+                    </span>
+                  </div>
+                </>
               )}
-            </span>
-          </div>
+            </div>
 
-          <button
-            type="button"
-            onClick={onContinue}
-            disabled={
-              items.length === 0
-            }
-            className="mt-5 inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-neutral-950 px-5 py-3 font-bold text-white transition hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-white dark:text-neutral-950 dark:hover:bg-neutral-200"
-          >
-            {text.continue}
-            <ChevronRight
-              size={18}
-            />
-          </button>
-        </footer>
+            <div className="mt-4 flex items-center justify-between border-t border-neutral-200 pt-4 text-xl font-black dark:border-neutral-800">
+              <span>{text.total}</span>
+              <span>{formatCurrency(total, locale, currency)}</span>
+            </div>
+
+            <button
+              type="button"
+              onClick={onContinue}
+              disabled={items.length === 0}
+              className="mt-5 inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-neutral-950 px-5 py-3 font-bold text-white transition hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-white dark:text-neutral-950 dark:hover:bg-neutral-200"
+            >
+              {text.continue}
+              <ChevronRight size={18} />
+            </button>
+          </footer>
+        )}
       </aside>
+    </div>
+  );
+}
+
+function customerOrderTimestamp(value: string): number {
+  const timestamp = new Date(value).getTime();
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function formatCustomerOrderDate(
+  value: string,
+  locale: RegionalLocale,
+): string {
+  const timestamp = customerOrderTimestamp(value);
+  if (timestamp <= 0) return "—";
+
+  return new Intl.DateTimeFormat(locale, {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  }).format(new Date(timestamp));
+}
+
+function customerOrderPresentation(
+  order: CustomerOrderSummary,
+  language: Language,
+): { label: string; className: string } {
+  if (order.status === "cancelled") {
+    return {
+      label: language === "ja" ? "キャンセル" : language === "en" ? "Cancelled" : "Cancelado",
+      className: "border-red-200 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300",
+    };
+  }
+  if (order.status === "delivered") {
+    return {
+      label: language === "ja" ? "受け渡し済み" : language === "en" ? "Delivered" : "Entregue",
+      className: "border-neutral-200 bg-neutral-100 text-neutral-700 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200",
+    };
+  }
+  if (order.status === "ready") {
+    return {
+      label: language === "ja" ? "準備完了" : language === "en" ? "Ready" : "Pronto",
+      className: "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300",
+    };
+  }
+  const readinessReasonCodes = Array.isArray(order.readinessReasonCodes)
+    ? order.readinessReasonCodes
+    : [];
+  const production =
+    readinessReasonCodes.includes("made_to_order") ||
+    readinessReasonCodes.includes("stock_shortage");
+  return production
+    ? {
+        label: language === "ja" ? "準備中" : language === "en" ? "In preparation" : "Em preparação",
+        className: "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300",
+      }
+    : {
+        label: language === "ja" ? "注文受付" : language === "en" ? "Received" : "Recebido",
+        className: "border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-900/60 dark:bg-blue-950/30 dark:text-blue-300",
+      };
+}
+
+function CustomerOrdersPreview({
+  registered,
+  sellerId,
+  language,
+  locale,
+}: {
+  registered: boolean;
+  sellerId: string;
+  language: Language;
+  locale: RegionalLocale;
+}) {
+  const [orders, setOrders] = useState<CustomerOrderSummary[]>([]);
+  const [loading, setLoading] = useState(registered);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState("");
+
+  const refresh = useCallback(async (soft = false) => {
+    if (!registered) return;
+    soft ? setRefreshing(true) : setLoading(true);
+    setError("");
+    try {
+      setOrders(await loadCustomerOrders());
+    } catch (loadError) {
+      setError(
+        loadError instanceof Error
+          ? loadError.message
+          : language === "ja"
+            ? "注文を読み込めませんでした。"
+            : language === "en"
+              ? "Could not load orders."
+              : "Não foi possível carregar os pedidos.",
+      );
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, [language, registered]);
+
+  useEffect(() => {
+    if (!registered) {
+      setLoading(false);
+      setOrders([]);
+      return;
+    }
+    void refresh();
+  }, [refresh, registered]);
+
+  if (!registered) {
+    return (
+      <section className="rounded-2xl border border-neutral-200 bg-neutral-50 p-5 text-center dark:border-neutral-700 dark:bg-neutral-800/60">
+        <ShoppingBag className="mx-auto text-neutral-400" size={32} />
+        <h3 className="mt-3 font-black">
+          {language === "ja"
+            ? "ログインして注文を確認"
+            : language === "en"
+              ? "Sign in to view orders"
+              : "Entre para ver seus pedidos"}
+        </h3>
+        <p className="mt-2 text-sm text-neutral-500">
+          {language === "ja"
+            ? "登録済みのお客様は注文状況と履歴を確認できます。"
+            : language === "en"
+              ? "Registered customers can track active orders and purchase history."
+              : "Clientes cadastrados podem acompanhar pedidos e consultar o histórico."}
+        </p>
+        <Link
+          href={`/customer/login?next=${encodeURIComponent(`/store/${sellerId}?openCart=1`)}`}
+          className="mt-4 inline-flex min-h-11 items-center justify-center rounded-xl bg-neutral-950 px-5 text-sm font-black text-white dark:bg-white dark:text-neutral-950"
+        >
+          {language === "ja" ? "ログイン" : language === "en" ? "Sign in" : "Entrar ou cadastrar"}
+        </Link>
+      </section>
+    );
+  }
+
+  if (loading) {
+    return (
+      <div className="flex min-h-40 items-center justify-center">
+        <Loader2 className="animate-spin text-neutral-400" size={28} />
+      </div>
+    );
+  }
+
+  const sortedOrders = [...orders].sort((left, right) => {
+    const leftCurrent = left.sellerId === sellerId ? 1 : 0;
+    const rightCurrent = right.sellerId === sellerId ? 1 : 0;
+    if (leftCurrent !== rightCurrent) return rightCurrent - leftCurrent;
+    return customerOrderTimestamp(right.createdAt) - customerOrderTimestamp(left.createdAt);
+  });
+  const openOrders = sortedOrders.filter((order) => order.status === "pending" || order.status === "ready");
+  const historyOrders = sortedOrders.filter((order) => order.status === "delivered" || order.status === "cancelled");
+
+  const renderOrder = (order: CustomerOrderSummary) => {
+    const presentation = customerOrderPresentation(order, language);
+    const title = order.source === "event"
+      ? order.eventTitle || order.storeName
+      : order.storeName;
+
+    return (
+      <Link
+        key={order.referenceId}
+        href={`/customer/orders/${encodeURIComponent(order.referenceId)}`}
+        className="block rounded-2xl border border-neutral-200 bg-white p-4 transition hover:border-orange-300 dark:border-neutral-700 dark:bg-neutral-900"
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="truncate text-sm font-black">{title}</p>
+            <p className="mt-1 text-xs text-neutral-500">
+              {order.totalItems} {language === "ja" ? "点" : language === "en" ? "items" : "itens"}
+              {order.deliveryDate ? ` · ${order.deliveryDate}` : ""}
+            </p>
+          </div>
+          <span className={`shrink-0 rounded-full border px-2.5 py-1 text-[10px] font-black ${presentation.className}`}>
+            {presentation.label}
+          </span>
+        </div>
+        <div className="mt-3 flex items-center justify-between gap-3 border-t border-neutral-100 pt-3 text-xs dark:border-neutral-800">
+          <span className="inline-flex items-center gap-1 text-neutral-500">
+            <Clock3 size={13} />
+            {formatCustomerOrderDate(order.createdAt, locale)}
+          </span>
+          <span className="font-black">
+            {formatMoneyMinor(order.totalAmountMinor, order.currency, locale)}
+          </span>
+        </div>
+      </Link>
+    );
+  };
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h3 className="font-black">
+            {language === "ja" ? "対応中の注文" : language === "en" ? "Orders in progress" : "Pedidos em andamento"}
+          </h3>
+          <p className="mt-1 text-xs text-neutral-500">
+            {language === "ja"
+              ? "この店舗と他の購入状況を確認できます。"
+              : language === "en"
+                ? "Track purchases from this store and other sellers."
+                : "Acompanhe compras desta loja e de outros vendedores."}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => void refresh(true)}
+          disabled={refreshing}
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-neutral-200 dark:border-neutral-700"
+          aria-label="Refresh"
+        >
+          <RefreshCw className={refreshing ? "animate-spin" : ""} size={17} />
+        </button>
+      </div>
+
+      {error && (
+        <p className="rounded-xl border border-red-200 bg-red-50 p-3 text-xs font-bold text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300">
+          {error}
+        </p>
+      )}
+
+      <div className="space-y-3">
+        {openOrders.length > 0 ? (
+          openOrders.slice(0, 4).map(renderOrder)
+        ) : (
+          <p className="rounded-2xl bg-neutral-100 p-5 text-center text-sm text-neutral-500 dark:bg-neutral-800">
+            {language === "ja"
+              ? "対応中の注文はありません。"
+              : language === "en"
+                ? "There are no orders in progress."
+                : "Não há pedidos em andamento."}
+          </p>
+        )}
+      </div>
+
+      <div className="border-t border-neutral-200 pt-5 dark:border-neutral-800">
+        <h3 className="font-black">
+          {language === "ja" ? "購入履歴" : language === "en" ? "Purchase history" : "Histórico de compras"}
+        </h3>
+        <div className="mt-3 space-y-3">
+          {historyOrders.length > 0 ? (
+            historyOrders.slice(0, 3).map(renderOrder)
+          ) : (
+            <p className="text-sm text-neutral-500">
+              {language === "ja"
+                ? "完了した注文はまだありません。"
+                : language === "en"
+                  ? "No completed orders yet."
+                  : "Ainda não há pedidos finalizados."}
+            </p>
+          )}
+        </div>
+      </div>
+
+      <Link
+        href="/customer/orders"
+        className="inline-flex min-h-11 w-full items-center justify-center rounded-xl border border-neutral-300 px-4 text-sm font-black dark:border-neutral-700"
+      >
+        {language === "ja" ? "すべての注文を見る" : language === "en" ? "View all orders" : "Ver todos os pedidos"}
+      </Link>
     </div>
   );
 }
