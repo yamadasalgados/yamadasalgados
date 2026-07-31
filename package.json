@@ -12,7 +12,8 @@
     "audit:event-experience": "node scripts/audit-event-experience.mjs",
     "audit:store-cart-experience": "node scripts/audit-store-cart-experience.mjs",
     "audit:event-catalog-checkout": "node scripts/audit-event-catalog-checkout.mjs",
-    "audit:event-production-print": "node scripts/audit-event-production-print.mjs"
+    "audit:event-production-print": "node scripts/audit-event-production-print.mjs",
+    "audit:seller-settings": "node scripts/audit-seller-settings.mjs"
   },
   "dependencies": {
     "firebase": "^12.6.0",

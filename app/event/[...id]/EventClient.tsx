@@ -1228,6 +1228,30 @@ const uiLocale =
         // Evitar o fallback `{}` aqui preserva o tipo PublicSellerProfile["regional"]
         // e permite que o TypeScript reconheça currency, locale e timeZone.
         const sellerRegional = sellerData.regional;
+        const sellerCurrency: SupportedCurrency =
+          sellerRegional.currency === "BRL" ||
+          sellerRegional.currency === "USD" ||
+          sellerRegional.currency === "JPY"
+            ? sellerRegional.currency
+            : "JPY";
+        const sellerLocale: RegionalLocale =
+          sellerRegional.locale === "pt-BR" ||
+          sellerRegional.locale === "en-US" ||
+          sellerRegional.locale === "ja-JP"
+            ? sellerRegional.locale
+            : "ja-JP";
+        const eventCurrency: SupportedCurrency =
+          data.currency === "BRL" ||
+          data.currency === "USD" ||
+          data.currency === "JPY"
+            ? data.currency
+            : sellerCurrency;
+        const eventLocale: RegionalLocale =
+          data.regionalLocale === "pt-BR" ||
+          data.regionalLocale === "en-US" ||
+          data.regionalLocale === "ja-JP"
+            ? data.regionalLocale
+            : sellerLocale;
         const storedSellerId =
           typeof data.sellerId === "string"
             ? data.sellerId.trim()
@@ -1282,18 +1306,8 @@ const uiLocale =
           allowDelivery: data.allowDelivery !== false,
           allowPickup: data.allowPickup !== false,
           offerIds: normalizeStringArray(data.offerIds),
-          currency:
-            data.currency === "BRL" || data.currency === "USD" || data.currency === "JPY"
-              ? data.currency
-              : sellerRegional.currency === "BRL" || sellerRegional.currency === "USD"
-                ? sellerRegional.currency
-                : "JPY",
-          regionalLocale:
-            data.regionalLocale === "pt-BR" || data.regionalLocale === "en-US" || data.regionalLocale === "ja-JP"
-              ? data.regionalLocale
-              : sellerRegional.locale === "pt-BR" || sellerRegional.locale === "en-US"
-                ? sellerRegional.locale
-                : "ja-JP",
+          currency: eventCurrency,
+          regionalLocale: eventLocale,
           defaultLanguage:
             data.defaultLanguage === "en" || data.defaultLanguage === "ja" || data.defaultLanguage === "pt"
               ? data.defaultLanguage
@@ -1303,8 +1317,8 @@ const uiLocale =
           timeZone: normalizeTimeZone(
             data.timeZone ?? sellerRegional.timeZone,
             defaultTimeZoneForRegional(
-              data.regionalLocale ?? sellerRegional.locale,
-              data.currency ?? sellerRegional.currency,
+              eventLocale,
+              eventCurrency,
               data.operatingCountry ?? sellerRegional.operatingCountry,
             ),
           ),

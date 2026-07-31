@@ -81,9 +81,9 @@ type IdentityCopy = {
 
 const COPY: Record<Language, IdentityCopy> = {
   pt: {
-    title: "Identidade white-label",
+    title: "Identidade e loja pública",
     subtitle:
-      "Defina como sua marca aparece na loja, nos eventos e nas próximas etapas de recibos e notificações.",
+      "Defina como sua marca aparece na loja, nos eventos, nos recibos e nas comunicações com o cliente.",
     publicName: "Nome comercial público",
     publicNameHelp: "Este nome será exibido aos clientes.",
     description: "Descrição da loja",
@@ -106,7 +106,7 @@ const COPY: Record<Language, IdentityCopy> = {
     website: "Site",
     receipt: "Dados-base do recibo",
     receiptHelp:
-      "Esses textos ficarão disponíveis para a etapa 06D6 de recibos personalizados.",
+      "Esses textos podem ser exibidos nas vias configuradas em Impressão e recibos.",
     receiptHeader: "Texto acima dos dados do pedido",
     receiptFooter: "Texto no rodapé",
     preview: "Prévia da identidade",
@@ -120,9 +120,9 @@ const COPY: Record<Language, IdentityCopy> = {
     bannerTooLarge: "O banner deve ter no máximo 10 MB.",
   },
   en: {
-    title: "White-label identity",
+    title: "Identity and public store",
     subtitle:
-      "Define how your brand appears in the store, events, and upcoming receipt and notification features.",
+      "Define how your brand appears in the store, events, receipts, and customer communications.",
     publicName: "Public business name",
     publicNameHelp: "This is the name customers will see.",
     description: "Store description",
@@ -145,7 +145,7 @@ const COPY: Record<Language, IdentityCopy> = {
     website: "Website",
     receipt: "Receipt identity base",
     receiptHelp:
-      "These texts will be available for stage 06D6 personalized receipts.",
+      "These texts can be displayed in the copies configured under Printing and receipts.",
     receiptHeader: "Text above order details",
     receiptFooter: "Footer text",
     preview: "Identity preview",
@@ -159,9 +159,9 @@ const COPY: Record<Language, IdentityCopy> = {
     bannerTooLarge: "The banner must be no larger than 10 MB.",
   },
   ja: {
-    title: "ホワイトラベル店舗情報",
+    title: "店舗情報と公開ストア",
     subtitle:
-      "店舗、イベント、今後のレシートや通知に表示するブランド情報を設定します。",
+      "店舗、イベント、レシート、お客様向けの案内に表示するブランド情報を設定します。",
     publicName: "公開店舗名",
     publicNameHelp: "お客様に表示される名称です。",
     description: "店舗紹介",
@@ -183,7 +183,7 @@ const COPY: Record<Language, IdentityCopy> = {
     instagram: "Instagram",
     website: "ウェブサイト",
     receipt: "レシート基本情報",
-    receiptHelp: "06D6のカスタムレシートで使用できる文章です。",
+    receiptHelp: "印刷とレシートで設定した各控えに表示できる文章です。",
     receiptHeader: "注文情報の上に表示する文章",
     receiptFooter: "フッター文章",
     preview: "表示プレビュー",

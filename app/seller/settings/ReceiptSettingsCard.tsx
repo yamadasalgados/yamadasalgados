@@ -36,7 +36,7 @@ function languageKey(value: string): Language {
 const COPY = {
   pt: {
     title: "Recibo personalizado",
-    subtitle: "Escolha o conteúdo de cada via. O logo e os textos vêm da Identidade white-label acima.",
+    subtitle: "Escolha o conteúdo de cada via. O logo e os textos vêm da área Identidade e loja pública.",
     production: "Via do seller / produção",
     customer: "Via do cliente",
     showLogo: "Mostrar logo",
@@ -67,7 +67,7 @@ const COPY = {
   },
   en: {
     title: "Personalized receipt",
-    subtitle: "Choose the content of each copy. The logo and texts come from the white-label identity above.",
+    subtitle: "Choose the content of each copy. The logo and texts come from Identity and public store settings.",
     production: "Seller / production copy",
     customer: "Customer copy",
     showLogo: "Show logo",
@@ -98,7 +98,7 @@ const COPY = {
   },
   ja: {
     title: "カスタムレシート",
-    subtitle: "各控えの内容を設定します。ロゴと文章は上のホワイトラベル店舗情報から使用します。",
+    subtitle: "各控えの内容を設定します。ロゴと文章は店舗情報と公開ストアの設定から使用します。",
     production: "販売者・製造用",
     customer: "お客様用",
     showLogo: "ロゴを表示",
