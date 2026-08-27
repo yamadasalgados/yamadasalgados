@@ -34,9 +34,12 @@ import {
   emptyProductContent,
   normalizeProductBundleConfig,
   normalizeProductContent,
+  normalizeProductMixedPackConfig,
+  normalizeProductType,
   normalizeProductStorefrontConfig,
   type ProductContent,
   type ProductLanguage,
+  type ProductType,
 } from "@/app/lib/product-schema";
 import { normalizeProductShipping } from "@/app/lib/shipping-schema";
 import {
@@ -68,6 +71,7 @@ import type {
   ProductFormField,
   ProductSaveResult,
   ProductStatus,
+  SellerCategoryDoc,
 } from "./product-types";
 
 type ProductModalProps = {
@@ -75,7 +79,7 @@ type ProductModalProps = {
   product: ProductDoc | null;
   authUser: User;
   sellerId: string;
-  categories: string[];
+  categories: SellerCategoryDoc[];
   availableProducts: ProductDoc[];
   ownCount: number;
   maxProducts: number;
@@ -91,7 +95,15 @@ type ProductModalProps = {
 type Snapshot = {
   name: string;
   category: string;
+  categoryId: string;
   status: ProductStatus;
+  productType: ProductType;
+  mixedPackEligible: boolean;
+  mixedPackUnits: string;
+  mixedPackOptionProductIds: string[];
+  mixedPackAllowRepeats: boolean;
+  mixedPackMinDistinct: string;
+  mixedPackMaxPerProduct: string;
   costPrice: string;
   sellPrice: string;
   scheduledPriceEnabled: boolean;
@@ -164,7 +176,7 @@ export default function ProductModal({
   const extraPreviewsRef = useRef<string[]>([]);
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const productRef = useRef<ProductDoc | null>(product);
-  const categoriesRef = useRef<string[]>(categories);
+  const categoriesRef = useRef<SellerCategoryDoc[]>(categories);
   const reservedStockRef = useRef(0);
 
 
@@ -176,6 +188,7 @@ export default function ProductModal({
   const [mounted, setMounted] = useState(false);
   const [name, setName] = useState("");
   const [category, setCategory] = useState("");
+  const [categoryId, setCategoryId] = useState("");
   const [status, setStatus] = useState<ProductStatus>("active");
   const [costPrice, setCostPrice] = useState("");
   const [sellPrice, setSellPrice] = useState("");
@@ -196,6 +209,13 @@ export default function ProductModal({
   const [shippingWeightGrams, setShippingWeightGrams] = useState("");
   const [productionLeadTimeDays, setProductionLeadTimeDays] = useState("0");
   const [content, setContent] = useState<ProductContent>(() => emptyProductContent());
+  const [productType, setProductType] = useState<ProductType>("standard");
+  const [mixedPackEligible, setMixedPackEligible] = useState(false);
+  const [mixedPackUnits, setMixedPackUnits] = useState("3");
+  const [mixedPackOptionProductIds, setMixedPackOptionProductIds] = useState<string[]>([]);
+  const [mixedPackAllowRepeats, setMixedPackAllowRepeats] = useState(false);
+  const [mixedPackMinDistinct, setMixedPackMinDistinct] = useState("3");
+  const [mixedPackMaxPerProduct, setMixedPackMaxPerProduct] = useState("1");
   const [bundleEnabled, setBundleEnabled] = useState(false);
   const [bundleTotalUnits, setBundleTotalUnits] = useState("100");
   const [bundleOptionProductIds, setBundleOptionProductIds] = useState<string[]>([]);
@@ -254,6 +274,10 @@ export default function ProductModal({
             imageRequired: "メイン画像を選択してください。",
             invalidBundleUnits: "セット数は1以上で入力してください。",
             invalidBundleOptions: "セットに含める商品を2つ以上選択してください。",
+            invalidMixedUnits: "ミックスパックの数量は1以上で入力してください。",
+            invalidMixedOptions: "ミックスパックの商品を2つ以上選択してください。",
+            invalidMixedDistinct: "異なる商品の最小数を確認してください。",
+            invalidMixedMax: "商品ごとの最大数を確認してください。",
             help: "商品情報と画像を入力してください。",
           }
         : lang === "en"
@@ -315,6 +339,10 @@ export default function ProductModal({
               imageRequired: "Selecione uma imagem principal.",
               invalidBundleUnits: "O total do kit deve ser pelo menos 1.",
               invalidBundleOptions: "Selecione pelo menos dois produtos para compor o kit.",
+              invalidMixedUnits: "A quantidade por Pack Misto deve ser pelo menos 1.",
+              invalidMixedOptions: "Selecione pelo menos dois produtos elegíveis para o Pack Misto.",
+              invalidMixedDistinct: "Confira o mínimo de produtos/sabores diferentes.",
+              invalidMixedMax: "Confira o máximo permitido por produto.",
               help: "Preencha as informações e imagens do produto.",
             },
     [lang, maxProducts],
@@ -346,7 +374,15 @@ export default function ProductModal({
       buildSnapshot({
         name,
         category,
+        categoryId,
         status,
+        productType,
+        mixedPackEligible,
+        mixedPackUnits,
+        mixedPackOptionProductIds,
+        mixedPackAllowRepeats,
+        mixedPackMinDistinct,
+        mixedPackMaxPerProduct,
         costPrice,
         sellPrice,
         scheduledPriceEnabled,
@@ -378,6 +414,14 @@ export default function ProductModal({
       }),
     [
       category,
+      categoryId,
+      productType,
+      mixedPackEligible,
+      mixedPackUnits,
+      mixedPackOptionProductIds,
+      mixedPackAllowRepeats,
+      mixedPackMinDistinct,
+      mixedPackMaxPerProduct,
       costPrice,
       existingExtraUrls,
       existingImageUrl,
@@ -437,9 +481,14 @@ export default function ProductModal({
       activeProduct?.lowStockThreshold,
     );
     reservedStockRef.current = activeInventory.reserved;
-    const nextCategory =
-      activeProduct?.category || activeCategories[0] || "";
+    const matchedCategory = activeProduct?.categoryId
+      ? activeCategories.find((item) => item.id === activeProduct.categoryId)
+      : activeCategories.find((item) => item.name === activeProduct?.category);
+    const nextCategoryId = matchedCategory?.id || activeCategories[0]?.id || "";
+    const nextCategory = matchedCategory?.name || activeProduct?.category || activeCategories[0]?.name || "";
     const activeBundle = normalizeProductBundleConfig(activeProduct?.bundleConfig);
+    const activeMixedPack = normalizeProductMixedPackConfig(activeProduct?.mixedPackConfig);
+    const activeProductType = normalizeProductType(activeProduct?.productType, activeProduct?.mixedPackConfig);
     const activeStorefront = normalizeProductStorefrontConfig(activeProduct?.storefront);
     const activeScheduledPrice = normalizeProductScheduledPriceChange(
       activeProduct?.scheduledPriceChange,
@@ -466,7 +515,15 @@ export default function ProductModal({
     const nextState: Snapshot = {
       name: activeProduct?.name || "",
       category: nextCategory,
+      categoryId: nextCategoryId,
       status: activeProduct?.status || "active",
+      productType: activeProductType,
+      mixedPackEligible: activeProduct?.mixedPackEligible === true,
+      mixedPackUnits: String(activeMixedPack.unitsPerPack || 3),
+      mixedPackOptionProductIds: activeMixedPack.optionProductIds,
+      mixedPackAllowRepeats: activeMixedPack.allowRepeats,
+      mixedPackMinDistinct: String(activeMixedPack.minDistinct || 1),
+      mixedPackMaxPerProduct: activeMixedPack.maxPerProduct === null ? "" : String(activeMixedPack.maxPerProduct),
       costPrice:
         activeProduct && activeProduct.costPrice > 0
           ? String(activeProduct.costPrice)
@@ -511,7 +568,15 @@ export default function ProductModal({
 
     setName(nextState.name);
     setCategory(nextState.category);
+    setCategoryId(nextState.categoryId);
     setStatus(nextState.status);
+    setProductType(nextState.productType);
+    setMixedPackEligible(nextState.mixedPackEligible);
+    setMixedPackUnits(nextState.mixedPackUnits);
+    setMixedPackOptionProductIds(nextState.mixedPackOptionProductIds);
+    setMixedPackAllowRepeats(nextState.mixedPackAllowRepeats);
+    setMixedPackMinDistinct(nextState.mixedPackMinDistinct);
+    setMixedPackMaxPerProduct(nextState.mixedPackMaxPerProduct);
     setCostPrice(nextState.costPrice);
     setSellPrice(nextState.sellPrice);
     setScheduledPriceEnabled(nextState.scheduledPriceEnabled);
@@ -651,6 +716,9 @@ export default function ProductModal({
     const parsedShippingWeight = shippingWeightGrams.trim() === "" ? null : toNum(shippingWeightGrams);
     const parsedProductionLeadTimeDays = toNum(productionLeadTimeDays);
     const parsedBundleTotalUnits = toNum(bundleTotalUnits);
+    const parsedMixedPackUnits = toNum(mixedPackUnits);
+    const parsedMixedPackMinDistinct = toNum(mixedPackMinDistinct);
+    const parsedMixedPackMaxPerProduct = mixedPackMaxPerProduct.trim() === "" ? null : toNum(mixedPackMaxPerProduct);
 
     const translatedNameExists = Object.values(content).some((entry: ProductContent[ProductLanguage]) => entry.name.trim());
     if (!name.trim() && !translatedNameExists) {
@@ -659,8 +727,7 @@ export default function ProductModal({
 
     if (
       creatingCategory ||
-      !category.trim() ||
-      category === "__create__"
+      !categoryId.trim()
     ) {
       errors.category = t("products.categories.err.pick");
     }
@@ -700,6 +767,7 @@ export default function ProductModal({
     if (Number.isNaN(parsedStock) || parsedStock < 0) {
       errors.stockQty = copy.invalidStock;
     } else if (
+      productType !== "mixed_pack" &&
       reservedStockRef.current > 0 &&
       (!inventoryTracked || parsedStock < reservedStockRef.current)
     ) {
@@ -722,7 +790,7 @@ export default function ProductModal({
       errors.shippingWeightGrams = copy.invalidShippingWeight;
     }
 
-    const requiresProductionLeadTime = status === "made_to_order" || bundleEnabled;
+    const requiresProductionLeadTime = productType !== "mixed_pack" && (status === "made_to_order" || bundleEnabled);
     if (
       Number.isNaN(parsedProductionLeadTimeDays) ||
       !Number.isInteger(parsedProductionLeadTimeDays) ||
@@ -732,7 +800,7 @@ export default function ProductModal({
       errors.productionLeadTimeDays = copy.invalidProductionLeadTime;
     }
 
-    if (bundleEnabled) {
+    if (bundleEnabled && productType !== "mixed_pack") {
       if (Number.isNaN(parsedBundleTotalUnits) || parsedBundleTotalUnits < 1) {
         errors.bundleTotalUnits = copy.invalidBundleUnits;
       }
@@ -748,6 +816,25 @@ export default function ProductModal({
       if (validOptions.length < 2) {
         errors.bundleOptions = copy.invalidBundleOptions;
       }
+    }
+
+    if (productType === "mixed_pack") {
+      if (Number.isNaN(parsedMixedPackUnits) || !Number.isInteger(parsedMixedPackUnits) || parsedMixedPackUnits < 1) {
+        errors.mixedPackUnits = copy.invalidMixedUnits;
+      }
+      if (Number.isNaN(parsedMixedPackMinDistinct) || !Number.isInteger(parsedMixedPackMinDistinct) || parsedMixedPackMinDistinct < 1 || parsedMixedPackMinDistinct > parsedMixedPackUnits) {
+        errors.mixedPackMinDistinct = copy.invalidMixedDistinct;
+      }
+      if (parsedMixedPackMaxPerProduct !== null && (Number.isNaN(parsedMixedPackMaxPerProduct) || !Number.isInteger(parsedMixedPackMaxPerProduct) || parsedMixedPackMaxPerProduct < 1 || parsedMixedPackMaxPerProduct > parsedMixedPackUnits)) {
+        errors.mixedPackMaxPerProduct = copy.invalidMixedMax;
+      }
+      const categoryMap = new Map(categories.map((item) => [item.id, item]));
+      const validMixedOptions = mixedPackOptionProductIds.filter((id) => {
+        const item = availableProducts.find((candidate) => candidate.id === id);
+        if (!item || item.id === product?.id || item.status === "inactive" || item.productType === "mixed_pack" || item.bundleConfig?.enabled) return false;
+        return item.mixedPackEligible === true || categoryMap.get(item.categoryId)?.capabilities.mixedPackEligible === true;
+      });
+      if (validMixedOptions.length < 2) errors.mixedPackOptions = copy.invalidMixedOptions;
     }
 
     if (!existingImageUrl && !mainFile) {
@@ -781,9 +868,18 @@ export default function ProductModal({
       parsedShippingWeight,
       parsedProductionLeadTimeDays,
       parsedBundleTotalUnits,
+      parsedMixedPackUnits,
+      parsedMixedPackMinDistinct,
+      parsedMixedPackMaxPerProduct,
     };
   }, [
-    category,
+    categoryId,
+    categories,
+    productType,
+    mixedPackUnits,
+    mixedPackMinDistinct,
+    mixedPackMaxPerProduct,
+    mixedPackOptionProductIds,
     copy.imageRequired,
     copy.invalidCost,
     copy.invalidSale,
@@ -797,6 +893,10 @@ export default function ProductModal({
     copy.invalidProductionLeadTime,
     copy.invalidBundleUnits,
     copy.invalidBundleOptions,
+    copy.invalidMixedUnits,
+    copy.invalidMixedOptions,
+    copy.invalidMixedDistinct,
+    copy.invalidMixedMax,
     costPrice,
     creatingCategory,
     editing,
@@ -851,9 +951,15 @@ export default function ProductModal({
       await setDoc(
         doc(db, "sellers", sellerId, "categories", slug),
         {
+          schemaVersion: 2,
           ownerUid: authUser.uid,
           name: cleanName,
           slug,
+          names: { pt: cleanName, en: "", ja: "" },
+          parentId: null,
+          order: 0,
+          tags: [],
+          capabilities: { mixedPackEligible: false },
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         },
@@ -861,6 +967,7 @@ export default function ProductModal({
       );
 
       setCategory(cleanName);
+      setCategoryId(slug);
       setCreatingCategory(false);
       setNewCategoryName("");
       clearFieldError("category");
@@ -896,7 +1003,7 @@ export default function ProductModal({
     const normalizedProductionLeadTime = normalizeProductProductionLeadTime(
       { days: validation.parsedProductionLeadTimeDays },
       validation.parsedProductionLeadTimeDays,
-      { madeToOrder: status === "made_to_order" || bundleEnabled },
+      { madeToOrder: productType !== "mixed_pack" && (status === "made_to_order" || bundleEnabled) },
     );
     const normalizedBundleTotalUnits = Math.max(1, Math.floor(validation.parsedBundleTotalUnits));
     const normalizedBundleOptionIds = Array.from(new Set(bundleOptionProductIds.filter((id) =>
@@ -905,10 +1012,23 @@ export default function ProductModal({
             item.id === id &&
             item.id !== product?.id &&
             item.status !== "inactive" &&
+            item.productType !== "mixed_pack" &&
             !item.bundleConfig?.enabled,
         ),
     )));
-    const normalizedCategory = normalizeCategoryLabel(category);
+    const categoryMap = new Map(categories.map((item) => [item.id, item]));
+    const selectedCategory = categoryMap.get(categoryId);
+    const normalizedCategory = normalizeCategoryLabel(selectedCategory?.name || category);
+    const normalizedMixedPackUnits = Math.max(1, Math.floor(validation.parsedMixedPackUnits));
+    const normalizedMixedPackMinDistinct = Math.max(1, Math.min(normalizedMixedPackUnits, Math.floor(validation.parsedMixedPackMinDistinct)));
+    const normalizedMixedPackMaxPerProduct = mixedPackAllowRepeats
+      ? (validation.parsedMixedPackMaxPerProduct === null ? null : Math.max(1, Math.min(normalizedMixedPackUnits, Math.floor(validation.parsedMixedPackMaxPerProduct))))
+      : 1;
+    const normalizedMixedPackOptionIds = Array.from(new Set(mixedPackOptionProductIds.filter((id) => {
+      const item = availableProducts.find((candidate) => candidate.id === id);
+      if (!item || item.id === product?.id || item.status === "inactive" || item.productType === "mixed_pack" || item.bundleConfig?.enabled) return false;
+      return item.mixedPackEligible === true || categoryMap.get(item.categoryId)?.capabilities.mixedPackEligible === true;
+    })));
     const normalizedStorefront = normalizeProductStorefrontConfig({
       subgroup: storefrontSubgroup,
       subgroupOrder: storefrontSubgroupOrder,
@@ -954,30 +1074,9 @@ export default function ProductModal({
 
       setUploading(false);
 
-      try {
-        const categorySlug = slugify(normalizedCategory);
-        await setDoc(
-          doc(db, "sellers", sellerId, "categories", categorySlug),
-          {
-            schemaVersion: 2,
-            ownerUid: authUser.uid,
-            names: { pt: normalizedCategory, en: "", ja: "" },
-            name: normalizedCategory,
-            slug: categorySlug,
-            status: "active",
-            sortOrder: 0,
-            updatedAt: serverTimestamp(),
-          },
-          { merge: true },
-        );
-      } catch (categoryError) {
-        console.warn(
-          "[ProductModal] Product saved without category synchronization:",
-          categoryError,
-        );
-      }
+      // Categoria 2.0 já é persistida pelo gerenciador/seletor. Não sobrescrever
+      // parentId, traduções, ordem, tags ou capacidades ao salvar o produto.
 
-      const categoryId = slugify(normalizedCategory);
       const normalizedContent = normalizeProductContent(
         content,
         name.trim(),
@@ -1033,6 +1132,16 @@ export default function ProductModal({
         sellerEmail: authUser.email ?? null,
         categoryId,
         category: normalizedCategory,
+        productType,
+        mixedPackEligible: productType === "standard" ? mixedPackEligible : false,
+        mixedPackConfig: {
+          enabled: productType === "mixed_pack",
+          unitsPerPack: normalizedMixedPackUnits,
+          optionProductIds: productType === "mixed_pack" ? normalizedMixedPackOptionIds : [],
+          allowRepeats: mixedPackAllowRepeats,
+          minDistinct: normalizedMixedPackMinDistinct,
+          maxPerProduct: normalizedMixedPackMaxPerProduct,
+        },
         content: normalizedContent,
         name: fallbackName,
         description:
@@ -1051,9 +1160,9 @@ export default function ProductModal({
         costPriceMinor: majorToMinor(cost, currency),
         unitsPerSale: units,
         inventory: {
-          tracked: inventoryTracked,
-          quantity: stock,
-          reserved: inventoryTracked ? reservedStockRef.current : 0,
+          tracked: productType === "mixed_pack" ? false : inventoryTracked,
+          quantity: productType === "mixed_pack" ? 0 : stock,
+          reserved: productType === "mixed_pack" ? 0 : (inventoryTracked ? reservedStockRef.current : 0),
           lowStockThreshold: threshold,
         },
         shipping: {
@@ -1081,15 +1190,15 @@ export default function ProductModal({
         shadowCost: cost,
         shadowSell: sale,
         quantity: units,
-        stockQty: stock,
+        stockQty: productType === "mixed_pack" ? 0 : stock,
         lowStockThreshold: threshold,
         bundleConfig: {
-          enabled: bundleEnabled,
+          enabled: productType === "mixed_pack" ? false : bundleEnabled,
           totalUnits: normalizedBundleTotalUnits,
-          optionProductIds: bundleEnabled ? normalizedBundleOptionIds : [],
+          optionProductIds: productType !== "mixed_pack" && bundleEnabled ? normalizedBundleOptionIds : [],
         },
         storefront: normalizedStorefront,
-        status: bundleEnabled ? "made_to_order" as const : status,
+        status: productType !== "mixed_pack" && bundleEnabled ? "made_to_order" as const : status,
         imageUrl: nextMainUrl,
         extraImageUrls: nextExtraUrls,
         updatedAt: serverTimestamp(),
@@ -1123,6 +1232,7 @@ export default function ProductModal({
           );
 
           if (
+            productType !== "mixed_pack" &&
             inventoryTracked &&
             stock < currentInventory.reserved
           ) {
@@ -1134,13 +1244,12 @@ export default function ProductModal({
           payload = {
             ...payload,
             inventory: {
-              tracked: inventoryTracked,
-              quantity: stock,
-              reserved: inventoryTracked
-                ? currentInventory.reserved
-                : 0,
+              tracked: productType === "mixed_pack" ? false : inventoryTracked,
+              quantity: productType === "mixed_pack" ? 0 : stock,
+              reserved: productType === "mixed_pack" ? 0 : (inventoryTracked ? currentInventory.reserved : 0),
               lowStockThreshold: threshold,
             },
+            stockQty: productType === "mixed_pack" ? 0 : stock,
           };
           transaction.update(productReference, payload);
         });
@@ -1181,6 +1290,9 @@ export default function ProductModal({
           sellerEmail: authUser.email ?? null,
           categoryId,
           category: normalizedCategory,
+          productType: payload.productType,
+          mixedPackEligible: payload.mixedPackEligible,
+          mixedPackConfig: payload.mixedPackConfig,
           content: normalizedContent,
           name: fallbackName,
           description: payload.description,
@@ -1244,7 +1356,15 @@ export default function ProductModal({
       const finalSnapshot = buildSnapshot({
         name: savedProduct.name,
         category: savedProduct.category,
+        categoryId: savedProduct.categoryId,
         status: savedProduct.status,
+        productType: savedProduct.productType,
+        mixedPackEligible: savedProduct.mixedPackEligible,
+        mixedPackUnits: String(savedProduct.mixedPackConfig.unitsPerPack),
+        mixedPackOptionProductIds: savedProduct.mixedPackConfig.optionProductIds,
+        mixedPackAllowRepeats: savedProduct.mixedPackConfig.allowRepeats,
+        mixedPackMinDistinct: String(savedProduct.mixedPackConfig.minDistinct),
+        mixedPackMaxPerProduct: savedProduct.mixedPackConfig.maxPerProduct === null ? "" : String(savedProduct.mixedPackConfig.maxPerProduct),
         costPrice: String(savedProduct.costPrice || ""),
         sellPrice: String(savedProduct.baseSellPrice || savedProduct.sellPrice || ""),
         scheduledPriceEnabled: savedProduct.scheduledPriceChange.enabled,
@@ -1282,6 +1402,15 @@ export default function ProductModal({
       });
 
       initialSnapshotRef.current = finalSnapshot;
+      setCategory(savedProduct.category);
+      setCategoryId(savedProduct.categoryId);
+      setProductType(savedProduct.productType);
+      setMixedPackEligible(savedProduct.mixedPackEligible);
+      setMixedPackUnits(String(savedProduct.mixedPackConfig.unitsPerPack));
+      setMixedPackOptionProductIds(savedProduct.mixedPackConfig.optionProductIds);
+      setMixedPackAllowRepeats(savedProduct.mixedPackConfig.allowRepeats);
+      setMixedPackMinDistinct(String(savedProduct.mixedPackConfig.minDistinct));
+      setMixedPackMaxPerProduct(savedProduct.mixedPackConfig.maxPerProduct === null ? "" : String(savedProduct.mixedPackConfig.maxPerProduct));
       setExistingImageUrl(savedProduct.imageUrl);
       setExistingExtraUrls(savedProduct.extraImageUrls || []);
       setSellPrice(String(savedProduct.baseSellPrice || savedProduct.sellPrice || ""));
@@ -1355,6 +1484,15 @@ export default function ProductModal({
     authUser.uid,
     busy,
     category,
+    categoryId,
+    categories,
+    productType,
+    mixedPackEligible,
+    mixedPackUnits,
+    mixedPackOptionProductIds,
+    mixedPackAllowRepeats,
+    mixedPackMinDistinct,
+    mixedPackMaxPerProduct,
     content,
     currency,
     copy.created,
@@ -1479,9 +1617,10 @@ export default function ProductModal({
                 nameInputRef={nameInputRef}
                 errors={fieldErrors}
                 categories={categories}
-                category={category}
-                setCategory={(value) => {
-                  setCategory(value);
+                categoryId={categoryId}
+                setCategoryId={(value) => {
+                  setCategoryId(value);
+                  setCategory(categories.find((item) => item.id === value)?.name || "");
                   clearFieldError("category");
                 }}
                 creatingCategory={creatingCategory}
@@ -1588,10 +1727,35 @@ export default function ProductModal({
                 setStorefrontProductOrder={setStorefrontProductOrder}
                 availableProducts={availableProducts}
                 currentProductId={product?.id}
+                productType={productType}
+                setProductType={(value) => {
+                  setProductType(value);
+                  if (value === "mixed_pack") {
+                    setBundleEnabled(false);
+                    setInventoryTracked(false);
+                    setStockQty("0");
+                  }
+                  clearFieldError("mixedPackUnits");
+                  clearFieldError("mixedPackOptions");
+                  clearFieldError("mixedPackMinDistinct");
+                  clearFieldError("mixedPackMaxPerProduct");
+                }}
+                mixedPackEligible={mixedPackEligible}
+                setMixedPackEligible={setMixedPackEligible}
+                mixedPackUnits={mixedPackUnits}
+                setMixedPackUnits={(value) => { setMixedPackUnits(value); clearFieldError("mixedPackUnits"); }}
+                mixedPackOptionProductIds={mixedPackOptionProductIds}
+                setMixedPackOptionProductIds={(value) => { setMixedPackOptionProductIds(value); clearFieldError("mixedPackOptions"); }}
+                mixedPackAllowRepeats={mixedPackAllowRepeats}
+                setMixedPackAllowRepeats={setMixedPackAllowRepeats}
+                mixedPackMinDistinct={mixedPackMinDistinct}
+                setMixedPackMinDistinct={(value) => { setMixedPackMinDistinct(value); clearFieldError("mixedPackMinDistinct"); }}
+                mixedPackMaxPerProduct={mixedPackMaxPerProduct}
+                setMixedPackMaxPerProduct={(value) => { setMixedPackMaxPerProduct(value); clearFieldError("mixedPackMaxPerProduct"); }}
                 bundleEnabled={bundleEnabled}
                 setBundleEnabled={(value) => {
-                  setBundleEnabled(value);
-                  if (value) {
+                  setBundleEnabled(productType === "mixed_pack" ? false : value);
+                  if (value && productType !== "mixed_pack") {
                     setStatus("made_to_order");
                     setInventoryTracked(false);
                     if (Number(productionLeadTimeDays || 0) < 1) {

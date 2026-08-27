@@ -46,6 +46,7 @@ type TargetOrder = {
   ref: admin.firestore.DocumentReference;
   data: Record<string, unknown>;
   items: ManagedItem[];
+  itemField: "items" | "inventoryItems";
   matchingIndexes: number[];
   sortKey: string;
 };
@@ -425,7 +426,11 @@ export async function POST(request: NextRequest) {
         const status = normalizeCurrentStatus(data.fulfillmentStatus ?? data.status);
         if (status === "delivered" || status === "cancelled") continue;
 
-        const items = (Array.isArray(data.items) ? data.items : [])
+        const itemField: "items" | "inventoryItems" =
+          Array.isArray(data.inventoryItems) && data.inventoryItems.length > 0
+            ? "inventoryItems"
+            : "items";
+        const items = (Array.isArray(data[itemField]) ? data[itemField] : [])
           .map(parseManagedItem)
           .filter((item): item is ManagedItem => item !== null);
         const matchingIndexes = items
@@ -440,6 +445,7 @@ export async function POST(request: NextRequest) {
           ref: orderRefs[index],
           data,
           items,
+          itemField,
           matchingIndexes,
           sortKey: `${deliveryDate}:${createdAt}:${target.orderId}`,
         });
@@ -540,7 +546,7 @@ export async function POST(request: NextRequest) {
         }
 
         transaction.update(targetOrder.ref, {
-          items: serializedItems,
+          [targetOrder.itemField]: serializedItems,
           status: nextStatus,
           fulfillmentStatus: nextStatus,
           inventoryState,

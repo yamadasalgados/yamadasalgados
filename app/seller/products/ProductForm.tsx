@@ -1,10 +1,10 @@
 "use client";
 
 import type { RefObject } from "react";
-import type { ProductContent, ProductLanguage } from "@/app/lib/product-schema";
+import type { ProductContent, ProductLanguage, ProductType } from "@/app/lib/product-schema";
 import type { SupportedCurrency } from "@/app/types/regional";
 import { dateTimeLocalToUtcMillis, formatScheduledPriceDate } from "@/app/lib/scheduled-price";
-import type { ProductDoc, ProductFormErrors, ProductStatus } from "./product-types";
+import type { ProductDoc, ProductFormErrors, ProductStatus, SellerCategoryDoc } from "./product-types";
 
 type Props = {
   t: (key: string) => string;
@@ -14,9 +14,9 @@ type Props = {
   categorySaving: boolean;
   nameInputRef: RefObject<HTMLInputElement | null>;
   errors: ProductFormErrors;
-  categories: string[];
-  category: string;
-  setCategory: (value: string) => void;
+  categories: SellerCategoryDoc[];
+  categoryId: string;
+  setCategoryId: (value: string) => void;
   creatingCategory: boolean;
   setCreatingCategory: (value: boolean) => void;
   newCategoryName: string;
@@ -74,6 +74,20 @@ type Props = {
   setStorefrontProductOrder: (value: string) => void;
   availableProducts: ProductDoc[];
   currentProductId?: string;
+  productType: ProductType;
+  setProductType: (value: ProductType) => void;
+  mixedPackEligible: boolean;
+  setMixedPackEligible: (value: boolean) => void;
+  mixedPackUnits: string;
+  setMixedPackUnits: (value: string) => void;
+  mixedPackOptionProductIds: string[];
+  setMixedPackOptionProductIds: (value: string[]) => void;
+  mixedPackAllowRepeats: boolean;
+  setMixedPackAllowRepeats: (value: boolean) => void;
+  mixedPackMinDistinct: string;
+  setMixedPackMinDistinct: (value: string) => void;
+  mixedPackMaxPerProduct: string;
+  setMixedPackMaxPerProduct: (value: string) => void;
   bundleEnabled: boolean;
   setBundleEnabled: (value: boolean) => void;
   bundleTotalUnits: string;
@@ -107,7 +121,7 @@ const LANGUAGES: Array<{ id: ProductLanguage; label: string }> = [
 export default function ProductForm(props: Props) {
   const {
     t, lang, currency, disabled, categorySaving, nameInputRef, errors,
-    categories, category, setCategory, creatingCategory, setCreatingCategory,
+    categories, categoryId, setCategoryId, creatingCategory, setCreatingCategory,
     newCategoryName, setNewCategoryName, onCreateCategory, legacyName,
     setLegacyName, content, setContent, costPrice, setCostPrice, sellPrice,
     setSellPrice, timeZone, scheduledPriceEnabled, setScheduledPriceEnabled,
@@ -122,17 +136,20 @@ export default function ProductForm(props: Props) {
     setProductionLeadTimeDays, status, setStatus,
     storefrontSubgroup, setStorefrontSubgroup, storefrontSubgroupOrder,
     setStorefrontSubgroupOrder, storefrontProductOrder, setStorefrontProductOrder,
-    availableProducts, currentProductId, bundleEnabled, setBundleEnabled, bundleTotalUnits,
+    availableProducts, currentProductId, productType, setProductType, mixedPackEligible, setMixedPackEligible,
+    mixedPackUnits, setMixedPackUnits, mixedPackOptionProductIds, setMixedPackOptionProductIds,
+    mixedPackAllowRepeats, setMixedPackAllowRepeats, mixedPackMinDistinct, setMixedPackMinDistinct,
+    mixedPackMaxPerProduct, setMixedPackMaxPerProduct, bundleEnabled, setBundleEnabled, bundleTotalUnits,
     setBundleTotalUnits, bundleOptionProductIds, setBundleOptionProductIds, existingImageUrl,
     existingExtraUrls, mainPreview, extraPreviews, onPickMain, onPickExtras,
     removeExistingExtra, clearSelectedExtras,
   } = props;
 
   const copy = lang === "ja"
-    ? { translations: "商品内容（多言語）", defaultName: "標準商品名", short: "短い説明", details: "詳細", ingredients: "原材料", allergens: "アレルゲン", units: "販売単位", stock: "実在庫数", threshold: "在庫不足の基準", track: "在庫を管理する", main: "メイン画像", extras: "追加画像", current: "現在の画像（クリックで削除）", queue: "アップロード予定", creating: "作成中...", madeToOrder: "受注生産", madeToOrderHelp: "通常在庫ではなく、事前予約で販売する商品です。", hidden: "公開ストアでは非表示", hiddenHelp: "通常ストアには表示しませんが、イベント・オファー・選択式セットでは引き続き使用できます。", postal: "郵送対象", postalHelp: "この商品を通常ストアから郵送できます。", weight: "発送重量 (g)", weightHelp: "重量別送料を使う場合に必要です。梱包後のおおよその重量を入力してください。", reserved: "予約済み", availableAfterReserved: "予約を除く利用可能数", bundleTitle: "選択式セット", bundleHelp: "お客様がセット内の商品と数量を選び、合計数を満たしてからカートへ追加します。", bundleToggle: "選択式セットとして販売", bundleUnits: "セット1個あたりの合計数", bundleOptions: "選択できる商品", bundleOptionsHelp: "セットに含められる商品を2つ以上選択してください。", bundleSelected: "選択中", bundleNoProducts: "先にセットへ追加できる通常商品を登録してください。" }
+    ? { translations: "商品内容（多言語）", defaultName: "標準商品名", short: "短い説明", details: "詳細", ingredients: "原材料", allergens: "アレルゲン", units: "販売単位", stock: "実在庫数", threshold: "在庫不足の基準", track: "在庫を管理する", main: "メイン画像", extras: "追加画像", current: "現在の画像（クリックで削除）", queue: "アップロード予定", creating: "作成中...", madeToOrder: "受注生産", madeToOrderHelp: "通常在庫ではなく、事前予約で販売する商品です。", hidden: "公開ストアでは非表示", hiddenHelp: "通常ストアには表示しませんが、イベント・オファー・選択式セット・ミックスパックでは引き続き使用できます。", postal: "郵送対象", postalHelp: "この商品を通常ストアから郵送できます。", weight: "発送重量 (g)", weightHelp: "重量別送料を使う場合に必要です。梱包後のおおよその重量を入力してください。", reserved: "予約済み", availableAfterReserved: "予約を除く利用可能数", bundleTitle: "選択式セット", bundleHelp: "お客様がセット内の商品と数量を選び、合計数を満たしてからカートへ追加します。", bundleToggle: "選択式セットとして販売", bundleUnits: "セット1個あたりの合計数", bundleOptions: "選択できる商品", bundleOptionsHelp: "セットに含められる商品を2つ以上選択してください。", bundleSelected: "選択中", bundleNoProducts: "先にセットへ追加できる通常商品を登録してください。" }
     : lang === "en"
-      ? { translations: "Multilingual product content", defaultName: "Default product name", short: "Short description", details: "Details", ingredients: "Ingredients", allergens: "Allergens", units: "Units per sale", stock: "Physical stock", threshold: "Low-stock threshold", track: "Track inventory", main: "Main image", extras: "Extra images", current: "Current images (click to remove)", queue: "Upload queue", creating: "Creating...", madeToOrder: "Made to order", madeToOrderHelp: "This item is sold by advance reservation rather than regular stock.", hidden: "Hidden from public store", hiddenHelp: "This product stays available for events, offers and configurable bundles, but is not listed in the permanent public store.", postal: "Postal eligible", postalHelp: "This product may be shipped from the permanent store.", weight: "Shipping weight (g)", weightHelp: "Required for weight-based shipping. Enter the approximate packed weight.", reserved: "Reserved", availableAfterReserved: "Available after reservations", bundleTitle: "Configurable bundle", bundleHelp: "Customers choose the products and quantities inside the bundle before adding it to the cart.", bundleToggle: "Sell as a configurable bundle", bundleUnits: "Total units per bundle", bundleOptions: "Selectable products", bundleOptionsHelp: "Choose at least two products that may be included in this bundle.", bundleSelected: "selected", bundleNoProducts: "Create regular products first so they can be used as bundle options." }
-      : { translations: "Conteúdo multilíngue do produto", defaultName: "Nome padrão do produto", short: "Descrição curta", details: "Detalhes", ingredients: "Ingredientes", allergens: "Alérgenos", units: "Unidades por venda", stock: "Estoque físico", threshold: "Limite de estoque baixo", track: "Controlar estoque", main: "Imagem principal", extras: "Imagens extras", current: "Imagens atuais (clique para remover)", queue: "Fila de upload", creating: "Criando...", madeToOrder: "Sob encomenda", madeToOrderHelp: "Este item é vendido mediante reserva antecipada, fora do estoque comum.", hidden: "Oculto da loja pública", hiddenHelp: "O produto não aparece na Store permanente, mas continua disponível para eventos, ofertas e kits configuráveis.", postal: "Disponível para envio por correio", postalHelp: "Permite enviar este produto pela Store permanente.", weight: "Peso para envio (g)", weightHelp: "Necessário para frete por peso. Informe o peso aproximado já considerando a embalagem.", reserved: "Reservado", availableAfterReserved: "Disponível após reservas", bundleTitle: "Kit configurável", bundleHelp: "O cliente escolhe os produtos e distribui as quantidades do kit antes de adicionar ao carrinho.", bundleToggle: "Vender como kit configurável", bundleUnits: "Total de unidades por kit", bundleOptions: "Produtos disponíveis para escolha", bundleOptionsHelp: "Selecione pelo menos dois produtos que poderão compor este kit.", bundleSelected: "selecionados", bundleNoProducts: "Cadastre primeiro produtos normais para usá-los como opções do kit." };
+      ? { translations: "Multilingual product content", defaultName: "Default product name", short: "Short description", details: "Details", ingredients: "Ingredients", allergens: "Allergens", units: "Units per sale", stock: "Physical stock", threshold: "Low-stock threshold", track: "Track inventory", main: "Main image", extras: "Extra images", current: "Current images (click to remove)", queue: "Upload queue", creating: "Creating...", madeToOrder: "Made to order", madeToOrderHelp: "This item is sold by advance reservation rather than regular stock.", hidden: "Hidden from public store", hiddenHelp: "This product stays available for events, offers, configurable bundles and Mixed Packs, but is not listed in the permanent public store.", postal: "Postal eligible", postalHelp: "This product may be shipped from the permanent store.", weight: "Shipping weight (g)", weightHelp: "Required for weight-based shipping. Enter the approximate packed weight.", reserved: "Reserved", availableAfterReserved: "Available after reservations", bundleTitle: "Configurable bundle", bundleHelp: "Customers choose the products and quantities inside the bundle before adding it to the cart.", bundleToggle: "Sell as a configurable bundle", bundleUnits: "Total units per bundle", bundleOptions: "Selectable products", bundleOptionsHelp: "Choose at least two products that may be included in this bundle.", bundleSelected: "selected", bundleNoProducts: "Create regular products first so they can be used as bundle options." }
+      : { translations: "Conteúdo multilíngue do produto", defaultName: "Nome padrão do produto", short: "Descrição curta", details: "Detalhes", ingredients: "Ingredientes", allergens: "Alérgenos", units: "Unidades por venda", stock: "Estoque físico", threshold: "Limite de estoque baixo", track: "Controlar estoque", main: "Imagem principal", extras: "Imagens extras", current: "Imagens atuais (clique para remover)", queue: "Fila de upload", creating: "Criando...", madeToOrder: "Sob encomenda", madeToOrderHelp: "Este item é vendido mediante reserva antecipada, fora do estoque comum.", hidden: "Oculto da loja pública", hiddenHelp: "O produto não aparece na Store permanente, mas continua disponível para eventos, ofertas, kits configuráveis e Packs Mistos.", postal: "Disponível para envio por correio", postalHelp: "Permite enviar este produto pela Store permanente.", weight: "Peso para envio (g)", weightHelp: "Necessário para frete por peso. Informe o peso aproximado já considerando a embalagem.", reserved: "Reservado", availableAfterReserved: "Disponível após reservas", bundleTitle: "Kit configurável", bundleHelp: "O cliente escolhe os produtos e distribui as quantidades do kit antes de adicionar ao carrinho.", bundleToggle: "Vender como kit configurável", bundleUnits: "Total de unidades por kit", bundleOptions: "Produtos disponíveis para escolha", bundleOptionsHelp: "Selecione pelo menos dois produtos que poderão compor este kit.", bundleSelected: "selecionados", bundleNoProducts: "Cadastre primeiro produtos normais para usá-los como opções do kit." };
 
   const storefrontCopy = lang === "ja"
     ? { title: "ストア表示（任意）", help: "同じカテゴリーの商品を種類ごとの行に整理できます。未入力の場合はこれまでどおり表示されます。", subgroup: "サブグループ / 種類", subgroupPlaceholder: "例：エンパーダ、エスフィーハ、ロール", subgroupOrder: "グループ順", productOrder: "グループ内の商品順", orderHelp: "数字が小さいほど先に表示されます。空欄の場合は名前順です。" }
@@ -254,6 +271,26 @@ export default function ProductForm(props: Props) {
           upcoming: "O preço atual continua válido até esse horário.",
         };
 
+  const mixedCopy = lang === "ja"
+    ? { typeTitle: "商品タイプ", standard: "通常商品", mixed: "ミックスパック", eligible: "ミックスパックの中身として使用可能", eligibleHelp: "この商品をミックスパックの選択肢にできます。カテゴリー側でも一括設定できます。", title: "ミックスパック", help: "販売上は1つの商品ですが、在庫と製造では選択された中身を個別に処理します。", units: "1パックの個数", repeats: "同じ商品を複数選択できる", minDistinct: "最低商品種類数", maxPerProduct: "1商品あたりの最大数（空欄=制限なし）", options: "選択できる商品", optionsHelp: "対象商品または対象カテゴリーの商品から2つ以上選択してください。", selected: "選択中", noProducts: "先に通常商品をミックスパック対象にしてください。" }
+    : lang === "en"
+      ? { typeTitle: "Product type", standard: "Standard product", mixed: "Mixed Pack", eligible: "Eligible as a Mixed Pack component", eligibleHelp: "Allow this product to be selected inside Mixed Packs. A category can also enable eligibility for all its products.", title: "Mixed Pack", help: "Sold as one commercial item, while the selected components drive stock and production.", units: "Units per pack", repeats: "Allow repeated products", minDistinct: "Minimum different products", maxPerProduct: "Maximum per product (blank = no limit)", options: "Selectable products", optionsHelp: "Choose at least two eligible standard products.", selected: "selected", noProducts: "Mark standard products or categories as Mixed Pack eligible first." }
+      : { typeTitle: "Tipo do produto", standard: "Produto normal", mixed: "Pack Misto", eligible: "Elegível como componente de Pack Misto", eligibleHelp: "Permite escolher este produto dentro de Packs Mistos. A categoria também pode liberar todos os produtos de uma vez.", title: "Pack Misto", help: "É vendido como um único item comercial, mas estoque e produção usam os componentes escolhidos pelo cliente.", units: "Quantidade por bandeja/pack", repeats: "Permitir repetir o mesmo produto", minDistinct: "Mínimo de produtos/sabores diferentes", maxPerProduct: "Máximo por produto (vazio = sem limite)", options: "Produtos disponíveis para escolha", optionsHelp: "Selecione pelo menos dois produtos normais elegíveis.", selected: "selecionados", noProducts: "Marque produtos ou categorias como elegíveis para Pack Misto primeiro." };
+
+  const categoryById = new Map(categories.map((item) => [item.id, item] as const));
+  const categoryPath = (item: SellerCategoryDoc) => {
+    const labels: string[] = [];
+    let cursor: SellerCategoryDoc | undefined = item;
+    const visited = new Set<string>();
+    while (cursor && !visited.has(cursor.id)) {
+      visited.add(cursor.id);
+      labels.unshift(cursor.name || cursor.id);
+      cursor = cursor.parentId ? categoryById.get(cursor.parentId) : undefined;
+    }
+    return labels.join(" › ");
+  };
+  const selectableCategories = [...categories].sort((a, b) => a.order - b.order || categoryPath(a).localeCompare(categoryPath(b)));
+
   const scheduledStartsAtMillis = scheduledPriceStartsAt
     ? dateTimeLocalToUtcMillis(scheduledPriceStartsAt, timeZone)
     : null;
@@ -265,14 +302,29 @@ export default function ProductForm(props: Props) {
     setContent({ ...content, [language]: { ...content[language], [field]: value } });
   };
 
-  const selectableCategories = category && !categories.includes(category) ? [category, ...categories] : categories;
   const costLabel = lang === "ja" ? `原価 (${currency})` : lang === "en" ? `Cost price (${currency})` : `Preço de custo (${currency})`;
   const saleLabel = lang === "ja" ? `販売価格 (${currency})` : lang === "en" ? `Sale price (${currency})` : `Preço de venda (${currency})`;
+  const categoryMixedEligible = new Set(categories.filter((category) => category.capabilities.mixedPackEligible).map((category) => category.id));
   const bundleCandidates = availableProducts.filter((product) =>
     product.id !== currentProductId &&
     product.status !== "inactive" &&
+    product.productType !== "mixed_pack" &&
     !product.bundleConfig?.enabled
   );
+  const mixedPackCandidates = availableProducts.filter((product) =>
+    product.id !== currentProductId &&
+    product.status !== "inactive" &&
+    product.productType !== "mixed_pack" &&
+    !product.bundleConfig?.enabled &&
+    (product.mixedPackEligible || categoryMixedEligible.has(product.categoryId))
+  );
+  const toggleMixedPackOption = (productId: string) => {
+    setMixedPackOptionProductIds(
+      mixedPackOptionProductIds.includes(productId)
+        ? mixedPackOptionProductIds.filter((item) => item !== productId)
+        : [...mixedPackOptionProductIds, productId],
+    );
+  };
   const toggleBundleOption = (productId: string) => {
     setBundleOptionProductIds(
       bundleOptionProductIds.includes(productId)
@@ -290,8 +342,9 @@ export default function ProductForm(props: Props) {
 
     <div className="space-y-1">
       <label htmlFor="product-category" className="text-xs font-black uppercase tracking-wider">{t("products.form.category")}</label>
-      <select id="product-category" value={creatingCategory ? "__create__" : category} onChange={(e) => { if (e.target.value === "__create__") setCreatingCategory(true); else { setCreatingCategory(false); setCategory(e.target.value); } }} disabled={disabled} className={`${fieldClass(Boolean(errors.category))} h-[46px]`}>
-        {selectableCategories.map((item) => <option key={item} value={item}>{item}</option>)}
+      <select id="product-category" value={creatingCategory ? "__create__" : categoryId} onChange={(e) => { if (e.target.value === "__create__") setCreatingCategory(true); else { setCreatingCategory(false); setCategoryId(e.target.value); } }} disabled={disabled} className={`${fieldClass(Boolean(errors.category))} h-[46px]`}>
+        <option value="" disabled>{categories.length === 0 ? t("products.categories.createFirst") : t("products.categories.err.pick")}</option>
+        {selectableCategories.map((item) => <option key={item.id} value={item.id}>{categoryPath(item)}</option>)}
         <option value="__create__">{categories.length === 0 ? t("products.categories.createFirst") : t("products.categories.createNew")}</option>
       </select>
       {creatingCategory && <div className="mt-2 flex flex-col gap-2 sm:flex-row">
@@ -499,6 +552,26 @@ export default function ProductForm(props: Props) {
       </div>}
     </section>
 
+    <section className="space-y-3 rounded-2xl border border-orange-200 bg-orange-50/50 p-4 dark:border-orange-900/50 dark:bg-orange-950/20 sm:col-span-2">
+      <label className="text-xs font-black uppercase tracking-wider">{mixedCopy.typeTitle}</label>
+      <div className="grid gap-2 sm:grid-cols-2">
+        {[
+          { value: "standard" as const, label: mixedCopy.standard },
+          { value: "mixed_pack" as const, label: mixedCopy.mixed },
+        ].map((option) => (
+          <button key={option.value} type="button" onClick={() => setProductType(option.value)} disabled={disabled} className={`rounded-xl border px-4 py-3 text-left text-sm font-black transition ${productType === option.value ? "border-orange-500 bg-orange-100 ring-2 ring-orange-200 dark:bg-orange-950/50" : "border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900"}`}>
+            {option.label}
+          </button>
+        ))}
+      </div>
+      {productType === "standard" ? (
+        <label className="flex items-start gap-3 rounded-xl border border-orange-200 bg-white p-3 dark:border-orange-900/50 dark:bg-neutral-900">
+          <input type="checkbox" checked={mixedPackEligible} onChange={(event) => setMixedPackEligible(event.target.checked)} disabled={disabled} className="mt-0.5 h-5 w-5 accent-orange-600" />
+          <span><span className="block text-sm font-black">{mixedCopy.eligible}</span><span className="mt-1 block text-[11px] font-semibold text-neutral-500 dark:text-neutral-400">{mixedCopy.eligibleHelp}</span></span>
+        </label>
+      ) : null}
+    </section>
+
     <div className="space-y-1 sm:col-span-2">
       <label className="text-xs font-black uppercase tracking-wider">{t("products.form.status")}</label>
       <select value={status} onChange={(e) => {
@@ -544,7 +617,35 @@ export default function ProductForm(props: Props) {
       </div>
     </section>
 
-    <section className="space-y-4 rounded-2xl border border-violet-200 bg-violet-50/60 p-4 dark:border-violet-900/50 dark:bg-violet-950/20 sm:col-span-2">
+    {productType === "mixed_pack" && (
+      <section className="space-y-4 rounded-2xl border border-orange-300 bg-orange-50/70 p-4 dark:border-orange-900/60 dark:bg-orange-950/20 sm:col-span-2">
+        <div>
+          <p className="text-sm font-black">{mixedCopy.title}</p>
+          <p className="mt-1 text-xs font-semibold text-orange-900/75 dark:text-orange-200/75">{mixedCopy.help}</p>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-3">
+          <label className="space-y-1"><span className="text-xs font-black uppercase tracking-wider">{mixedCopy.units}</span><input value={mixedPackUnits} onChange={(event) => setMixedPackUnits(event.target.value)} inputMode="numeric" min={1} disabled={disabled} className={fieldClass(Boolean(errors.mixedPackUnits))} /><FieldError message={errors.mixedPackUnits} /></label>
+          <label className="space-y-1"><span className="text-xs font-black uppercase tracking-wider">{mixedCopy.minDistinct}</span><input value={mixedPackMinDistinct} onChange={(event) => setMixedPackMinDistinct(event.target.value)} inputMode="numeric" min={1} disabled={disabled} className={fieldClass(Boolean(errors.mixedPackMinDistinct))} /><FieldError message={errors.mixedPackMinDistinct} /></label>
+          <label className="space-y-1"><span className="text-xs font-black uppercase tracking-wider">{mixedCopy.maxPerProduct}</span><input value={mixedPackMaxPerProduct} onChange={(event) => setMixedPackMaxPerProduct(event.target.value)} inputMode="numeric" min={1} disabled={disabled || !mixedPackAllowRepeats} className={fieldClass(Boolean(errors.mixedPackMaxPerProduct))} /><FieldError message={errors.mixedPackMaxPerProduct} /></label>
+        </div>
+        <label className="flex items-center gap-3 rounded-xl border border-orange-200 bg-white p-3 text-sm font-black dark:border-orange-900/50 dark:bg-neutral-900"><input type="checkbox" checked={mixedPackAllowRepeats} onChange={(event) => setMixedPackAllowRepeats(event.target.checked)} disabled={disabled} className="h-5 w-5 accent-orange-600" />{mixedCopy.repeats}</label>
+        <div>
+          <div className="flex items-center justify-between gap-3"><div><p className="text-xs font-black uppercase tracking-wider">{mixedCopy.options}</p><p className="mt-1 text-[11px] font-semibold text-neutral-500 dark:text-neutral-400">{mixedCopy.optionsHelp}</p></div><span className="rounded-full bg-orange-600 px-3 py-1 text-xs font-black text-white">{mixedPackOptionProductIds.length} {mixedCopy.selected}</span></div>
+          {mixedPackCandidates.length === 0 ? <p className="mt-3 rounded-xl bg-white/80 p-4 text-sm font-bold text-neutral-500 dark:bg-neutral-900/70 dark:text-neutral-400">{mixedCopy.noProducts}</p> : (
+            <div className="mt-3 grid max-h-80 grid-cols-2 gap-2 overflow-y-auto pr-1 sm:grid-cols-3">
+              {mixedPackCandidates.map((product) => { const selected = mixedPackOptionProductIds.includes(product.id); return (
+                <button key={product.id} type="button" onClick={() => toggleMixedPackOption(product.id)} disabled={disabled} className={["overflow-hidden rounded-xl border text-left transition", selected ? "border-orange-500 bg-orange-100 ring-2 ring-orange-300 dark:bg-orange-950/60" : "border-neutral-200 bg-white hover:border-orange-300 dark:border-neutral-800 dark:bg-neutral-900"].join(" ")}>
+                  <div className="aspect-[4/3] bg-neutral-100 dark:bg-neutral-800">{product.imageUrl ? <img src={product.imageUrl} alt="" className="h-full w-full object-cover" /> : null}</div><div className="p-2"><p className="line-clamp-2 text-xs font-black">{product.name}</p><p className="mt-1 text-[10px] font-bold uppercase text-neutral-400">{product.category}</p></div>
+                </button>
+              ); })}
+            </div>
+          )}
+          <FieldError message={errors.mixedPackOptions} />
+        </div>
+      </section>
+    )}
+
+    <section className={`${productType === "mixed_pack" ? "hidden" : ""} space-y-4 rounded-2xl border border-violet-200 bg-violet-50/60 p-4 dark:border-violet-900/50 dark:bg-violet-950/20 sm:col-span-2`}>
       <label className="flex cursor-pointer items-start justify-between gap-4">
         <div>
           <p className="text-sm font-black">{copy.bundleTitle}</p>

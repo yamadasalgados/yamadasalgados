@@ -138,6 +138,7 @@ function normalizeOrderPayload(params: {
       ? new Date(timestampMillis(order.createdAt)).toISOString()
       : null,
     items: normalizeItems(order.items),
+    inventoryItems: normalizeItems(order.inventoryItems),
   };
 }
 

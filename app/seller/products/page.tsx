@@ -22,7 +22,7 @@ import MetricStrip from "@/app/_components/MetricStrip";
 import PageHeader from "@/app/_components/PageHeader";
 import { useSellerSession } from "@/app/_components/SellerSessionContext";
 import { db } from "@/app/lib/firebase";
-import { normalizeInventory, normalizeProductBundleConfig, normalizeProductContent, normalizeProductPriceMinor, normalizeProductStorefrontConfig } from "@/app/lib/product-schema";
+import { normalizeInventory, normalizeProductBundleConfig, normalizeProductContent, normalizeProductMixedPackConfig, normalizeProductPriceMinor, normalizeProductStorefrontConfig, normalizeProductType } from "@/app/lib/product-schema";
 import { normalizeProductShipping } from "@/app/lib/shipping-schema";
 import { defaultTimeZoneForRegional, formatLeadTimeDays, normalizeProductProductionLeadTime, normalizeTimeZone } from "@/app/lib/production-lead-time";
 import {
@@ -39,6 +39,7 @@ import type {
 } from "@/app/types/regional";
 
 import ProductModal from "./ProductModal";
+import CategoryManager from "./CategoryManager";
 import {
   categoryKey,
   mergeCategoryLabels,
@@ -50,6 +51,7 @@ import type {
   ProductDoc,
   ProductSaveResult,
   ProductStatus,
+  SellerCategoryDoc,
 } from "./product-types";
 
 // --- 📝 Interfaces de Tipagem Estrita (TypeScript) ---
@@ -75,14 +77,6 @@ type UserDoc = {
   operatingCountry?: string | null;
 };
 
-type SellerCategoryDoc = {
-  id: string;
-  ownerUid: string;
-  name: string;
-  slug: string;
-  createdAt?: Timestamp;
-  updatedAt?: Timestamp;
-};
 
 interface ProductCardProps {
   product: ProductDoc;
@@ -233,6 +227,7 @@ export default function ProductsCatalogPage() {
   const categorySyncRef = useRef("");
 
   const [productModalOpen, setProductModalOpen] = useState(false);
+  const [categoryManagerOpen, setCategoryManagerOpen] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<ProductDoc | null>(null);
   const [toastMessage, setToastMessage] = useState("");
   const [pricingNow, setPricingNow] = useState(() => Date.now());
@@ -287,26 +282,39 @@ export default function ProductsCatalogPage() {
     return onSnapshot(
       query(
         collection(db, "sellers", sellerId, "categories"),
-        orderBy("name", "asc"),
         limit(500)
       ),
       (snap) => {
-        const list = snap.docs
+        const list: SellerCategoryDoc[] = snap.docs
           .map((categoryDoc) => {
             const data = categoryDoc.data();
-            const names = data.names && typeof data.names === "object" ? data.names : {};
+            const rawNames = data.names && typeof data.names === "object" ? data.names as Record<string, unknown> : {};
+            const names = {
+              pt: normalizeCategoryLabel(rawNames.pt ?? data.name),
+              en: normalizeCategoryLabel(rawNames.en),
+              ja: normalizeCategoryLabel(rawNames.ja),
+            };
             const categoryName = normalizeCategoryLabel(
-              names[lang] || names.pt || names.en || names.ja || data.name,
+              (lang === "ja" ? names.ja : lang === "en" ? names.en : names.pt) || names.pt || names.en || names.ja || data.name,
             );
+            const rawTags = Array.isArray(data.tags) ? data.tags : [];
+            const capabilities = data.capabilities && typeof data.capabilities === "object" ? data.capabilities as Record<string, unknown> : {};
+            const orderValue = Number(data.order);
 
             return {
               id: categoryDoc.id,
               ownerUid: String(data.ownerUid || authUser.uid),
               name: categoryName,
               slug: String(data.slug || categoryDoc.id || ""),
+              names,
+              parentId: typeof data.parentId === "string" && data.parentId.trim() ? data.parentId.trim() : null,
+              order: Number.isFinite(orderValue) ? Math.trunc(orderValue) : 0,
+              tags: rawTags.filter((tag): tag is string => typeof tag === "string").map((tag) => tag.trim()).filter(Boolean),
+              capabilities: { mixedPackEligible: capabilities.mixedPackEligible === true },
             };
           })
-          .filter((item) => item.name);
+          .filter((item) => item.name)
+          .sort((a, b) => a.order - b.order || a.name.localeCompare(b.name, locale));
 
         setSellerCategories(list);
         setCategoryWarning("");
@@ -323,6 +331,8 @@ export default function ProductsCatalogPage() {
     profileReady,
     inactive,
     catalogText.categoryReadWarning,
+    lang,
+    locale,
   ]);
 
   useEffect(() => {
@@ -365,6 +375,9 @@ export default function ProductsCatalogPage() {
             schemaVersion: 2 as const,
             categoryId: String(data.categoryId || ""),
             category: String(data.category || "Sem categoria"),
+            productType: normalizeProductType(data.productType, data.mixedPackConfig),
+            mixedPackEligible: data.mixedPackEligible === true,
+            mixedPackConfig: normalizeProductMixedPackConfig(data.mixedPackConfig),
             content: normalizeProductContent(data.content, String(data.name || ""), String(data.description || "")),
             name: String(data.name || ""),
             description: String(data.description || ""),
@@ -599,6 +612,24 @@ export default function ProductsCatalogPage() {
     ]
   );
 
+  const categoryOptionsForModal = useMemo<SellerCategoryDoc[]>(() => {
+    const byKey = new Map(sellerCategories.map((category) => [categoryKey(category.name), category] as const));
+    const synthetic = categoriesFromProductsOwn
+      .filter((name) => !byKey.has(categoryKey(name)))
+      .map((name, index) => ({
+        id: slugify(name),
+        ownerUid: authUser?.uid || "",
+        name,
+        slug: slugify(name),
+        names: { pt: name, en: "", ja: "" },
+        parentId: null,
+        order: 10000 + index,
+        tags: [],
+        capabilities: { mixedPackEligible: false },
+      } as SellerCategoryDoc));
+    return [...sellerCategories, ...synthetic];
+  }, [authUser?.uid, categoriesFromProductsOwn, sellerCategories]);
+
   const missingCategoryNames = useMemo(() => {
     const savedKeys = new Set(
       categoriesFromCollection.map(categoryKey)
@@ -640,9 +671,15 @@ export default function ProductsCatalogPage() {
                 slug
               ),
               {
+                schemaVersion: 2,
                 ownerUid: authUser.uid,
                 name: cleanName,
                 slug,
+                names: { pt: cleanName, en: "", ja: "" },
+                parentId: null,
+                order: 0,
+                tags: [],
+                capabilities: { mixedPackEligible: false },
                 updatedAt: serverTimestamp(),
                 createdAt: serverTimestamp(),
               },
@@ -907,6 +944,28 @@ export default function ProductsCatalogPage() {
         {categoryWarning && (
           <FeedbackBanner tone="warning">{categoryWarning}</FeedbackBanner>
         )}
+
+        <div className="flex justify-end">
+          <button
+            type="button"
+            onClick={() => setCategoryManagerOpen((current) => !current)}
+            className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-orange-300 bg-orange-50 px-4 text-sm font-black text-orange-800 transition hover:bg-orange-100 dark:border-orange-900/60 dark:bg-orange-950/20 dark:text-orange-200"
+          >
+            <Tags size={16} />
+            {lang === "ja" ? "カテゴリー 2.0" : lang === "en" ? "Categories 2.0" : "Categorias 2.0"}
+          </button>
+        </div>
+
+        {categoryManagerOpen && authUser && sellerId ? (
+          <CategoryManager
+            sellerId={sellerId}
+            ownerUid={authUser.uid}
+            categories={sellerCategories}
+            lang={lang}
+            disabled={inactive}
+            onClose={() => setCategoryManagerOpen(false)}
+          />
+        ) : null}
 
         <MetricStrip
           items={[
@@ -1204,7 +1263,7 @@ export default function ProductsCatalogPage() {
           product={selectedProduct}
           authUser={authUser}
           sellerId={sellerId}
-          categories={categoriesForSellerSelect}
+          categories={categoryOptionsForModal}
           availableProducts={ownProducts}
           ownCount={ownCount}
           maxProducts={maxProducts}

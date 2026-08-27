@@ -83,7 +83,9 @@ function catalogMeta(
 }
 
 function resolveQuantityLines(order: Record<string, unknown>) {
-  const rawItems = Array.isArray(order.items) ? order.items : [];
+  const rawItems = Array.isArray(order.inventoryItems) && order.inventoryItems.length > 0
+    ? order.inventoryItems
+    : Array.isArray(order.items) ? order.items : [];
   const fromItems = rawItems
     .map((entry) => {
       const item = asRecord(entry);

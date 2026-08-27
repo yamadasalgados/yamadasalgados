@@ -1,5 +1,5 @@
 import type { Timestamp } from "firebase/firestore";
-import type { ProductBundleConfig, ProductContent, ProductStorefrontConfig } from "@/app/lib/product-schema";
+import type { ProductBundleConfig, ProductContent, ProductMixedPackConfig, ProductStorefrontConfig, ProductType } from "@/app/lib/product-schema";
 import type { ProductShipping } from "@/app/lib/shipping-schema";
 import type { ProductProductionLeadTime } from "@/app/lib/production-lead-time";
 import type { ProductScheduledPriceChange, ScheduledPriceStatus } from "@/app/lib/scheduled-price";
@@ -7,6 +7,22 @@ import type { ProductScheduledPriceChange, ScheduledPriceStatus } from "@/app/li
 export type CategoryId = string;
 export type ProductStatus = "active" | "made_to_order" | "hidden" | "inactive";
 export type PlanId = "starter" | "pro" | "business";
+
+export type SellerCategoryNames = { pt: string; en: string; ja: string };
+export type SellerCategoryCapabilities = { mixedPackEligible: boolean };
+export type SellerCategoryDoc = {
+  id: string;
+  ownerUid: string;
+  name: string;
+  slug: string;
+  names: SellerCategoryNames;
+  parentId: string | null;
+  order: number;
+  tags: string[];
+  capabilities: SellerCategoryCapabilities;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+};
 
 export type ProductInventory = {
   tracked: boolean;
@@ -26,6 +42,9 @@ export type ProductDoc = {
   sellerEmail?: string | null;
   categoryId: CategoryId;
   category: string;
+  productType: ProductType;
+  mixedPackEligible: boolean;
+  mixedPackConfig: ProductMixedPackConfig;
   content: ProductContent;
   name: string;
   description?: string;
@@ -72,6 +91,10 @@ export type ProductFormField =
   | "productionLeadTimeDays"
   | "bundleTotalUnits"
   | "bundleOptions"
+  | "mixedPackUnits"
+  | "mixedPackOptions"
+  | "mixedPackMinDistinct"
+  | "mixedPackMaxPerProduct"
   | "image";
 
 export type ProductFormErrors = Partial<Record<ProductFormField, string>>;

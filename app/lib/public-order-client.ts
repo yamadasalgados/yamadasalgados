@@ -35,6 +35,10 @@ export type CreatePublicOrderInput = {
     kitQuantity: number;
     selections: Array<{ productId: string; quantity: number }>;
   }>;
+  mixedPackSelections?: Record<string, {
+    packQuantity: number;
+    selections: Array<{ productId: string; quantity: number }>;
+  }>;
   rewards?: {
     mode: PublicOrderRewardMode;
     points?: number;

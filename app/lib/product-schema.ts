@@ -18,6 +18,62 @@ export type ProductBundleConfig = {
   optionProductIds: string[];
 };
 
+
+export type ProductType = "standard" | "mixed_pack";
+
+export type ProductMixedPackConfig = {
+  enabled: boolean;
+  unitsPerPack: number;
+  optionProductIds: string[];
+  allowRepeats: boolean;
+  minDistinct: number;
+  maxPerProduct: number | null;
+};
+
+export const EMPTY_PRODUCT_MIXED_PACK_CONFIG: ProductMixedPackConfig = {
+  enabled: false,
+  unitsPerPack: 3,
+  optionProductIds: [],
+  allowRepeats: false,
+  minDistinct: 3,
+  maxPerProduct: 1,
+};
+
+export function normalizeProductType(value: unknown, mixedPackValue?: unknown): ProductType {
+  if (value === "mixed_pack") return "mixed_pack";
+  const mixed = record(mixedPackValue);
+  if (mixed.enabled === true) return "mixed_pack";
+  return "standard";
+}
+
+export function normalizeProductMixedPackConfig(value: unknown): ProductMixedPackConfig {
+  const raw = record(value);
+  const enabled = raw.enabled === true;
+  const unitsParsed = Number(raw.unitsPerPack ?? raw.totalUnits ?? raw.units);
+  const unitsPerPack = Number.isFinite(unitsParsed)
+    ? Math.min(1000, Math.max(1, Math.floor(unitsParsed)))
+    : 3;
+  const optionProductIds = Array.isArray(raw.optionProductIds)
+    ? Array.from(new Set(raw.optionProductIds
+        .filter((item): item is string => typeof item === "string")
+        .map((item) => item.trim())
+        .filter((item) => item && !item.includes("/"))))
+    : [];
+  const allowRepeats = raw.allowRepeats === true;
+  const minDistinctParsed = Number(raw.minDistinct);
+  const minDistinct = Number.isFinite(minDistinctParsed)
+    ? Math.min(unitsPerPack, Math.max(1, Math.floor(minDistinctParsed)))
+    : Math.min(unitsPerPack, allowRepeats ? 1 : unitsPerPack);
+  const maxParsed = Number(raw.maxPerProduct);
+  const maxPerProduct = raw.maxPerProduct === null || raw.maxPerProduct === "" || raw.maxPerProduct === undefined
+    ? (allowRepeats ? null : 1)
+    : Number.isFinite(maxParsed)
+      ? Math.min(unitsPerPack, Math.max(1, Math.floor(maxParsed)))
+      : (allowRepeats ? null : 1);
+
+  return { enabled, unitsPerPack, optionProductIds, allowRepeats, minDistinct, maxPerProduct };
+}
+
 export type ProductStorefrontConfig = {
   subgroup: string;
   subgroupOrder: number | null;

@@ -14,7 +14,7 @@
     "audit:event-catalog-checkout": "node scripts/audit-event-catalog-checkout.mjs",
     "audit:event-production-print": "node scripts/audit-event-production-print.mjs",
     "audit:seller-settings": "node scripts/audit-seller-settings.mjs",
-    "audit:hidden-event-products": "node scripts/audit-hidden-event-products.mjs"
+    "audit:catalog-2-mixed-pack": "node scripts/audit-catalog-2-mixed-pack.mjs"
   },
   "dependencies": {
     "firebase": "^12.6.0",

@@ -118,10 +118,14 @@ import {
 import {
   normalizeInventory,
   normalizeProductBundleConfig,
+  normalizeProductMixedPackConfig,
+  normalizeProductType,
   normalizeProductStorefrontConfig,
   normalizeProductPriceMinor,
   resolveLocalizedProductText,
   type ProductBundleConfig,
+  type ProductMixedPackConfig,
+  type ProductType,
   type ProductStorefrontConfig,
 } from "@/app/lib/product-schema";
 import {
@@ -211,6 +215,9 @@ type Product = {
     | "inventory"
     | "quantity";
   shipping: ProductShipping;
+  productType: ProductType;
+  mixedPackConfig: ProductMixedPackConfig;
+  mixedPackEligible: boolean;
   bundleConfig: ProductBundleConfig;
   storefront: ProductStorefrontConfig;
   publiclyVisible: boolean;
@@ -1097,6 +1104,13 @@ function normalizeProduct(
         image !== imageUrl,
     );
 
+  const productType = normalizeProductType(raw.productType, raw.mixedPackConfig);
+  const mixedPackConfig = normalizeProductMixedPackConfig(raw.mixedPackConfig);
+  const legacyBundleConfig = normalizeProductBundleConfig(raw.bundleConfig);
+  const clientBundleConfig: ProductBundleConfig = productType === "mixed_pack"
+    ? { enabled: true, totalUnits: mixedPackConfig.unitsPerPack, optionProductIds: mixedPackConfig.optionProductIds }
+    : legacyBundleConfig;
+
   return {
     id,
     name,
@@ -1137,7 +1151,10 @@ function normalizeProduct(
         postal: raw.postalEligible,
       },
     ),
-    bundleConfig: normalizeProductBundleConfig(raw.bundleConfig),
+    productType,
+    mixedPackConfig,
+    mixedPackEligible: raw.mixedPackEligible === true,
+    bundleConfig: clientBundleConfig,
     storefront: normalizeProductStorefrontConfig(
       raw.storefront,
       raw.storefrontSubgroup,
@@ -2793,11 +2810,25 @@ const visibleProducts =
 
       const orderBundleSelections = Object.fromEntries(
         cartItems
-          .filter((item) => item.bundleSelection)
+          .filter((item) => item.bundleSelection && item.productType !== "mixed_pack")
           .map((item) => [
             item.id,
             {
               kitQuantity: item.qty,
+              selections: item.bundleSelection!.items.map((selection) => ({
+                productId: selection.productId,
+                quantity: selection.quantity,
+              })),
+            },
+          ]),
+      );
+      const orderMixedPackSelections = Object.fromEntries(
+        cartItems
+          .filter((item) => item.bundleSelection && item.productType === "mixed_pack")
+          .map((item) => [
+            item.id,
+            {
+              packQuantity: item.qty,
               selections: item.bundleSelection!.items.map((selection) => ({
                 productId: selection.productId,
                 quantity: selection.quantity,
@@ -2819,6 +2850,7 @@ const visibleProducts =
           cartItems.map((item) => [item.id, item.priceMinor]),
         ),
         bundleSelections: orderBundleSelections,
+        mixedPackSelections: orderMixedPackSelections,
         rewards: {
           mode: rewardEvaluation.mode,
           points: rewardEvaluation.pointsRedeemed,
@@ -5205,14 +5237,29 @@ function BundleConfiguratorDialog({
     0,
   );
   const remaining = Math.max(0, target - selected);
-  const ready = selected === target;
+  const isMixedPack = product.productType === "mixed_pack";
+  const selectedDistinct = Object.values(selections).filter((quantity) => Math.max(0, Math.floor(Number(quantity) || 0)) > 0).length;
+  const mixedLimitFor = (quantityPerPack: number | null) =>
+    quantityPerPack === null ? target : Math.max(1, quantityPerPack) * kitQuantity;
+  const mixedMaxPerOption = !isMixedPack
+    ? target
+    : product.mixedPackConfig.allowRepeats
+      ? mixedLimitFor(product.mixedPackConfig.maxPerProduct)
+      : kitQuantity;
+  const violatesMixedLimits = isMixedPack && Object.values(selections).some((quantity) =>
+    Math.max(0, Math.floor(Number(quantity) || 0)) > mixedMaxPerOption,
+  );
+  const ready = selected === target && (!isMixedPack || (
+    selectedDistinct >= product.mixedPackConfig.minDistinct && !violatesMixedLimits
+  ));
 
   const setOptionQuantity = (productId: string, requested: number) => {
     const current = Math.max(0, Math.floor(Number(selections[productId]) || 0));
     const safeRequested = Math.max(0, Math.floor(Number(requested) || 0));
+    const capacity = isMixedPack ? mixedMaxPerOption : target;
     const nextQuantity = safeRequested > current
-      ? Math.min(safeRequested, current + remaining)
-      : safeRequested;
+      ? Math.min(safeRequested, current + remaining, capacity)
+      : Math.min(safeRequested, capacity);
 
     setSelections((currentSelections) => {
       const next = { ...currentSelections };
@@ -5231,7 +5278,12 @@ function BundleConfiguratorDialog({
       const next: Record<string, number> = {};
       for (const option of options) {
         const quantity = Math.max(0, Math.floor(Number(current[option.id]) || 0));
-        const allowed = Math.min(quantity, Math.max(0, nextTarget - running));
+        const perOptionLimit = isMixedPack
+          ? (product.mixedPackConfig.allowRepeats
+              ? (product.mixedPackConfig.maxPerProduct === null ? nextTarget : product.mixedPackConfig.maxPerProduct * safe)
+              : safe)
+          : nextTarget;
+        const allowed = Math.min(quantity, perOptionLimit, Math.max(0, nextTarget - running));
         if (allowed > 0) {
           next[option.id] = allowed;
           running += allowed;
@@ -5251,9 +5303,9 @@ function BundleConfiguratorDialog({
               <img src={product.imageUrl} alt="" className="h-14 w-14 shrink-0 rounded-xl object-cover" />
             ) : null}
             <div className="min-w-0">
-              <p className="text-xs font-black uppercase tracking-wider text-violet-600 dark:text-violet-300">{text.kitBadge}</p>
-              <h2 id="bundle-configurator-title" className="truncate text-xl font-black sm:text-2xl">{text.kitTitle}: {product.name}</h2>
-              <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">{text.kitHelp}</p>
+              <p className="text-xs font-black uppercase tracking-wider text-violet-600 dark:text-violet-300">{isMixedPack ? "Pack Misto" : text.kitBadge}</p>
+              <h2 id="bundle-configurator-title" className="truncate text-xl font-black sm:text-2xl">{isMixedPack ? "Monte sua bandeja" : text.kitTitle}: {product.name}</h2>
+              <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">{isMixedPack ? `Escolha exatamente ${product.mixedPackConfig.unitsPerPack} unidades por bandeja. Mínimo de ${product.mixedPackConfig.minDistinct} opções diferentes.` : text.kitHelp}</p>
             </div>
           </div>
           <button type="button" onClick={onClose} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-neutral-200 dark:border-neutral-700" aria-label={text.close}>
@@ -5312,7 +5364,9 @@ function BundleConfiguratorDialog({
 
           {!ready && (
             <p role="alert" className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm font-bold text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/20 dark:text-amber-200">
-              {text.kitInvalid.replace("{count}", String(target))}
+              {isMixedPack
+                ? `Complete ${target} unidades, usando pelo menos ${product.mixedPackConfig.minDistinct} opções diferentes e respeitando o limite por produto.`
+                : text.kitInvalid.replace("{count}", String(target))}
             </p>
           )}
         </div>
@@ -5320,7 +5374,7 @@ function BundleConfiguratorDialog({
         <footer className="absolute inset-x-0 bottom-0 z-10 grid gap-2 border-t border-neutral-200 bg-white/95 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] backdrop-blur dark:border-neutral-800 dark:bg-neutral-900/95 sm:static sm:flex sm:items-center sm:justify-between sm:gap-3">
           {onRemove ? (
             <button type="button" onClick={onRemove} className="inline-flex min-h-11 w-full items-center justify-center rounded-xl border border-red-300 px-4 text-sm font-black text-red-700 dark:border-red-900 dark:text-red-300 sm:w-auto">
-              {text.removeKit}
+              {isMixedPack ? "Remover Pack Misto" : text.removeKit}
             </button>
           ) : <span className="hidden sm:block" />}
           <button
@@ -5330,7 +5384,7 @@ function BundleConfiguratorDialog({
             className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-violet-600 px-5 font-black text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-40 sm:w-auto"
           >
             <Check size={18} />
-            {initialSelection ? text.kitUpdate : text.kitConfirm}
+            {isMixedPack ? (initialSelection ? "Atualizar Pack Misto" : "Adicionar Pack Misto") : (initialSelection ? text.kitUpdate : text.kitConfirm)}
           </button>
         </footer>
       </section>
@@ -5797,7 +5851,7 @@ function CartDrawer({
                             onClick={() => onRemoveBundle(item.id)}
                             className="min-h-10 rounded-xl border border-red-300 px-3 text-xs font-black text-red-700 dark:border-red-900 dark:text-red-300"
                           >
-                            {text.removeKit}
+                            {item.productType === "mixed_pack" ? "Remover Pack Misto" : text.removeKit}
                           </button>
                         </div>
                       </div>

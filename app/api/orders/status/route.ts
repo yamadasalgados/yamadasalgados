@@ -685,7 +685,10 @@ export async function POST(request: NextRequest) {
         movementSnapshot: rewardMovementSnapshot,
       };
 
-      const rawItems = Array.isArray(orderData.items) ? orderData.items : [];
+      const usesInventoryItems = Array.isArray(orderData.inventoryItems) && orderData.inventoryItems.length > 0;
+      const rawItems = usesInventoryItems
+        ? orderData.inventoryItems as unknown[]
+        : Array.isArray(orderData.items) ? orderData.items : [];
       const items = rawItems
         .map(parseManagedItem)
         .filter((item): item is ManagedItem => item !== null);
@@ -1014,7 +1017,7 @@ export async function POST(request: NextRequest) {
 
       transaction.update(orderRef, {
         rewards: nextRewards,
-        items: serializedItems,
+        ...(usesInventoryItems ? { inventoryItems: serializedItems } : { items: serializedItems }),
         status: nextStatus,
         fulfillmentStatus: nextStatus,
         inventoryState,

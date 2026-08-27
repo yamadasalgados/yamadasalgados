@@ -17,7 +17,7 @@ import {
   normalizeTimeZone,
   type ProductProductionLeadTime,
 } from "@/app/lib/production-lead-time";
-import { normalizeProductBundleConfig } from "@/app/lib/product-schema";
+import { normalizeProductBundleConfig, normalizeProductMixedPackConfig, normalizeProductType } from "@/app/lib/product-schema";
 import {
   evaluateProductPrice,
   resolveProductScheduledPriceChange,
@@ -62,6 +62,7 @@ type PublicOrderRequest = {
   quantities?: unknown;
   pricing?: unknown;
   bundleSelections?: unknown;
+  mixedPackSelections?: unknown;
   rewards?: unknown;
   customer?: unknown;
   delivery?: unknown;
@@ -79,6 +80,10 @@ type CleanOrderRequest = {
   pricing: Record<string, number>;
   bundleSelections: Record<string, {
     kitQuantity: number;
+    selections: Record<string, number>;
+  }>;
+  mixedPackSelections: Record<string, {
+    packQuantity: number;
     selections: Record<string, number>;
   }>;
   totalItems: number;
@@ -342,6 +347,35 @@ function cleanBundleSelections(value: unknown): CleanOrderRequest["bundleSelecti
   return result;
 }
 
+function cleanMixedPackSelections(value: unknown): CleanOrderRequest["mixedPackSelections"] {
+  const raw = record(value);
+  const result: CleanOrderRequest["mixedPackSelections"] = {};
+
+  for (const [rawPackId, rawSelection] of Object.entries(raw)) {
+    const packProductId = cleanString(rawPackId, 160);
+    if (!packProductId || packProductId.includes("/")) continue;
+
+    const selectionRecord = record(rawSelection);
+    const packQuantity = cleanInteger(selectionRecord.packQuantity ?? selectionRecord.kitQuantity, 1, 100);
+    const rawLines = Array.isArray(selectionRecord.selections)
+      ? selectionRecord.selections
+      : Object.entries(record(selectionRecord.selections)).map(([productId, quantity]) => ({ productId, quantity }));
+    const selections: Record<string, number> = {};
+
+    for (const rawLine of rawLines.slice(0, 100)) {
+      const line = record(rawLine);
+      const productId = cleanString(line.productId, 160);
+      const quantity = cleanInteger(line.quantity, 0, 100_000);
+      if (!productId || productId.includes("/") || quantity <= 0) continue;
+      selections[productId] = (selections[productId] ?? 0) + quantity;
+    }
+
+    result[packProductId] = { packQuantity, selections };
+  }
+
+  return result;
+}
+
 function cleanPricing(value: unknown): Record<string, number> {
   const raw = record(value);
   const result: Record<string, number> = {};
@@ -369,6 +403,7 @@ function cleanRequest(value: unknown): CleanOrderRequest {
   const { quantities, totalItems } = cleanQuantities(raw.quantities);
   const pricing = cleanPricing(raw.pricing);
   const bundleSelections = cleanBundleSelections(raw.bundleSelections);
+  const mixedPackSelections = cleanMixedPackSelections(raw.mixedPackSelections);
 
   if (!sellerId || sellerId.includes("/")) {
     throw new OrderError("INVALID_REQUEST", "Vendedor inválido.");
@@ -443,6 +478,7 @@ function cleanRequest(value: unknown): CleanOrderRequest {
     quantities,
     pricing,
     bundleSelections,
+    mixedPackSelections,
     totalItems,
     rewards: {
       mode: cleanRewardMode(rewards.mode),
@@ -578,6 +614,7 @@ function normalizeProductLine(params: {
   defaultLanguage: Language;
   source: OrderSource;
   nowMillis: number;
+  allowHidden?: boolean;
 }): ProductLine {
   const {
     productId,
@@ -589,6 +626,7 @@ function normalizeProductLine(params: {
     defaultLanguage,
     source,
     nowMillis,
+    allowHidden = false,
   } = params;
 
   // Eventos acompanham o catálogo atual para nome, imagem, categoria,
@@ -616,7 +654,7 @@ function normalizeProductLine(params: {
 
   const status = cleanString(raw.status, 40);
   const catalogStatus = cleanString(catalogRaw.status, 40);
-  if (source === "store" && catalogStatus === "hidden") {
+  if (source === "store" && catalogStatus === "hidden" && !allowHidden) {
     throw new OrderError(
       "PRODUCT_UNAVAILABLE",
       "Este produto não está disponível na loja pública.",
@@ -1042,7 +1080,11 @@ export async function POST(request: NextRequest) {
     const bundleOptionProductIds = Array.from(new Set(
       Object.values(clean.bundleSelections).flatMap((selection) => Object.keys(selection.selections)),
     ));
-    const bundleOptionRefs = bundleOptionProductIds.map((productId) =>
+    const mixedPackOptionProductIds = Array.from(new Set(
+      Object.values(clean.mixedPackSelections).flatMap((selection) => Object.keys(selection.selections)),
+    ));
+    const componentProductIds = Array.from(new Set([...bundleOptionProductIds, ...mixedPackOptionProductIds]));
+    const componentProductRefs = componentProductIds.map((productId) =>
       sellerRef.collection("products").doc(productId),
     );
     const offerRef = clean.selectedOfferId
@@ -1067,6 +1109,7 @@ export async function POST(request: NextRequest) {
       quantities: clean.quantities,
       pricing: clean.pricing,
       bundleSelections: clean.bundleSelections,
+      mixedPackSelections: clean.mixedPackSelections,
       rewards: clean.rewards,
       customer: clean.customer,
       delivery: clean.delivery,
@@ -1101,7 +1144,7 @@ export async function POST(request: NextRequest) {
       if (eventRef) refs.push(eventRef);
       refs.push(...orderItemRefs);
       if (clean.source === "event") refs.push(...catalogProductRefs);
-      refs.push(...bundleOptionRefs);
+      refs.push(...componentProductRefs);
       if (offerRef) refs.push(offerRef);
       if (shippingSettingsRef) refs.push(shippingSettingsRef);
       refs.push(printingSettingsRef);
@@ -1117,7 +1160,7 @@ export async function POST(request: NextRequest) {
       const catalogProductSnapshots = clean.source === "event"
         ? catalogProductRefs.map(() => snapshots[cursor++])
         : orderItemSnapshots;
-      const bundleOptionSnapshots = bundleOptionRefs.map(() => snapshots[cursor++]);
+      const componentProductSnapshots = componentProductRefs.map(() => snapshots[cursor++]);
       const offerSnapshot = offerRef ? snapshots[cursor++] : null;
       const shippingSettingsSnapshot = shippingSettingsRef ? snapshots[cursor++] : null;
       const printingSettingsSnapshot = snapshots[cursor++];
@@ -1348,9 +1391,10 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      const bundleOptionMap = new Map(
-        bundleOptionProductIds.map((productId, index) => [productId, bundleOptionSnapshots[index]] as const),
+      const componentProductMap = new Map(
+        componentProductIds.map((productId, index) => [productId, componentProductSnapshots[index]] as const),
       );
+      const bundleOptionMap = componentProductMap;
       const bundleSnapshots = new Map<string, {
         kitQuantity: number;
         totalUnitsPerKit: number;
@@ -1432,7 +1476,148 @@ export async function POST(request: NextRequest) {
         });
       }
 
-      const unavailableStockLines = lines.filter(
+      const mixedPackSnapshots = new Map<string, {
+        packQuantity: number;
+        unitsPerPack: number;
+        totalUnits: number;
+        allowRepeats: boolean;
+        minDistinct: number;
+        maxPerProduct: number | null;
+        selections: Array<{ productId: string; name: string; imageUrl: string; quantity: number }>;
+      }>();
+      const operationalDemand = new Map<string, number>();
+
+      // Itens comerciais comuns continuam contribuindo diretamente para estoque/produção.
+      // Kits legados mantêm o comportamento existente. Packs mistos contribuem pelos componentes.
+      for (let index = 0; index < lines.length; index += 1) {
+        const line = lines[index];
+        const catalogRaw = catalogProductSnapshots[index].data() ?? {};
+        const productType = normalizeProductType(catalogRaw.productType, catalogRaw.mixedPackConfig);
+        const bundleConfig = normalizeProductBundleConfig(catalogRaw.bundleConfig);
+        if (productType !== "mixed_pack") {
+          operationalDemand.set(line.productId, (operationalDemand.get(line.productId) ?? 0) + line.quantity);
+          continue;
+        }
+
+        if (bundleConfig.enabled) {
+          throw new OrderError("INVALID_REQUEST", "Pack Misto não pode usar simultaneamente o kit configurável legado.");
+        }
+
+        const config = normalizeProductMixedPackConfig(catalogRaw.mixedPackConfig);
+        const submitted = clean.mixedPackSelections[line.productId];
+        if (!config.enabled || !submitted) {
+          throw new OrderError("INVALID_REQUEST", "Monte a composição completa do Pack Misto antes de finalizar.");
+        }
+        if (submitted.packQuantity !== line.quantity) {
+          throw new OrderError("INVALID_REQUEST", "A quantidade de Packs Mistos não corresponde à composição selecionada.");
+        }
+
+        const allowed = new Set(config.optionProductIds);
+        const selectedEntries = Object.entries(submitted.selections).filter(([, quantity]) => quantity > 0);
+        const selectedTotal = selectedEntries.reduce((sum, [, quantity]) => sum + quantity, 0);
+        const expectedTotal = config.unitsPerPack * line.quantity;
+        if (selectedTotal !== expectedTotal || selectedEntries.length < config.minDistinct) {
+          throw new OrderError("INVALID_REQUEST", `A composição de ${line.name} deve ter ${expectedTotal} unidades e pelo menos ${config.minDistinct} opções diferentes.`);
+        }
+
+        const selectedComponentDocs = selectedEntries.map(([productId, quantity]) => {
+          if (!allowed.has(productId)) {
+            throw new OrderError("PRODUCT_UNAVAILABLE", "Uma opção selecionada não pertence mais a este Pack Misto.", 409);
+          }
+          if (!config.allowRepeats && quantity > line.quantity) {
+            throw new OrderError("INVALID_REQUEST", "Este Pack Misto não permite repetir o mesmo produto dentro da bandeja.");
+          }
+          if (config.maxPerProduct !== null && quantity > config.maxPerProduct * line.quantity) {
+            throw new OrderError("INVALID_REQUEST", "A composição excede o máximo permitido para um dos produtos.");
+          }
+          const optionSnapshot = componentProductMap.get(productId);
+          if (!optionSnapshot?.exists) {
+            throw new OrderError("PRODUCT_UNAVAILABLE", "Um componente do Pack Misto não existe mais.", 409);
+          }
+          const optionRaw = optionSnapshot.data() ?? {};
+          const optionStatus = cleanString(optionRaw.status, 40);
+          const optionType = normalizeProductType(optionRaw.productType, optionRaw.mixedPackConfig);
+          if (optionStatus === "inactive" || optionRaw.active === false || optionType === "mixed_pack" || normalizeProductBundleConfig(optionRaw.bundleConfig).enabled) {
+            throw new OrderError("PRODUCT_UNAVAILABLE", "Um componente do Pack Misto não está mais disponível.", 409);
+          }
+          return { productId, quantity, optionRaw };
+        });
+
+        const categoryIds = Array.from(new Set(selectedComponentDocs.map(({ optionRaw }) => cleanString(optionRaw.categoryId, 160)).filter(Boolean)));
+        const categoryRefs = categoryIds.map((id) => sellerRef.collection("categories").doc(id));
+        const categorySnapshots = categoryRefs.length > 0 ? await transaction.getAll(...categoryRefs) : [];
+        const categoryCapability = new Map(categoryIds.map((id, index) => {
+          const data = categorySnapshots[index]?.data() ?? {};
+          return [id, record(data.capabilities).mixedPackEligible === true] as const;
+        }));
+
+        const selections = selectedComponentDocs.map(({ productId, quantity, optionRaw }) => {
+          const eligible = optionRaw.mixedPackEligible === true || categoryCapability.get(cleanString(optionRaw.categoryId, 160)) === true;
+          if (!eligible) {
+            throw new OrderError("PRODUCT_UNAVAILABLE", "Um componente deixou de ser elegível para Pack Misto.", 409);
+          }
+          operationalDemand.set(productId, (operationalDemand.get(productId) ?? 0) + quantity);
+          return {
+            productId,
+            name: resolveLocalizedName(optionRaw, clean.language, defaultLanguage, `Produto ${productId}`),
+            imageUrl: cleanString(optionRaw.imageUrl ?? optionRaw.image, 2000),
+            quantity,
+          };
+        });
+
+        // O produto Pack é comercial; estoque e produção pertencem aos componentes.
+        line.inventoryTracked = false;
+        line.stockAvailable = null;
+        line.stockReserved = 0;
+        line.stockShortage = 0;
+        line.productionRequired = 0;
+        line.stockState = "not_tracked";
+
+        mixedPackSnapshots.set(line.productId, {
+          packQuantity: line.quantity,
+          unitsPerPack: config.unitsPerPack,
+          totalUnits: expectedTotal,
+          allowRepeats: config.allowRepeats,
+          minDistinct: config.minDistinct,
+          maxPerProduct: config.maxPerProduct,
+          selections,
+        });
+      }
+
+      const operationalLines: ProductLine[] = [];
+      const operationalRefs: admin.firestore.DocumentReference[] = [];
+      for (const [productId, quantity] of operationalDemand.entries()) {
+        const mainIndex = productIds.indexOf(productId);
+        const componentSnapshot = componentProductMap.get(productId);
+        const snapshot = mainIndex >= 0 ? catalogProductSnapshots[mainIndex] : componentSnapshot;
+        if (!snapshot?.exists) {
+          throw new OrderError("PRODUCT_UNAVAILABLE", "Um produto necessário para estoque/produção não existe mais.", 409);
+        }
+        const raw = snapshot.data() ?? {};
+        operationalLines.push(normalizeProductLine({
+          productId,
+          quantity,
+          raw,
+          catalogRaw: raw,
+          currency,
+          language: clean.language,
+          defaultLanguage,
+          source: clean.source,
+          nowMillis,
+          allowHidden: true,
+        }));
+        operationalRefs.push(sellerRef.collection("products").doc(productId));
+      }
+
+      // Kits configuráveis antigos continuam usando a linha comercial para produção.
+      for (const line of lines) {
+        if (bundleSnapshots.has(line.productId)) {
+          const index = operationalLines.findIndex((item) => item.productId === line.productId);
+          if (index >= 0) operationalLines[index] = { ...line };
+        }
+      }
+
+      const unavailableStockLines = operationalLines.filter(
         (line) =>
           line.availabilityMode !== "made_to_order" &&
           line.inventoryTracked &&
@@ -1452,7 +1637,7 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      const productionLines = lines.filter((line) => line.productionRequired > 0);
+      const productionLines = operationalLines.filter((line) => line.productionRequired > 0);
       const maxProductionLeadTimeDays = productionLines.reduce(
         (maximum, line) => Math.max(maximum, line.productionLeadTimeDays),
         0,
@@ -1802,10 +1987,10 @@ export async function POST(request: NextRequest) {
         0,
         subtotalMinor - discountMinor + shippingFeeMinor,
       );
-      const hasMadeToOrderItems = lines.some(
+      const hasMadeToOrderItems = operationalLines.some(
         (line) => line.availabilityMode === "made_to_order",
       );
-      const hasStockShortage = lines.some(
+      const hasStockShortage = operationalLines.some(
         (line) => line.stockShortage > 0,
       );
       const initialOrderStatus: "pending" | "ready" =
@@ -1896,7 +2081,7 @@ export async function POST(request: NextRequest) {
           postalEligible: line.shipping.fulfillment.postal,
           shipping: line.shipping,
           shippingWeightGrams: line.shipping.weightGrams,
-          options: bundleSnapshots.get(line.productId)?.selections.map((selection) => ({
+          options: (mixedPackSnapshots.get(line.productId)?.selections ?? bundleSnapshots.get(line.productId)?.selections)?.map((selection) => ({
             id: selection.productId,
             productId: selection.productId,
             name: selection.name,
@@ -1904,8 +2089,41 @@ export async function POST(request: NextRequest) {
             quantity: selection.quantity,
           })) ?? [],
           bundle: bundleSnapshots.get(line.productId) ?? null,
+          mixedPack: mixedPackSnapshots.get(line.productId) ?? null,
         };
       });
+      const inventoryItems = operationalLines.map((line) => ({
+        productId: line.productId,
+        name: line.name,
+        qty: line.quantity,
+        quantity: line.quantity,
+        imageUrl: line.imageUrl,
+        category: line.category,
+        availabilityMode: line.availabilityMode,
+        availabilityStatus: line.availabilityStatus,
+        productionMode: line.productionMode,
+        inventoryTracked: line.inventoryTracked,
+        stockAvailable: line.stockAvailable,
+        stockReserved: line.stockReserved,
+        stockShortage: line.stockShortage,
+        productionRequired: line.productionRequired,
+        productionLeadTime: line.productionLeadTime,
+        productionLeadTimeDays: line.productionLeadTimeDays,
+        stockState: line.stockState,
+        inventoryState: {
+          reservationStatus: line.availabilityMode === "made_to_order" || !line.inventoryTracked
+            ? "none"
+            : line.stockReserved >= line.quantity ? "reserved" : line.stockReserved > 0 ? "partial" : "none",
+          reservedQuantity: line.stockReserved,
+          shortageQuantity: line.stockShortage,
+          productionRequired: line.productionRequired,
+          productionLeadTimeDays: line.productionLeadTimeDays,
+          producedQuantity: 0,
+          consumedQuantity: 0,
+          releasedQuantity: 0,
+          productionStatus: line.productionRequired > 0 ? "pending" : "not_required",
+        },
+      }));
       const quantities = Object.fromEntries(
         lines.map((line) => [line.productId, line.quantity]),
       );
@@ -1937,6 +2155,7 @@ export async function POST(request: NextRequest) {
           : null,
         quantities,
         items,
+        inventoryItems,
         totalItems: clean.totalItems,
         pricingSchedule: {
           schemaVersion: 1,
@@ -1949,7 +2168,9 @@ export async function POST(request: NextRequest) {
             .filter((line) => line.scheduledPriceStatus === "active")
             .map((line) => line.productId),
         },
-        totalSelectedUnits: Array.from(bundleSnapshots.values()).reduce((sum, bundle) => sum + bundle.totalUnits, 0),
+        totalSelectedUnits:
+          Array.from(bundleSnapshots.values()).reduce((sum, bundle) => sum + bundle.totalUnits, 0) +
+          Array.from(mixedPackSnapshots.values()).reduce((sum, pack) => sum + pack.totalUnits, 0),
         subtotalMinor,
         discountMinor,
         offerDiscountMinor,
@@ -2030,15 +2251,15 @@ export async function POST(request: NextRequest) {
         inventoryState: {
           reservationStatus:
             hasStockShortage
-              ? lines.some((line) => line.stockReserved > 0)
+              ? operationalLines.some((line) => line.stockReserved > 0)
                 ? "partial"
                 : "none"
-              : lines.some((line) => line.stockReserved > 0)
+              : operationalLines.some((line) => line.stockReserved > 0)
                 ? "reserved"
                 : "none",
-          reservedQuantity: lines.reduce((sum, line) => sum + line.stockReserved, 0),
-          shortageQuantity: lines.reduce((sum, line) => sum + line.stockShortage, 0),
-          productionRequired: lines.reduce((sum, line) => sum + line.productionRequired, 0),
+          reservedQuantity: operationalLines.reduce((sum, line) => sum + line.stockReserved, 0),
+          shortageQuantity: operationalLines.reduce((sum, line) => sum + line.stockShortage, 0),
+          productionRequired: operationalLines.reduce((sum, line) => sum + line.productionRequired, 0),
           producedQuantity: 0,
           consumedQuantity: 0,
           releasedQuantity: 0,
@@ -2088,9 +2309,9 @@ export async function POST(request: NextRequest) {
         updatedBy: "public-order-api",
       };
 
-      for (let index = 0; index < lines.length; index += 1) {
-        const line = lines[index];
-        const catalogProductRef = catalogProductRefs[index];
+      for (let index = 0; index < operationalLines.length; index += 1) {
+        const line = operationalLines[index];
+        const catalogProductRef = operationalRefs[index];
 
         if (
           line.availabilityMode !== "made_to_order" &&

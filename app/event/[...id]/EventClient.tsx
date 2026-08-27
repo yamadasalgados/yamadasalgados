@@ -51,6 +51,12 @@ import {
   minorToMajor,
 } from "@/app/lib/money";
 import { normalizeProductInventory } from "@/app/lib/inventory-schema";
+import {
+  normalizeProductMixedPackConfig,
+  normalizeProductType,
+  type ProductMixedPackConfig,
+  type ProductType,
+} from "@/app/lib/product-schema";
 import { normalizeSellerOrderSettings } from "@/app/lib/order-settings-schema";
 import { fetchPublicSellerProfile } from "@/app/lib/public-seller-client";
 import {
@@ -179,6 +185,14 @@ type ProductImageData = {
   availabilityStatus: "active" | "made_to_order";
   productionMode: "stock" | "made_to_order";
   productionLeadTimeDays: number;
+  productType: ProductType;
+  mixedPackConfig: ProductMixedPackConfig;
+  componentOnly?: boolean;
+};
+
+type MixedPackSelection = {
+  packQuantity: number;
+  selections: Record<string, number>;
 };
 
 type ChatMessage = {
@@ -382,38 +396,12 @@ function mapProductSnapToData(
         docData.productionLeadTimeDays,
         { madeToOrder },
       ).days,
+      productType: normalizeProductType(docData.productType, docData.mixedPackConfig),
+      mixedPackConfig: normalizeProductMixedPackConfig(docData.mixedPackConfig),
     };
   });
 
   return map;
-}
-
-async function fetchEventHiddenProducts(
-  sellerId: string,
-  eventId: string,
-): Promise<Record<string, ProductImageData>> {
-  try {
-    const response = await fetch(
-      `/api/public/events/${encodeURIComponent(sellerId)}/${encodeURIComponent(eventId)}/products`,
-      { cache: "no-store" },
-    );
-    if (!response.ok) return {};
-
-    const payload = await response.json() as {
-      ok?: boolean;
-      products?: ProductImageData[];
-    };
-    if (!payload.ok || !Array.isArray(payload.products)) return {};
-
-    return Object.fromEntries(
-      payload.products
-        .filter((product) => product && typeof product.id === "string" && product.id.trim())
-        .map((product) => [product.id, product]),
-    );
-  } catch (error) {
-    console.warn("[EventClient] Hidden event products unavailable:", error);
-    return {};
-  }
 }
 
 async function fetchEventPublishedProducts(
@@ -425,7 +413,7 @@ async function fetchEventPublishedProducts(
   const wantedNames = uniq(productNames);
   const result: Record<string, ProductImageData> = {};
 
-  const [itemsSnap, eventProductsSnap, catalogSnap, hiddenProducts] = await Promise.all([
+  const [itemsSnap, eventProductsSnap, catalogSnap] = await Promise.all([
     getDocs(
       collection(
         db,
@@ -452,7 +440,6 @@ async function fetchEventPublishedProducts(
         where("status", "in", ["active", "made_to_order"]),
       ),
     ),
-    fetchEventHiddenProducts(sellerId, eventId),
   ]);
 
   // `products` é legado; `items` é a fonte atual e deve ter precedência.
@@ -470,19 +457,10 @@ async function fetchEventPublishedProducts(
    * a aparecer no evento sem recriar ou salvar novamente o evento.
    */
   const catalogProducts = mapProductSnapToData(catalogSnap, currency);
-  const mergedCatalogProducts: Record<string, ProductImageData> = {
-    ...catalogProducts,
-    ...hiddenProducts,
-  };
-  const catalogIds = new Set(Object.keys(mergedCatalogProducts));
-
-  // Hidden products are exposed only when the server confirms that the exact
-  // product is already published in this active event. The sanitized DTO is
-  // merged here so the rest of the event flow treats it like any other item.
-  Object.assign(result, hiddenProducts);
+  const catalogIds = new Set(Object.keys(catalogProducts));
 
   Object.entries(result).forEach(([productId, published]) => {
-    const catalog = mergedCatalogProducts[productId];
+    const catalog = catalogProducts[productId];
 
     if (!catalog) {
       // Produto desativado ou removido deixa de ser vendável no evento.
@@ -509,6 +487,21 @@ async function fetchEventPublishedProducts(
         { madeToOrder: eventMadeToOrder },
       ).days,
     };
+  });
+
+  // Componentes ativos referenciados por Packs Mistos ficam disponíveis apenas
+  // no configurador e não entram automaticamente na grade do evento.
+  const mixedComponentIds = new Set<string>();
+  Object.values(result).forEach((product) => {
+    if (product.productType === "mixed_pack") {
+      product.mixedPackConfig.optionProductIds.forEach((productId) => mixedComponentIds.add(productId));
+    }
+  });
+  mixedComponentIds.forEach((productId) => {
+    const component = catalogProducts[productId];
+    if (component && component.status !== "inactive" && !result[productId]) {
+      result[productId] = { ...component, componentOnly: true };
+    }
   });
 
   // Compatibilidade com eventos legados que armazenavam somente nomes.
@@ -540,6 +533,8 @@ async function fetchEventPublishedProducts(
         availabilityStatus: "active",
         productionMode: "stock",
         productionLeadTimeDays: 0,
+        productType: "standard",
+        mixedPackConfig: normalizeProductMixedPackConfig(null),
       };
     }
   });
@@ -601,6 +596,8 @@ const uiLocale =
   const [customerPhone, setCustomerPhone] = useState("");
   const [note, setNote] = useState("");
   const [quantities, setQuantities] = useState<Record<string, number>>({});
+  const [mixedPackSelections, setMixedPackSelections] = useState<Record<string, MixedPackSelection>>({});
+  const [configuringMixedPack, setConfiguringMixedPack] = useState<ProductImageData | null>(null);
 
   const [dateOption, setDateOption] = useState<DateOption>("event-date");
   const [selectedDate, setSelectedDate] = useState("");
@@ -966,6 +963,8 @@ const uiLocale =
   const resetOrderForm = useCallback(() => {
     setFormError("");
     setQuantities({});
+    setMixedPackSelections({});
+    setConfiguringMixedPack(null);
     setNote("");
     setLocationLink("");
     setTimeOption("no-preference");
@@ -1018,6 +1017,24 @@ const uiLocale =
     },
     [acceptOrdersWithoutStock, productsData],
   );
+
+  const saveMixedPackSelection = useCallback((product: ProductImageData, selection: MixedPackSelection) => {
+    const packQuantity = Math.max(1, Math.min(20, Math.floor(selection.packQuantity)));
+    const allowed = new Set(product.mixedPackConfig.optionProductIds);
+    const selections = Object.fromEntries(Object.entries(selection.selections)
+      .map(([id, quantity]) => [id, Math.max(0, Math.floor(Number(quantity) || 0))] as const)
+      .filter(([id, quantity]) => allowed.has(id) && quantity > 0));
+    const total = Object.values(selections).reduce((sum, quantity) => sum + quantity, 0);
+    if (total !== product.mixedPackConfig.unitsPerPack * packQuantity) return;
+    setMixedPackSelections((current) => ({ ...current, [product.id]: { packQuantity, selections } }));
+    setQuantities((current) => ({ ...current, [product.id]: packQuantity }));
+    setConfiguringMixedPack(null);
+  }, []);
+
+  const removeMixedPack = useCallback((productId: string) => {
+    setMixedPackSelections((current) => { const next = { ...current }; delete next[productId]; return next; });
+    setQuantities((current) => { const next = { ...current }; delete next[productId]; return next; });
+  }, []);
 
   const handleGetLocation = useCallback(() => {
     if (typeof navigator === "undefined" || !("geolocation" in navigator)) {
@@ -1099,6 +1116,7 @@ const uiLocale =
       customerPhone?: string;
       note?: string;
       quantities?: Record<string, number>;
+      mixedPackSelections?: Record<string, MixedPackSelection>;
       dateOption?: DateOption;
       selectedDate?: string;
       deliveryMode?: DeliveryMode;
@@ -1114,6 +1132,9 @@ const uiLocale =
     if (typeof draft?.note === "string") setNote(draft.note);
     if (draft?.quantities && typeof draft.quantities === "object") {
       setQuantities(draft.quantities);
+    }
+    if (draft?.mixedPackSelections && typeof draft.mixedPackSelections === "object") {
+      setMixedPackSelections(draft.mixedPackSelections);
     }
     if (draft?.dateOption === "event-date" || draft?.dateOption === "no-preference") {
       setDateOption(draft.dateOption);
@@ -1167,6 +1188,7 @@ const uiLocale =
         customerPhone,
         note,
         quantities,
+        mixedPackSelections,
         dateOption,
         selectedDate,
         deliveryMode,
@@ -1190,6 +1212,7 @@ const uiLocale =
     locationLink,
     note,
     quantities,
+    mixedPackSelections,
     selectedDate,
     selectedHour,
     selectedMinute,
@@ -1212,6 +1235,20 @@ const uiLocale =
         }
 
         const quantity = Math.max(0, Math.floor(Number(rawQuantity) || 0));
+        if (product.productType === "mixed_pack") {
+          const selection = mixedPackSelections[productId];
+          const selectedTotal = Object.values(selection?.selections ?? {}).reduce(
+            (sum, value) => sum + Math.max(0, Math.floor(Number(value) || 0)),
+            0,
+          );
+          const expected = product.mixedPackConfig.unitsPerPack * Math.max(1, selection?.packQuantity || 0);
+          if (!selection || selection.packQuantity !== quantity || selectedTotal !== expected) {
+            changed = true;
+            continue;
+          }
+          next[productId] = quantity;
+          continue;
+        }
         const safeQuantity =
           acceptOrdersWithoutStock ||
           product.availabilityMode === "made_to_order" ||
@@ -1225,7 +1262,7 @@ const uiLocale =
 
       return changed ? next : current;
     });
-  }, [acceptOrdersWithoutStock, event, orderableIds, productsData]);
+  }, [acceptOrdersWithoutStock, event, orderableIds, productsData, mixedPackSelections]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -1631,28 +1668,9 @@ const uiLocale =
 
     scheduleRefresh();
 
-    // Produtos `hidden` publicados no evento são lidos pelo DTO sanitizado
-    // do backend e, por definição, não podem participar do listener público
-    // direto do catálogo. Atualizamos periodicamente enquanto a página está
-    // visível para manter estoque/preço desses itens próximos do tempo real.
-    const hiddenRefreshInterval = window.setInterval(() => {
-      if (document.visibilityState === "visible") {
-        void refreshProducts();
-      }
-    }, 30_000);
-
-    const handleVisibilityRefresh = () => {
-      if (document.visibilityState === "visible") {
-        void refreshProducts();
-      }
-    };
-    document.addEventListener("visibilitychange", handleVisibilityRefresh);
-
     return () => {
       disposed = true;
       if (refreshTimer !== null) window.clearTimeout(refreshTimer);
-      window.clearInterval(hiddenRefreshInterval);
-      document.removeEventListener("visibilitychange", handleVisibilityRefresh);
       unsubscribers.forEach((unsubscribe) => unsubscribe());
     };
   }, [
@@ -1850,6 +1868,15 @@ const uiLocale =
         .filter(([, quantity]) => quantity > 0),
     );
 
+    const orderMixedPackSelections = Object.fromEntries(
+      Object.entries(mixedPackSelections)
+        .filter(([productId, selection]) => (quantitiesClean[productId] || 0) > 0 && selection.packQuantity === quantitiesClean[productId])
+        .map(([productId, selection]) => [productId, {
+          packQuantity: selection.packQuantity,
+          selections: Object.entries(selection.selections).map(([componentId, quantity]) => ({ productId: componentId, quantity })),
+        }]),
+    );
+
     const result = await createPublicOrder({
       source: "event",
       sellerId,
@@ -1865,6 +1892,7 @@ const uiLocale =
           productsData[productId]?.priceMinor || 0,
         ]),
       ),
+      mixedPackSelections: orderMixedPackSelections,
       rewards: {
         mode: rewardEvaluation.mode,
         points: rewardEvaluation.pointsRedeemed,
@@ -1903,6 +1931,7 @@ const uiLocale =
     id,
     orderableIds,
     quantities,
+    mixedPackSelections,
     productsData,
     selectedOfferId,
     customerName,
@@ -2307,6 +2336,7 @@ const uiLocale =
                   madeToOrder={false}
                   showScheduledPriceCards={event.showScheduledPriceCards}
                   onAdjust={adjustQuantity}
+                  onConfigureMixedPack={setConfiguringMixedPack}
                   tr={tr}
                   emptyMessage={tr("event.products.empty", "Nenhum produto normal disponível neste evento.")}
                 />
@@ -2356,6 +2386,7 @@ const uiLocale =
                   madeToOrder
                   showScheduledPriceCards={event.showScheduledPriceCards}
                   onAdjust={adjustQuantity}
+                  onConfigureMixedPack={setConfiguringMixedPack}
                   tr={tr}
                   emptyMessage={tr("event.products.made_to_order_empty", "Nenhum produto sob encomenda neste evento.")}
                 />
@@ -2363,6 +2394,19 @@ const uiLocale =
             ))}
           </div>
         </section>
+      )}
+
+      {configuringMixedPack && (
+        <EventMixedPackDialog
+          product={configuringMixedPack}
+          options={configuringMixedPack.mixedPackConfig.optionProductIds
+            .map((productId) => productsData[productId])
+            .filter((product): product is ProductImageData => Boolean(product && product.status !== "inactive" && product.productType !== "mixed_pack"))}
+          initialSelection={mixedPackSelections[configuringMixedPack.id]}
+          onClose={() => setConfiguringMixedPack(null)}
+          onConfirm={(selection) => saveMixedPackSelection(configuringMixedPack, selection)}
+          onRemove={quantities[configuringMixedPack.id] > 0 ? () => { removeMixedPack(configuringMixedPack.id); setConfiguringMixedPack(null); } : undefined}
+        />
       )}
 
       {!checkoutOpen && (
@@ -2927,6 +2971,71 @@ const uiLocale =
   );
 }
 
+function EventMixedPackDialog({ product, options, initialSelection, onClose, onConfirm, onRemove }: {
+  product: ProductImageData;
+  options: ProductImageData[];
+  initialSelection?: MixedPackSelection;
+  onClose: () => void;
+  onConfirm: (selection: MixedPackSelection) => void;
+  onRemove?: () => void;
+}) {
+  const [packQuantity, setPackQuantity] = useState(Math.max(1, initialSelection?.packQuantity || 1));
+  const [selections, setSelections] = useState<Record<string, number>>(initialSelection?.selections || {});
+  const target = product.mixedPackConfig.unitsPerPack * packQuantity;
+  const selected = Object.values(selections).reduce((sum, value) => sum + Math.max(0, Math.floor(Number(value) || 0)), 0);
+  const distinct = Object.values(selections).filter((value) => Number(value) > 0).length;
+  const perOptionMax = product.mixedPackConfig.allowRepeats
+    ? (product.mixedPackConfig.maxPerProduct === null ? target : product.mixedPackConfig.maxPerProduct * packQuantity)
+    : packQuantity;
+  const violates = Object.values(selections).some((value) => Math.max(0, Math.floor(Number(value) || 0)) > perOptionMax);
+  const ready = selected === target && distinct >= product.mixedPackConfig.minDistinct && !violates;
+
+  useEffect(() => {
+    const previous = document.body.style.overflow; document.body.style.overflow = "hidden";
+    const key = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    document.addEventListener("keydown", key);
+    return () => { document.body.style.overflow = previous; document.removeEventListener("keydown", key); };
+  }, [onClose]);
+
+  const setQty = (id: string, requested: number) => {
+    setSelections((current) => {
+      const currentQty = Math.max(0, Math.floor(Number(current[id]) || 0));
+      const currentTotal = Object.values(current).reduce((sum, value) => sum + Math.max(0, Math.floor(Number(value) || 0)), 0);
+      const remaining = Math.max(0, target - currentTotal);
+      const safe = Math.max(0, Math.floor(requested));
+      const nextQty = safe > currentQty ? Math.min(safe, currentQty + remaining, perOptionMax) : Math.min(safe, perOptionMax);
+      const next = { ...current }; if (nextQty <= 0) delete next[id]; else next[id] = nextQty; return next;
+    });
+  };
+  const changePacks = (value: number) => {
+    const safe = Math.max(1, Math.min(20, Math.floor(value))); setPackQuantity(safe);
+    const nextTarget = product.mixedPackConfig.unitsPerPack * safe;
+    const nextLimit = product.mixedPackConfig.allowRepeats
+      ? (product.mixedPackConfig.maxPerProduct === null ? nextTarget : product.mixedPackConfig.maxPerProduct * safe)
+      : safe;
+    setSelections((current) => { let running = 0; const next: Record<string, number> = {}; for (const option of options) { const qty = Math.min(Math.max(0, current[option.id] || 0), nextLimit, Math.max(0, nextTarget - running)); if (qty > 0) { next[option.id] = qty; running += qty; } } return next; });
+  };
+
+  return (
+    <div className="fixed inset-0 z-[120] flex items-end justify-center bg-black/70 sm:items-center sm:p-6">
+      <button className="absolute inset-0" type="button" onClick={onClose} aria-label="Fechar" />
+      <section className="relative flex max-h-[100dvh] w-full max-w-2xl flex-col overflow-hidden rounded-t-3xl bg-white shadow-2xl dark:bg-neutral-950 sm:max-h-[calc(100dvh-3rem)] sm:rounded-3xl">
+        <header className="flex items-start justify-between border-b border-neutral-200 p-4 dark:border-neutral-800">
+          <div><p className="text-xs font-black uppercase text-violet-600">Pack Misto</p><h2 className="text-xl font-black">{product.name}</h2><p className="mt-1 text-xs text-neutral-500">{product.mixedPackConfig.unitsPerPack} unidades por bandeja · mínimo {product.mixedPackConfig.minDistinct} opções diferentes</p></div>
+          <button type="button" onClick={onClose} className="h-10 w-10 rounded-full border border-neutral-200 font-black dark:border-neutral-700">×</button>
+        </header>
+        <div className="min-h-0 flex-1 overflow-y-auto p-4 pb-28">
+          <div className="flex items-center justify-between rounded-2xl bg-violet-50 p-3 dark:bg-violet-950/20"><span className="font-black">Bandejas</span><div className="flex items-center gap-3"><button type="button" onClick={() => changePacks(packQuantity-1)} disabled={packQuantity<=1} className="h-9 w-9 rounded-lg border">−</button><b>{packQuantity}</b><button type="button" onClick={() => changePacks(packQuantity+1)} className="h-9 w-9 rounded-lg bg-violet-600 text-white">+</button></div></div>
+          <p className="mt-3 text-sm font-bold">Selecionado: {selected}/{target} · Opções diferentes: {distinct}/{product.mixedPackConfig.minDistinct}</p>
+          <div className="mt-4 grid grid-cols-2 gap-3">{options.map((option) => { const qty=selections[option.id]||0; return <article key={option.id} className="rounded-2xl border border-neutral-200 p-3 dark:border-neutral-800"><div className="flex items-center gap-2">{option.imageUrl ? <img src={option.imageUrl} alt="" className="h-12 w-12 rounded-xl object-cover"/>:null}<b className="text-sm">{option.name}</b></div><div className="mt-3 flex items-center justify-between"><button type="button" onClick={() => setQty(option.id,qty-1)} disabled={qty<=0} className="h-9 w-9 rounded-lg border">−</button><b>{qty}</b><button type="button" onClick={() => setQty(option.id,qty+1)} disabled={selected>=target || qty>=perOptionMax} className="h-9 w-9 rounded-lg bg-violet-600 text-white">+</button></div></article>; })}</div>
+          {!ready && <p className="mt-4 rounded-xl bg-amber-50 p-3 text-xs font-bold text-amber-800 dark:bg-amber-950/20 dark:text-amber-200">Complete a bandeja respeitando a quantidade, o mínimo de opções diferentes e o limite por produto.</p>}
+        </div>
+        <footer className="absolute inset-x-0 bottom-0 flex gap-2 border-t border-neutral-200 bg-white p-4 dark:border-neutral-800 dark:bg-neutral-900 sm:static">{onRemove && <button type="button" onClick={onRemove} className="flex-1 rounded-xl border border-red-300 p-3 font-black text-red-700">Remover</button>}<button type="button" disabled={!ready || options.length<2} onClick={() => onConfirm({packQuantity,selections})} className="flex-1 rounded-xl bg-violet-600 p-3 font-black text-white disabled:opacity-40">{initialSelection?"Atualizar Pack":"Adicionar Pack"}</button></footer>
+      </section>
+    </div>
+  );
+}
+
 function EventProductGrid({
   productIds,
   productsData,
@@ -2941,6 +3050,7 @@ function EventProductGrid({
   madeToOrder,
   showScheduledPriceCards,
   onAdjust,
+  onConfigureMixedPack,
   tr,
   emptyMessage,
 }: {
@@ -2957,6 +3067,7 @@ function EventProductGrid({
   madeToOrder: boolean;
   showScheduledPriceCards: boolean;
   onAdjust: (productId: string, delta: number) => void;
+  onConfigureMixedPack: (product: ProductImageData) => void;
   tr: (key: string, fallback: string) => string;
   emptyMessage: string;
 }) {
@@ -2973,6 +3084,7 @@ function EventProductGrid({
       {productIds.map((productId) => {
         const info = productsData[productId];
         const name = info?.name || productId;
+        const isMixedPack = info?.productType === "mixed_pack";
         const quantity = quantities[productId] ?? 0;
         const schedule = info?.scheduledPriceChange;
         const scheduledDate = formatScheduledPriceDate(
@@ -2999,7 +3111,7 @@ function EventProductGrid({
               : `${countdown.days}d ${countdown.hours}h ${countdown.minutes}min`
           : "";
         const stock = typeof info?.stockQty === "number" ? info.stockQty : null;
-        const hasNoStock = !madeToOrder && stock !== null && stock <= 0;
+        const hasNoStock = !isMixedPack && !madeToOrder && stock !== null && stock <= 0;
         const soldOut = hasNoStock && !acceptOrdersWithoutStock;
         const needsConfirmation = hasNoStock && acceptOrdersWithoutStock;
         const lastUnits =
@@ -3163,30 +3275,22 @@ function EventProductGrid({
                 {tr("event.product.quantity", "Quantidade")}
               </span>
 
-              <div className="inline-flex items-center gap-2">
+              {isMixedPack && info ? (
                 <button
                   type="button"
-                  onClick={() => onAdjust(productId, -1)}
-                  disabled={eventClosed || quantity <= 0}
-                  className="flex h-8 w-8 items-center justify-center rounded-full border border-neutral-300 bg-white text-sm font-bold transition hover:bg-neutral-50 disabled:opacity-30 dark:border-neutral-700 dark:bg-neutral-900"
+                  onClick={() => onConfigureMixedPack(info)}
+                  disabled={eventClosed}
+                  className="rounded-xl bg-violet-600 px-3 py-2 text-xs font-black text-white disabled:opacity-40"
                 >
-                  -
+                  {quantity > 0 ? `Editar Pack (${quantity})` : "Montar Pack Misto"}
                 </button>
-                <span className="min-w-[1.5rem] text-center text-sm font-black text-neutral-900 dark:text-white">{quantity}</span>
-                <button
-                  type="button"
-                  onClick={() => onAdjust(productId, 1)}
-                  disabled={eventClosed || soldOut || reachedQuantityLimit}
-                  className={cn(
-                    "flex h-8 w-8 items-center justify-center rounded-full border text-sm font-bold transition disabled:opacity-30",
-                    madeToOrder
-                      ? "border-violet-500 bg-violet-600 text-white hover:bg-violet-700"
-                      : "border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900",
-                  )}
-                >
-                  +
-                </button>
-              </div>
+              ) : (
+                <div className="inline-flex items-center gap-2">
+                  <button type="button" onClick={() => onAdjust(productId, -1)} disabled={eventClosed || quantity <= 0} className="flex h-8 w-8 items-center justify-center rounded-full border border-neutral-300 bg-white text-sm font-bold transition hover:bg-neutral-50 disabled:opacity-30 dark:border-neutral-700 dark:bg-neutral-900">-</button>
+                  <span className="min-w-[1.5rem] text-center text-sm font-black text-neutral-900 dark:text-white">{quantity}</span>
+                  <button type="button" onClick={() => onAdjust(productId, 1)} disabled={eventClosed || soldOut || reachedQuantityLimit} className={cn("flex h-8 w-8 items-center justify-center rounded-full border text-sm font-bold transition disabled:opacity-30", madeToOrder ? "border-violet-500 bg-violet-600 text-white hover:bg-violet-700" : "border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900")}>+</button>
+                </div>
+              )}
             </div>
           </div>
         );

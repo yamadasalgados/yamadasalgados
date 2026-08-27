@@ -52,8 +52,15 @@ function checkboxGlyph(style) {
   return "□";
 }
 
+function receiptItems(order, operational) {
+  if (operational && Array.isArray(order.inventoryItems) && order.inventoryItems.length > 0) {
+    return order.inventoryItems;
+  }
+  return Array.isArray(order.items) ? order.items : [];
+}
+
 function itemRows(order, operational, receipt) {
-  return order.items.map((item) => {
+  return receiptItems(order, operational).map((item) => {
     const options = item.options?.length
       ? `<div class="options">${item.options.map((option) => `${htmlEscape(option.quantity)}x ${htmlEscape(option.name)}`).join(" · ")}</div>`
       : "";
@@ -199,10 +206,11 @@ export function receiptDocument(job, copyType, profile = {}) {
     <div class="center small">Impresso em ${htmlEscape(new Date().toLocaleString())}</div>
   `;
 
-  const optionCount = order.items.reduce((sum, item) => sum + (item.options?.length || 0), 0);
+  const renderedItems = receiptItems(order, operational);
+  const optionCount = renderedItems.reduce((sum, item) => sum + (item.options?.length || 0), 0);
   const narrowExtra = shellProfile.paperWidthMm === 58 ? 35 : 0;
   const customExtra = (receipt.qrEnabled ? 52 : 0) + (receipt.logoUrl ? 22 : 0) + (receipt.headerText ? 12 : 0) + (receipt.footerText ? 18 : 0);
-  const estimatedMm = Math.max(150, 112 + narrowExtra + customExtra + order.items.length * 22 + optionCount * 7 + (order.note ? 24 : 0) + (!operational ? 35 : 0));
+  const estimatedMm = Math.max(150, 112 + narrowExtra + customExtra + renderedItems.length * 22 + optionCount * 7 + (order.note ? 24 : 0) + (!operational ? 35 : 0));
   return documentShell({ title, body, estimatedMm, profile: shellProfile });
 }
 

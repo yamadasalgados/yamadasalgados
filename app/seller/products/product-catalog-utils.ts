@@ -78,7 +78,7 @@ export function slugify(input: string): string {
   return `category-${hashText(normalized || "category")}`;
 }
 
-export function normalizeCategoryLabel(input: string): string {
+export function normalizeCategoryLabel(input: unknown): string {
   return String(input || "")
     .trim()
     .replace(/\s+/g, " ")
