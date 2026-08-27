@@ -388,6 +388,34 @@ function mapProductSnapToData(
   return map;
 }
 
+async function fetchEventHiddenProducts(
+  sellerId: string,
+  eventId: string,
+): Promise<Record<string, ProductImageData>> {
+  try {
+    const response = await fetch(
+      `/api/public/events/${encodeURIComponent(sellerId)}/${encodeURIComponent(eventId)}/products`,
+      { cache: "no-store" },
+    );
+    if (!response.ok) return {};
+
+    const payload = await response.json() as {
+      ok?: boolean;
+      products?: ProductImageData[];
+    };
+    if (!payload.ok || !Array.isArray(payload.products)) return {};
+
+    return Object.fromEntries(
+      payload.products
+        .filter((product) => product && typeof product.id === "string" && product.id.trim())
+        .map((product) => [product.id, product]),
+    );
+  } catch (error) {
+    console.warn("[EventClient] Hidden event products unavailable:", error);
+    return {};
+  }
+}
+
 async function fetchEventPublishedProducts(
   sellerId: string,
   eventId: string,
@@ -397,7 +425,7 @@ async function fetchEventPublishedProducts(
   const wantedNames = uniq(productNames);
   const result: Record<string, ProductImageData> = {};
 
-  const [itemsSnap, eventProductsSnap, catalogSnap] = await Promise.all([
+  const [itemsSnap, eventProductsSnap, catalogSnap, hiddenProducts] = await Promise.all([
     getDocs(
       collection(
         db,
@@ -424,6 +452,7 @@ async function fetchEventPublishedProducts(
         where("status", "in", ["active", "made_to_order"]),
       ),
     ),
+    fetchEventHiddenProducts(sellerId, eventId),
   ]);
 
   // `products` é legado; `items` é a fonte atual e deve ter precedência.
@@ -441,10 +470,19 @@ async function fetchEventPublishedProducts(
    * a aparecer no evento sem recriar ou salvar novamente o evento.
    */
   const catalogProducts = mapProductSnapToData(catalogSnap, currency);
-  const catalogIds = new Set(Object.keys(catalogProducts));
+  const mergedCatalogProducts: Record<string, ProductImageData> = {
+    ...catalogProducts,
+    ...hiddenProducts,
+  };
+  const catalogIds = new Set(Object.keys(mergedCatalogProducts));
+
+  // Hidden products are exposed only when the server confirms that the exact
+  // product is already published in this active event. The sanitized DTO is
+  // merged here so the rest of the event flow treats it like any other item.
+  Object.assign(result, hiddenProducts);
 
   Object.entries(result).forEach(([productId, published]) => {
-    const catalog = catalogProducts[productId];
+    const catalog = mergedCatalogProducts[productId];
 
     if (!catalog) {
       // Produto desativado ou removido deixa de ser vendável no evento.
@@ -1593,9 +1631,28 @@ const uiLocale =
 
     scheduleRefresh();
 
+    // Produtos `hidden` publicados no evento são lidos pelo DTO sanitizado
+    // do backend e, por definição, não podem participar do listener público
+    // direto do catálogo. Atualizamos periodicamente enquanto a página está
+    // visível para manter estoque/preço desses itens próximos do tempo real.
+    const hiddenRefreshInterval = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
+        void refreshProducts();
+      }
+    }, 30_000);
+
+    const handleVisibilityRefresh = () => {
+      if (document.visibilityState === "visible") {
+        void refreshProducts();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityRefresh);
+
     return () => {
       disposed = true;
       if (refreshTimer !== null) window.clearTimeout(refreshTimer);
+      window.clearInterval(hiddenRefreshInterval);
+      document.removeEventListener("visibilitychange", handleVisibilityRefresh);
       unsubscribers.forEach((unsubscribe) => unsubscribe());
     };
   }, [
