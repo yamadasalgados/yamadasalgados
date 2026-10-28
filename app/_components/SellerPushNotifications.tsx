@@ -378,18 +378,19 @@ export default function SellerPushNotifications({
     return null;
   }
 
-  const floatingPromptClass = promptOnce
-    ? "fixed bottom-[calc(env(safe-area-inset-bottom)+5.75rem)] left-3 right-3 z-[85] mx-auto max-w-md shadow-2xl"
+  // O lembrete fica no fluxo da página, sem encobrir menus no celular.
+  const inlinePromptClass = promptOnce
+    ? "mx-auto w-full max-w-lg shadow-lg"
     : "";
   const baseClass = compact
-    ? `relative space-y-3 rounded-2xl border p-3 ${floatingPromptClass}`
-    : `relative space-y-4 rounded-3xl border p-5 ${floatingPromptClass}`;
+    ? `relative space-y-3 rounded-2xl border ${promptOnce ? "p-4 sm:p-5" : "p-3"} ${inlinePromptClass}`
+    : `relative space-y-4 rounded-3xl border p-5 ${inlinePromptClass}`;
 
   const closeButton = promptOnce ? (
     <button
       type="button"
       onClick={dismissPrompt}
-      className="absolute right-2 top-2 rounded-lg p-1.5 opacity-60 transition hover:bg-black/5 hover:opacity-100 dark:hover:bg-white/10"
+      className="absolute right-2 top-2 inline-flex min-h-10 min-w-10 items-center justify-center rounded-xl border border-neutral-200 bg-white text-neutral-700 transition hover:bg-neutral-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600 dark:border-neutral-700 dark:bg-neutral-800 dark:text-white dark:hover:bg-neutral-700"
       aria-label="Close"
     >
       <X size={15} />
@@ -410,7 +411,9 @@ export default function SellerPushNotifications({
             : error || text.body;
 
   return (
-    <section className={`${baseClass} border-emerald-200 bg-emerald-50/60 dark:border-emerald-900/50 dark:bg-emerald-950/20`}>
+    <section className={`${baseClass} ${promptOnce
+      ? "border-emerald-200 bg-white text-neutral-950 dark:border-emerald-800 dark:bg-neutral-900 dark:text-white"
+      : "border-emerald-200 bg-emerald-50/60 dark:border-emerald-900/50 dark:bg-emerald-950/20"}`}>
       {closeButton}
       <div className="flex items-start gap-3">
         <Icon className="mt-0.5 h-5 w-5 shrink-0 text-emerald-700 dark:text-emerald-300" />
@@ -426,7 +429,7 @@ export default function SellerPushNotifications({
         <button
           type="button"
           onClick={() => void enable()}
-          className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-emerald-700 px-4 py-2.5 text-xs font-black text-white hover:bg-emerald-800"
+          className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-emerald-700 px-4 py-2.5 text-xs font-black text-white hover:bg-emerald-800 ${promptOnce ? "w-full" : ""}`}
         >
           <Bell size={17} />
           {text.enable}

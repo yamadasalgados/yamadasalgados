@@ -46,6 +46,7 @@ const PROMPT_DISMISSED_KEY = "order-system:customer-push-prompt-dismissed:v2";
 
 const COPY = {
   pt: {
+    close: "Fechar aviso",
     title: "Acompanhe seu pedido",
     body: "Receba avisos quando o pedido entrar em preparação, ficar pronto, for entregue ou cancelado.",
     enable: "Ativar avisos",
@@ -78,6 +79,7 @@ const COPY = {
     browserTab: "aba do navegador",
   },
   en: {
+    close: "Close notice",
     title: "Track your order",
     body: "Get alerts when your order enters preparation, is ready, delivered, or cancelled.",
     enable: "Enable alerts",
@@ -110,6 +112,7 @@ const COPY = {
     browserTab: "browser tab",
   },
   ja: {
+    close: "お知らせを閉じる",
     title: "注文状況を通知",
     body: "準備開始、準備完了、受け渡し済み、キャンセル時にお知らせします。",
     enable: "通知を有効にする",
@@ -380,19 +383,21 @@ export default function CustomerPushNotifications({
   if (!session.registered || state === "checking") return null;
   if (promptOnce && (promptDismissed || state === "subscribed" || state === "unsupported" || state === "install_required")) return null;
 
-  const floatingPromptClass = promptOnce
-    ? "fixed bottom-[calc(env(safe-area-inset-bottom)+5.75rem)] left-3 right-3 z-[85] mx-auto max-w-md shadow-2xl"
+  // O convite de notificações permanece no fluxo da página. Quando fixo,
+  // cobria o menu e, com fundo semitransparente, deixava os textos se misturarem.
+  const inlinePromptClass = promptOnce
+    ? "mx-auto w-full max-w-lg shadow-lg"
     : "";
   const baseClass = compact
-    ? `relative rounded-2xl border p-3 ${floatingPromptClass}`
-    : `relative rounded-3xl border p-4 shadow-sm ${floatingPromptClass}`;
+    ? `relative rounded-2xl border ${promptOnce ? "p-4 sm:p-5" : "p-3"} ${inlinePromptClass}`
+    : `relative rounded-3xl border p-4 shadow-sm ${inlinePromptClass}`;
 
   const closeButton = promptOnce ? (
     <button
       type="button"
       onClick={dismissPrompt}
-      className="absolute right-2 top-2 rounded-lg p-1.5 opacity-60 transition hover:bg-black/5 hover:opacity-100 dark:hover:bg-white/10"
-      aria-label="Close"
+      className="absolute right-2 top-2 inline-flex min-h-10 min-w-10 items-center justify-center rounded-xl border border-neutral-200 bg-white text-neutral-700 transition hover:bg-neutral-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:border-neutral-700 dark:bg-neutral-800 dark:text-white dark:hover:bg-neutral-700"
+      aria-label={text.close}
     >
       <X size={15} />
     </button>
@@ -466,19 +471,26 @@ export default function CustomerPushNotifications({
   }
 
   return (
-    <div className={`${baseClass} border-blue-200 bg-blue-50 text-blue-950 dark:border-blue-900/60 dark:bg-blue-950/30 dark:text-blue-100`}>
+    <div className={`${baseClass} ${promptOnce
+      ? "border-blue-200 bg-white text-neutral-950 dark:border-blue-800 dark:bg-neutral-900 dark:text-white"
+      : "border-blue-200 bg-blue-50 text-blue-950 dark:border-blue-900/60 dark:bg-blue-950/30 dark:text-blue-100"}`}>
       {closeButton}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-start gap-3">
-          <Bell className="mt-0.5 shrink-0" size={19} />
-          <div>
-            <p className="text-sm font-black">{text.title}</p>
-            <p className="mt-1 text-xs font-medium opacity-80">{state === "denied" ? text.denied : text.body}</p>
+      <div className={promptOnce ? "flex min-w-0 flex-col gap-4" : "flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"}>
+        <div className="flex min-w-0 items-start gap-3">
+          <Bell className="mt-0.5 shrink-0 text-blue-600 dark:text-blue-400" size={19} />
+          <div className={`min-w-0 flex-1 ${promptOnce ? "pr-9" : ""}`}>
+            <p className="text-sm font-black leading-snug">{text.title}</p>
+            <p className="mt-1 text-xs font-medium leading-relaxed opacity-80">{state === "denied" ? text.denied : text.body}</p>
             {state === "error" && <p className="mt-2 text-xs font-bold text-red-700 dark:text-red-300">{error || text.error}</p>}
           </div>
         </div>
         {state !== "denied" && (
-          <button type="button" onClick={() => void enable()} disabled={state === "loading"} className="inline-flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-xs font-black text-white disabled:opacity-60">
+          <button
+            type="button"
+            onClick={() => void enable()}
+            disabled={state === "loading"}
+            className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-xs font-black text-white disabled:opacity-60 ${promptOnce ? "w-full" : "shrink-0"}`}
+          >
             {state === "loading" ? <Loader2 className="animate-spin" size={15} /> : <Bell size={15} />}
             {state === "loading" ? text.enabling : text.enable}
           </button>
