@@ -260,13 +260,13 @@ function CustomerProfileContent() {
 
         <section className="rounded-3xl border border-neutral-200 bg-white p-6 shadow-sm dark:border-neutral-800 dark:bg-neutral-900 sm:p-8">
           <div className="flex items-center gap-2">
-            <Store size={20} aria-hidden="true" />
-            <h2 className="text-lg font-black">{text.storeSwitcherTitle}</h2>
+            <Bell size={20} />
+            <h2 className="text-lg font-black">{text.notifications}</h2>
           </div>
-          <p className="mt-2 text-sm leading-relaxed text-neutral-600 dark:text-neutral-300">{text.storeSwitcherHelp}</p>
-          <Link href="/customer/stores?change=1" className="mt-4 flex min-h-12 items-center justify-center gap-2 rounded-xl border border-neutral-300 px-4 py-3 text-sm font-black transition hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800">
-            {text.changeStore} <ArrowRight size={17} aria-hidden="true" />
-          </Link>
+          <p className="mt-2 text-sm text-neutral-600 dark:text-neutral-300">{text.notificationsHelp}</p>
+          <div className="mt-5">
+            <CustomerPushNotifications session={session} language={language} />
+          </div>
         </section>
 
         <section className="rounded-3xl border border-neutral-200 bg-white p-6 shadow-sm dark:border-neutral-800 dark:bg-neutral-900 sm:p-8">
@@ -292,19 +292,6 @@ function CustomerProfileContent() {
         </section>
 
         <section className="rounded-3xl border border-neutral-200 bg-white p-6 shadow-sm dark:border-neutral-800 dark:bg-neutral-900 sm:p-8">
-          <div className="flex items-center gap-2">
-            <Bell size={20} />
-            <h2 className="text-lg font-black">{text.notifications}</h2>
-          </div>
-          <p className="mt-2 text-sm text-neutral-600 dark:text-neutral-300">{text.notificationsHelp}</p>
-          <div className="mt-5">
-            <CustomerPushNotifications session={session} language={language} />
-          </div>
-        </section>
-
-        <CustomerMarketingPreferences session={session} language={language} />
-
-        <section className="rounded-3xl border border-neutral-200 bg-white p-6 shadow-sm dark:border-neutral-800 dark:bg-neutral-900 sm:p-8">
           <h2 className="text-lg font-black">{text.postal}</h2>
           <div className="mt-5 grid gap-4 sm:grid-cols-2">
             <Field label={text.recipientName} value={address.recipientName} onChange={(value) => setAddressField("recipientName", value)} />
@@ -319,6 +306,19 @@ function CustomerProfileContent() {
             </div>
           </div>
         </section>
+
+        <section className="rounded-3xl border border-neutral-200 bg-white p-6 shadow-sm dark:border-neutral-800 dark:bg-neutral-900 sm:p-8">
+          <div className="flex items-center gap-2">
+            <Store size={20} aria-hidden="true" />
+            <h2 className="text-lg font-black">{text.storeSwitcherTitle}</h2>
+          </div>
+          <p className="mt-2 text-sm leading-relaxed text-neutral-600 dark:text-neutral-300">{text.storeSwitcherHelp}</p>
+          <Link href="/customer/stores?change=1" className="mt-4 flex min-h-12 items-center justify-center gap-2 rounded-xl border border-neutral-300 px-4 py-3 text-sm font-black transition hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800">
+            {text.changeStore} <ArrowRight size={17} aria-hidden="true" />
+          </Link>
+        </section>
+
+        <CustomerMarketingPreferences session={session} language={language} />
 
         {message && <FeedbackBanner tone="success">{message}</FeedbackBanner>}
         {error && <FeedbackBanner tone="error" role="alert">{error}</FeedbackBanner>}
