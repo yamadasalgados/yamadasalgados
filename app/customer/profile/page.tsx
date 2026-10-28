@@ -252,8 +252,8 @@ function CustomerProfileContent() {
     <main className="min-h-screen bg-neutral-50 px-4 py-8 text-neutral-950 dark:bg-neutral-950 dark:text-white sm:py-12">
       <form onSubmit={submit} className="mx-auto w-full max-w-3xl space-y-5">
         <PageHeader
-          back={<BackLink href={next} label={text.back} />}
           title={text.title}
+          back={<BackLink href={next} label={text.back} />}
           description={text.subtitle}
           meta={<p className="text-xs font-bold text-neutral-600 dark:text-neutral-300">{text.help}</p>}
         />
