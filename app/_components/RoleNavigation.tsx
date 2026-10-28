@@ -601,7 +601,7 @@ export function CustomerNav() {
     ? `/customer/rewards?sellerId=${encodeURIComponent(context.sellerId)}&next=${encodeURIComponent(context.storeHref)}`
     : "/customer/rewards";
   const items: NavItem[] = [
-    { href: "/customer/stores", label: copy.store, icon: Store, exact: true },
+    { href: context.storeHref, label: copy.store, icon: Store, exact: true },
     { href: "/customer/orders", label: copy.orders, icon: ShoppingBag },
     { href: rewardsHref, label: copy.rewards, icon: Sparkles },
     { href: `/customer/profile?next=${encodeURIComponent(context.storeHref)}`, label: copy.profile, icon: UserRound },

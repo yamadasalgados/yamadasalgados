@@ -94,11 +94,22 @@ export default function CustomerStoresPage() {
   const [link, setLink] = useState("");
   const [linkError, setLinkError] = useState("");
   const [recent, setRecent] = useState("");
+  const [checkingSavedStore, setCheckingSavedStore] = useState(true);
 
   useEffect(() => {
+    if (session.loading) return;
     const saved = readCustomerStoreContext(session.user?.uid);
     setRecent(saved.sellerId ? saved.storeHref : "");
-  }, [session.user?.uid]);
+
+    // ?change=1 is reserved for deliberate store switching from My profile.
+    // Never redirect a logged-out person, and never pick another UID's store.
+    const isChangingStore = new URLSearchParams(window.location.search).get("change") === "1";
+    if (session.registered && saved.sellerId && !isChangingStore) {
+      router.replace(saved.storeHref);
+      return;
+    }
+    setCheckingSavedStore(false);
+  }, [router, session.loading, session.registered, session.user?.uid]);
 
   useEffect(() => {
     const search = query.trim();
@@ -164,6 +175,16 @@ export default function CustomerStoresPage() {
     setLinkError("");
     rememberCustomerStoreContext(session.user?.uid, path);
     router.push(path);
+  }
+
+  // Avoid showing the search form briefly while sending returning customers
+  // directly to their saved store.
+  if (checkingSavedStore) {
+    return (
+      <main className="mx-auto flex min-h-40 items-center justify-center px-4 py-12" aria-live="polite">
+        <Loader2 size={24} className="animate-spin text-neutral-500" aria-label={text.searching} />
+      </main>
+    );
   }
 
   return (

@@ -1,6 +1,6 @@
 "use client";
 
-import { Bell, Loader2, MapPin, Save, UserRound } from "lucide-react";
+import { Bell, Loader2, MapPin, Save, UserRound, Store, ArrowRight } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState, type FormEvent } from "react";
@@ -46,6 +46,9 @@ const COPY = {
     rewards: "Minhas recompensas",
     rewardsHelp: "Os pontos são separados por loja.",
     help: "Os campos salvos serão usados somente para preencher compras futuras. Você poderá alterá-los no checkout.",
+    storeSwitcherTitle: "Minha loja",
+    storeSwitcherHelp: "Seu acesso à loja fica salvo para as próximas visitas. Você pode mudar de loja quando quiser. Os pontos continuam separados por estabelecimento.",
+    changeStore: "Trocar de loja",
     notifications: "Notificações",
     notificationsHelp: "Ative ou desative os avisos de mudança de status dos pedidos neste aparelho.",
   },
@@ -78,6 +81,9 @@ const COPY = {
     rewards: "My rewards",
     rewardsHelp: "Points are kept separately for each store.",
     help: "Saved fields are only used to prefill future purchases. You can still change them during checkout.",
+    storeSwitcherTitle: "My store",
+    storeSwitcherHelp: "Your selected store is remembered for future visits. You can switch stores at any time. Points remain separate for each store.",
+    changeStore: "Change store",
     notifications: "Notifications",
     notificationsHelp: "Enable or disable order status alerts on this device.",
   },
@@ -110,6 +116,9 @@ const COPY = {
     rewards: "ポイントを見る",
     rewardsHelp: "ポイントは店舗ごとに管理されます。",
     help: "保存した情報は次回の注文入力に使用されます。注文時に変更することもできます。",
+    storeSwitcherTitle: "利用するお店",
+    storeSwitcherHelp: "次回から同じお店を自動的に開きます。お店はいつでも変更できます。ポイントは店舗ごとに管理されます。",
+    changeStore: "お店を変更",
     notifications: "通知",
     notificationsHelp: "この端末で注文状況の通知を有効・無効にできます。",
   },
@@ -248,6 +257,17 @@ function CustomerProfileContent() {
           description={text.subtitle}
           meta={<p className="text-xs font-bold text-neutral-600 dark:text-neutral-300">{text.help}</p>}
         />
+
+        <section className="rounded-3xl border border-neutral-200 bg-white p-6 shadow-sm dark:border-neutral-800 dark:bg-neutral-900 sm:p-8">
+          <div className="flex items-center gap-2">
+            <Store size={20} aria-hidden="true" />
+            <h2 className="text-lg font-black">{text.storeSwitcherTitle}</h2>
+          </div>
+          <p className="mt-2 text-sm leading-relaxed text-neutral-600 dark:text-neutral-300">{text.storeSwitcherHelp}</p>
+          <Link href="/customer/stores?change=1" className="mt-4 flex min-h-12 items-center justify-center gap-2 rounded-xl border border-neutral-300 px-4 py-3 text-sm font-black transition hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800">
+            {text.changeStore} <ArrowRight size={17} aria-hidden="true" />
+          </Link>
+        </section>
 
         <section className="rounded-3xl border border-neutral-200 bg-white p-6 shadow-sm dark:border-neutral-800 dark:bg-neutral-900 sm:p-8">
           <h2 className="text-lg font-black">{text.personal}</h2>
