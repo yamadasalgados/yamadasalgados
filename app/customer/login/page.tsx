@@ -103,8 +103,14 @@ const COPY = {
 };
 
 function safeNext(value: string | null): string {
-  if (!value || !value.startsWith("/") || value.startsWith("//")) return "/customer/orders";
-  return value;
+  if (!value || !value.startsWith("/") || value.startsWith("//") || value.includes("\\")) return "/customer/orders";
+  // Nunca regressar a /login, /seller, /admin ou / (que abre login comercial).
+  const pathname = value.split(/[?#]/)[0] || "";
+  const allowed = /^\/customer\/(orders|profile|rewards|stores)(\/|$)/.test(pathname)
+    || /^\/store\/[a-zA-Z0-9_-]{4,150}(\/|$)/.test(pathname)
+    || /^\/event\/[a-zA-Z0-9_-]{4,150}(\/|$)/.test(pathname)
+    || /^\/c\/[a-zA-Z0-9_-]{4,150}(\/|$)/.test(pathname);
+  return allowed ? value : "/customer/orders";
 }
 
 function storeHrefFromNext(next: string): string {

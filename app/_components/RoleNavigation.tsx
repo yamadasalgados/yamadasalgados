@@ -32,6 +32,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { signOut } from "firebase/auth";
 
 import useCustomerSession from "@/app/hooks/useCustomerSession";
+import { readCustomerStoreContext, rememberCustomerStoreContext } from "@/app/lib/customer-store-context";
 import { useSellerIdentity } from "@/app/hooks/useSellerIdentity";
 import { useDocumentBranding } from "@/app/hooks/useDocumentBranding";
 import { auth } from "@/app/lib/firebase";
@@ -574,19 +575,15 @@ export function SellerNav({ displayName = "", sellerId = "" }: { displayName?: s
   );
 }
 
-function readCustomerContext() {
-  if (typeof window === "undefined") return { storeHref: "/", sellerId: "" };
-  return {
-    storeHref: window.localStorage.getItem(LAST_STORE_KEY) || window.localStorage.getItem(LEGACY_LAST_STORE_KEY) || "/",
-    sellerId: window.localStorage.getItem(LAST_SELLER_KEY) || window.localStorage.getItem(LEGACY_LAST_SELLER_KEY) || "",
-  };
+function readCustomerContext(uid: string | undefined) {
+  return readCustomerStoreContext(uid);
 }
 
 export function CustomerNav() {
   const copy = useCopy();
   const pathname = usePathname();
   const session = useCustomerSession();
-  const [context, setContext] = useState(() => ({ storeHref: "/", sellerId: "" }));
+  const [context, setContext] = useState(() => ({ storeHref: "/customer/stores", sellerId: "" }));
   const sellerIdentity = useSellerIdentity(context.sellerId);
 
   useDocumentBranding({
@@ -597,14 +594,14 @@ export function CustomerNav() {
   });
 
   useEffect(() => {
-    setContext(readCustomerContext());
-  }, [pathname]);
+    setContext(readCustomerContext(session.user?.uid));
+  }, [pathname, session.user?.uid]);
 
   const rewardsHref = context.sellerId
     ? `/customer/rewards?sellerId=${encodeURIComponent(context.sellerId)}&next=${encodeURIComponent(context.storeHref)}`
     : "/customer/rewards";
   const items: NavItem[] = [
-    { href: context.storeHref, label: copy.store, icon: Store, exact: context.storeHref === "/" },
+    { href: context.storeHref, label: copy.store, icon: Store, exact: true },
     { href: "/customer/orders", label: copy.orders, icon: ShoppingBag },
     { href: rewardsHref, label: copy.rewards, icon: Sparkles },
     { href: `/customer/profile?next=${encodeURIComponent(context.storeHref)}`, label: copy.profile, icon: UserRound },
@@ -614,7 +611,7 @@ export function CustomerNav() {
     <>
       <header className="sticky top-0 z-40 border-b border-neutral-200 bg-white/90 backdrop-blur dark:border-neutral-800 dark:bg-neutral-950/90">
         <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-3 sm:px-6">
-          <Brand label={session.displayName || copy.customer} href={context.storeHref} name={sellerIdentity.storeName || copy.store} logoUrl={sellerIdentity.logoUrl} primaryColor={sellerIdentity.primaryColor} />
+          <Brand label={session.displayName || copy.customer} href={context.storeHref} name={context.sellerId ? (sellerIdentity.storeName || copy.store) : PLATFORM_NAME} logoUrl={context.sellerId ? sellerIdentity.logoUrl : PLATFORM_LOGO_PATH} primaryColor={sellerIdentity.primaryColor} />
           <div className="flex items-center gap-2">
             {session.registered && <DesktopNav items={items} />}
             <AppearanceButtons />
@@ -649,7 +646,10 @@ export function PublicStoreNav({ sellerId, storeHref, contextLabel = "" }: BaseP
     if (typeof window === "undefined") return;
     if (resolvedStoreHref) window.localStorage.setItem(LAST_STORE_KEY, resolvedStoreHref);
     if (sellerId) window.localStorage.setItem(LAST_SELLER_KEY, sellerId);
-  }, [resolvedStoreHref, sellerId]);
+    if (session.accountRole === "customer" && session.user?.uid) {
+      rememberCustomerStoreContext(session.user.uid, resolvedStoreHref);
+    }
+  }, [resolvedStoreHref, sellerId, session.accountRole, session.user?.uid]);
 
   useEffect(() => {
     if (!sellerId) {

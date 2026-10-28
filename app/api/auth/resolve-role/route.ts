@@ -23,10 +23,13 @@ function bearerToken(request: NextRequest): string {
 
 function safeNext(value: unknown): string {
   const normalized = typeof value === "string" ? value.trim() : "";
-  if (!normalized.startsWith("/") || normalized.startsWith("//")) {
-    return "/customer/orders";
-  }
-  return normalized;
+  if (!normalized.startsWith("/") || normalized.startsWith("//") || normalized.includes("\\")) return "/customer/orders";
+  const pathname = normalized.split(/[?#]/)[0] || "";
+  const allowed = /^\/customer\/(orders|profile|rewards|stores)(\/|$)/.test(pathname)
+    || /^\/store\/[a-zA-Z0-9_-]{4,150}(\/|$)/.test(pathname)
+    || /^\/event\/[a-zA-Z0-9_-]{4,150}(\/|$)/.test(pathname)
+    || /^\/c\/[a-zA-Z0-9_-]{4,150}(\/|$)/.test(pathname);
+  return allowed ? normalized : "/customer/orders";
 }
 
 async function authenticate(request: NextRequest): Promise<admin.auth.DecodedIdToken> {

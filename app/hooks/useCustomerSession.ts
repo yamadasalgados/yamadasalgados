@@ -136,6 +136,12 @@ export default function useCustomerSession(): CustomerSession {
           setDashboardHref(resolved.destination || (resolved.role === "admin" ? "/admin" : "/seller"));
           return;
         }
+        if (resolved.role !== "customer") {
+          setError(resolved.issue
+            ? "A conta está com um conflito de permissões. Entre em contato com o administrador."
+            : "Esta conta ainda não possui um perfil de cliente válido.");
+          return;
+        }
         const profile = await loadProfile(nextUser);
         if (requestVersion !== currentVersion) return;
         setProfile(profile);
