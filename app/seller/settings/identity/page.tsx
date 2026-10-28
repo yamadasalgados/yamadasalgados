@@ -2,6 +2,7 @@
 
 import { useI18n } from "@/app/lib/i18n";
 import SellerIdentitySettingsCard from "@/app/seller/settings/SellerIdentitySettingsCard";
+import StoreDiscoverySettingsCard from "@/app/seller/settings/StoreDiscoverySettingsCard";
 import SettingsPageScaffold from "@/app/seller/settings/_components/SettingsPageScaffold";
 
 function languageKey(value: string): "pt" | "en" | "ja" {
@@ -41,6 +42,7 @@ export default function SellerIdentitySettingsPage() {
       backLabel={copy.back}
     >
       <SellerIdentitySettingsCard language={lang} />
+      <StoreDiscoverySettingsCard />
     </SettingsPageScaffold>
   );
 }

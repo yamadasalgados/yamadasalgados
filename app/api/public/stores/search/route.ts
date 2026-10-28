@@ -47,7 +47,7 @@ export async function GET(request: NextRequest) {
       .select(
         "storeName", "businessName", "publicName", "logoUrl", "photoUrl", "photoURL",
         "regionName", "accountStatus", "onboarding", "access", "subscriptionStatus",
-        "currentPeriodEnd", "active", "suspended", "plan", "billingInterval",
+        "currentPeriodEnd", "active", "suspended", "plan", "billingInterval", "discoverableInSearch",
       )
       .limit(SCAN_LIMIT)
       .get();
@@ -56,6 +56,8 @@ export async function GET(request: NextRequest) {
     for (const doc of documents.docs) {
       if (!/^[a-zA-Z0-9_-]{4,150}$/.test(doc.id)) continue;
       const data = doc.data();
+      // Opt-in explícito: campo ausente ou falso NUNCA entra no diretório.
+      if (data.discoverableInSearch !== true) continue;
       // Loja com status desconhecido, onboarding incompleto ou assinatura
       // inativa não deve aparecer no diretório.
       if (data.accountStatus !== "active" || data.onboarding?.complete !== true) continue;
