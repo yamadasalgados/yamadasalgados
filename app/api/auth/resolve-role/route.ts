@@ -10,6 +10,12 @@ export const dynamic = "force-dynamic";
 
 type AccountRole = "admin" | "seller" | "customer" | "unknown";
 
+type IdentityIssue = "ADMIN_INACTIVE" | "SELLER_INACTIVE" | "SELLER_NOT_PROVISIONED" | "SELLER_STORE_INACTIVE";
+
+function needsReview(issue: IdentityIssue) {
+  return NextResponse.json({ ok: true, role: "unknown" satisfies AccountRole, destination: "", issue }, { headers: { "Cache-Control": "no-store" } });
+}
+
 function bearerToken(request: NextRequest): string {
   const authorization = request.headers.get("authorization") ?? "";
   return authorization.match(/^Bearer\s+(.+)$/i)?.[1]?.trim() ?? "";
@@ -47,6 +53,7 @@ export async function POST(request: NextRequest) {
     const storedRole = userData.role;
 
     if (storedRole === "admin") {
+      if (userData.accountStatus !== "active") return needsReview("ADMIN_INACTIVE");
       return NextResponse.json({
         ok: true,
         role: "admin" satisfies AccountRole,
@@ -54,13 +61,16 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    if (storedRole === "seller" || typeof userData.sellerId === "string") {
+    if (storedRole === "seller") {
+      if (userData.accountStatus !== "active") return needsReview("SELLER_INACTIVE");
       const sellerId =
         typeof userData.sellerId === "string" && userData.sellerId.trim()
           ? userData.sellerId.trim()
           : decoded.uid;
       const sellerSnapshot = await db.collection("sellers").doc(sellerId).get();
       const sellerData = sellerSnapshot.data() ?? null;
+      if (!sellerData) return needsReview("SELLER_NOT_PROVISIONED");
+      if (sellerData.accountStatus !== "active") return needsReview("SELLER_STORE_INACTIVE");
 
       const destination = !hasCompleteSellerOnboarding(sellerData)
         ? "/seller/onboarding"

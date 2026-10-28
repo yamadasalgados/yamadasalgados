@@ -4,6 +4,7 @@ import { onAuthStateChanged, signOut, type User } from "firebase/auth";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { auth } from "@/app/lib/firebase";
+import { resolveAuthenticatedAccount, type ResolvedAccountRole } from "@/app/lib/auth-role-client";
 import { normalizeCustomerAddress, type CustomerAddressProfile } from "@/app/lib/customer-profile";
 import {
   getOrCreateCustomerClientId,
@@ -27,6 +28,8 @@ export type CustomerSession = {
   profile: CustomerProfile | null;
   clientId: string;
   error: string;
+  accountRole: ResolvedAccountRole | null;
+  dashboardHref: string;
   registered: boolean;
   displayName: string;
   refresh: () => Promise<void>;
@@ -87,10 +90,12 @@ export default function useCustomerSession(): CustomerSession {
   const [profile, setProfile] = useState<CustomerProfile | null>(null);
   const [clientId, setClientId] = useState("");
   const [error, setError] = useState("");
+  const [accountRole, setAccountRole] = useState<ResolvedAccountRole | null>(null);
+  const [dashboardHref, setDashboardHref] = useState("");
 
   const refresh = useCallback(async () => {
     const currentUser = auth.currentUser;
-    if (!currentUser) {
+    if (!currentUser || accountRole === "seller" || accountRole === "admin") {
       setProfile(null);
       return;
     }
@@ -105,35 +110,45 @@ export default function useCustomerSession(): CustomerSession {
           : "Não foi possível carregar a conta do cliente.",
       );
     }
-  }, []);
+  }, [accountRole]);
 
   useEffect(() => {
     setClientId(getOrCreateCustomerClientId());
-
-    return onAuthStateChanged(auth, async (nextUser) => {
+    let requestVersion = 0;
+    const unsubscribe = onAuthStateChanged(auth, async (nextUser) => {
+      const currentVersion = ++requestVersion;
       setLoading(true);
       setUser(nextUser);
+      setProfile(null);
+      setAccountRole(null);
+      setDashboardHref("");
       setError("");
 
       if (!nextUser) {
-        setProfile(null);
         setLoading(false);
         return;
       }
-
       try {
-        setProfile(await loadProfile(nextUser));
+        const resolved = await resolveAuthenticatedAccount(nextUser);
+        if (requestVersion !== currentVersion) return;
+        setAccountRole(resolved.role);
+        if (resolved.role === "admin" || resolved.role === "seller") {
+          setDashboardHref(resolved.destination || (resolved.role === "admin" ? "/admin" : "/seller"));
+          return;
+        }
+        const profile = await loadProfile(nextUser);
+        if (requestVersion !== currentVersion) return;
+        setProfile(profile);
+        setAccountRole("customer");
       } catch (profileError) {
+        if (requestVersion !== currentVersion) return;
         setProfile(null);
-        setError(
-          profileError instanceof Error
-            ? profileError.message
-            : "Não foi possível carregar a conta do cliente.",
-        );
+        setError(profileError instanceof Error ? profileError.message : "Não foi possível carregar a conta do cliente.");
       } finally {
-        setLoading(false);
+        if (requestVersion === currentVersion) setLoading(false);
       }
     });
+    return () => { requestVersion++; unsubscribe(); };
   }, []);
 
   const signOutCustomer = useCallback(async () => {
@@ -168,6 +183,8 @@ export default function useCustomerSession(): CustomerSession {
     await signOut(auth);
     setProfile(null);
     setUser(null);
+    setAccountRole(null);
+    setDashboardHref("");
   }, []);
 
   const displayName = useMemo(
@@ -181,7 +198,9 @@ export default function useCustomerSession(): CustomerSession {
     profile,
     clientId,
     error,
-    registered: Boolean(user && profile),
+    accountRole,
+    dashboardHref,
+    registered: Boolean(user && profile && accountRole === "customer"),
     displayName,
     refresh,
     signOutCustomer,

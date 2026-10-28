@@ -17,6 +17,7 @@ const LABELS = {
     fulfillment: "Entrega",
     notifications: "Avisos",
     printing: "Impressão",
+    referrals: "Indicações",
     account: "Conta",
   },
   en: {
@@ -26,6 +27,7 @@ const LABELS = {
     fulfillment: "Fulfillment",
     notifications: "Alerts",
     printing: "Printing",
+    referrals: "Referrals",
     account: "Account",
   },
   ja: {
@@ -35,6 +37,7 @@ const LABELS = {
     fulfillment: "受渡し",
     notifications: "通知",
     printing: "印刷",
+    referrals: "紹介キャンペーン",
     account: "アカウント",
   },
 } as const;
@@ -51,6 +54,7 @@ export default function SettingsSectionNav() {
     { href: "/seller/settings/fulfillment", label: labels.fulfillment },
     { href: "/seller/settings/notifications", label: labels.notifications },
     { href: "/seller/settings/printing", label: labels.printing },
+    { href: "/seller/settings/referrals", label: labels.referrals },
     { href: "/seller/settings/account", label: labels.account },
   ];
 

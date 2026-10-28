@@ -9,6 +9,7 @@ import {
   ClipboardList,
   Gift,
   Globe2,
+  Handshake,
   LayoutDashboard,
   LogIn,
   LogOut,
@@ -46,8 +47,10 @@ import {
   type PublicCartSummaryDetail,
 } from "@/app/lib/cart-navigation";
 
-const LAST_STORE_KEY = "yamada_customer_last_store_v1";
-const LAST_SELLER_KEY = "yamada_customer_last_seller_v1";
+const LAST_STORE_KEY = "order_system_customer_last_store_v1";
+const LAST_SELLER_KEY = "order_system_customer_last_seller_v1";
+const LEGACY_LAST_STORE_KEY = "yamada_customer_last_store_v1";
+const LEGACY_LAST_SELLER_KEY = "yamada_customer_last_seller_v1";
 
 const FLAGS = {
   pt: "🇧🇷",
@@ -203,7 +206,7 @@ function useAppearanceControls() {
   };
 }
 
-export function AppearanceButtons() {
+export function AppearanceButtons({ hideThemeOnMobile = false }: { hideThemeOnMobile?: boolean } = {}) {
   const {
     lang,
     setLang,
@@ -226,7 +229,7 @@ export function AppearanceButtons() {
       <button
         type="button"
         onClick={toggleTheme}
-        className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-neutral-200 bg-white text-neutral-600 transition hover:bg-neutral-50 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800"
+        className={`${hideThemeOnMobile ? "hidden sm:inline-flex" : "inline-flex"} h-10 w-10 items-center justify-center rounded-xl border border-neutral-200 bg-white text-neutral-600 transition hover:bg-neutral-50 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800`}
         aria-label="Theme"
       >
         {theme === "light" ? <Sun size={18} /> : <Moon size={18} />}
@@ -296,6 +299,7 @@ function useCopy() {
         sellers: "販売者",
         events: "イベント",
         plans: "プラン",
+        partners: "利用希望",
         settings: "設定",
         cleanup: "管理",
         orders: "注文",
@@ -321,6 +325,7 @@ function useCopy() {
           sellers: "Sellers",
           events: "Events",
           plans: "Plans",
+          partners: "Access requests",
           settings: "Settings",
           cleanup: "Tools",
           orders: "Orders",
@@ -345,6 +350,7 @@ function useCopy() {
           sellers: "Vendedores",
           events: "Eventos",
           plans: "Planos",
+          partners: "Interessados",
           settings: "Configurações",
           cleanup: "Ferramentas",
           orders: "Pedidos",
@@ -430,6 +436,7 @@ export function AdminNav({ displayName = "" }: { displayName?: string }) {
     { href: "/admin/sellers", label: copy.sellers, icon: UsersRound },
     { href: "/admin/events", label: copy.events, icon: CalendarDays },
     { href: "/admin/plans", label: copy.plans, icon: Tags },
+    { href: "/admin/partners", label: copy.partners, icon: Handshake },
     { href: "/admin/settings", label: copy.settings, icon: Settings },
   ];
   const extra: NavItem[] = [{ href: "/admin/cleanup", label: copy.cleanup, icon: Wrench }];
@@ -459,7 +466,7 @@ export function AdminNav({ displayName = "" }: { displayName?: string }) {
   );
 }
 
-export function SellerNav({ displayName = "", sellerId = "", logoUrl = "", primaryColor = "#f97316" }: { displayName?: string; sellerId?: string; logoUrl?: string; primaryColor?: string }) {
+export function SellerNav({ displayName = "", sellerId = "" }: { displayName?: string; sellerId?: string; logoUrl?: string; primaryColor?: string }) {
   const copy = useCopy();
   const router = useRouter();
   const [orderBadges, setOrderBadges] = useState({ store: 0, event: 0 });
@@ -513,14 +520,14 @@ export function SellerNav({ displayName = "", sellerId = "", logoUrl = "", prima
     };
 
     window.addEventListener("focus", onFocus);
-    window.addEventListener("yamada:seller-order-badge-refresh", onCustomRefresh);
+    window.addEventListener("order-system:seller-order-badge-refresh", onCustomRefresh);
     document.addEventListener("visibilitychange", onVisibility);
     navigator.serviceWorker?.addEventListener("message", onServiceWorkerMessage);
 
     return () => {
       window.clearInterval(timer);
       window.removeEventListener("focus", onFocus);
-      window.removeEventListener("yamada:seller-order-badge-refresh", onCustomRefresh);
+      window.removeEventListener("order-system:seller-order-badge-refresh", onCustomRefresh);
       document.removeEventListener("visibilitychange", onVisibility);
       navigator.serviceWorker?.removeEventListener("message", onServiceWorkerMessage);
     };
@@ -550,9 +557,10 @@ export function SellerNav({ displayName = "", sellerId = "", logoUrl = "", prima
     <>
       <header className="sticky top-0 z-40 border-b border-neutral-200 bg-white/90 backdrop-blur dark:border-neutral-800 dark:bg-neutral-950/90">
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-3 sm:px-6">
-          <Brand label={copy.seller} href="/seller" name={displayName || copy.seller} logoUrl={logoUrl} primaryColor={primaryColor} />
+          <Brand label={displayName || copy.seller} href="/seller" name={PLATFORM_NAME} logoUrl={PLATFORM_LOGO_PATH} />
           <div className="flex min-w-0 items-center gap-2">
             <DesktopNav items={mainItems} />
+            {sellerId && <Link href={`/store/${encodeURIComponent(sellerId)}`} aria-label={copy.visitStore} title={copy.visitStore} className="inline-flex min-h-10 shrink-0 items-center gap-1.5 rounded-xl border border-neutral-300 px-2 py-2 text-xs font-bold text-neutral-700 hover:bg-neutral-100 dark:border-neutral-700 dark:text-neutral-200 dark:hover:bg-neutral-800 sm:px-3"><Store size={16} /><span className="hidden sm:inline">{copy.visitStore}</span></Link>}
             <MoreMenu items={extra} label={copy.more} />
             <AppearanceButtons />
             <button type="button" onClick={() => void logout()} className="inline-flex h-10 items-center justify-center rounded-xl px-2.5 text-xs font-black text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/30 sm:px-3">
@@ -569,8 +577,8 @@ export function SellerNav({ displayName = "", sellerId = "", logoUrl = "", prima
 function readCustomerContext() {
   if (typeof window === "undefined") return { storeHref: "/", sellerId: "" };
   return {
-    storeHref: window.localStorage.getItem(LAST_STORE_KEY) || "/",
-    sellerId: window.localStorage.getItem(LAST_SELLER_KEY) || "",
+    storeHref: window.localStorage.getItem(LAST_STORE_KEY) || window.localStorage.getItem(LEGACY_LAST_STORE_KEY) || "/",
+    sellerId: window.localStorage.getItem(LAST_SELLER_KEY) || window.localStorage.getItem(LEGACY_LAST_SELLER_KEY) || "",
   };
 }
 
@@ -695,6 +703,9 @@ export function PublicStoreNav({ sellerId, storeHref, contextLabel = "" }: BaseP
         onActivate: openStoreCart,
       }
     : { href: "/customer/orders", label: copy.orders, icon: ShoppingBag };
+  const businessDestination = session.accountRole === "admin"
+    ? "/admin"
+    : session.accountRole === "seller" ? (session.dashboardHref || "/seller") : "";
   const items: NavItem[] = [
     { href: resolvedStoreHref, label: copy.store, icon: Store, exact: true },
     secondItem,
@@ -709,20 +720,25 @@ export function PublicStoreNav({ sellerId, storeHref, contextLabel = "" }: BaseP
           <Brand label={contextLabel || copy.store} href={resolvedStoreHref} name={sellerIdentity.storeName || copy.store} logoUrl={sellerIdentity.logoUrl} primaryColor={sellerIdentity.primaryColor} />
           <div className="flex items-center gap-2">
             {session.registered && <DesktopNav items={items} />}
-            <AppearanceButtons />
-            {session.registered ? (
+            {businessDestination && <Link href={businessDestination} className="inline-flex min-h-10 items-center gap-1.5 rounded-xl bg-violet-700 px-3 py-2 text-xs font-black text-white hover:bg-violet-600"><LayoutDashboard size={16} />{copy.dashboard}</Link>}
+            <AppearanceButtons hideThemeOnMobile />
+            {businessDestination ? null : session.registered ? (
               <button type="button" onClick={() => void session.signOutCustomer()} className="inline-flex h-10 items-center justify-center rounded-xl px-2.5 text-xs font-black text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/30 sm:px-3">
                 <LogOut size={16} /><span className="ml-2 hidden sm:inline">{copy.logout}</span>
               </button>
             ) : (
-              <Link href={`/customer/login?next=${encodeURIComponent(pathname || resolvedStoreHref)}`} className="inline-flex items-center gap-2 rounded-xl bg-neutral-950 px-3 py-2 text-xs font-black text-white dark:bg-white dark:text-neutral-950">
+              <Link href={`/customer/login?next=${encodeURIComponent(pathname || resolvedStoreHref)}`}
+                title={copy.login}
+                className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-neutral-200 px-3 py-2 text-xs font-semibold text-neutral-600 dark:border-neutral-700 dark:text-neutral-300">
                 <LogIn size={16} />{copy.login}
               </Link>
             )}
           </div>
         </div>
       </header>
-      {session.registered && <MobileBottomNav items={items} />}
+      {businessDestination ? (
+        <MobileBottomNav items={[{ href: businessDestination, label: copy.dashboard, icon: LayoutDashboard }, { href: resolvedStoreHref, label: copy.store, icon: Store }]} />
+      ) : session.registered && <MobileBottomNav items={permanentStorePage ? items.filter((item) => item.href !== secondItem.href) : items} />}
     </>
   );
 }

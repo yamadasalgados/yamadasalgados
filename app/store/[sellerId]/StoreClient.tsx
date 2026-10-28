@@ -35,6 +35,8 @@ import {
   Mail,
   Minus,
   Package,
+  Pause,
+  Play,
   Plus,
   RefreshCw,
   Search,
@@ -50,8 +52,11 @@ import {
 } from "@/app/lib/firebase";
 
 import RewardsCheckoutPanel from "@/app/_components/RewardsCheckoutPanel";
+import ReferralCampaignBanner from "@/app/_components/ReferralCampaignBanner";
 import useCustomerSession from "@/app/hooks/useCustomerSession";
 import useCustomerRewards from "@/app/hooks/useCustomerRewards";
+import useCustomerWishlist, { type CustomerWishlist } from "@/app/hooks/useCustomerWishlist";
+import { WishlistHeart, WishlistShelf } from "@/app/_components/StoreWishlist";
 import { useDocumentBranding } from "@/app/hooks/useDocumentBranding";
 import {
   readLocalDraft,
@@ -149,7 +154,6 @@ import {
 } from "@/app/lib/shipping-schema";
 import {
   normalizeSellerIdentity,
-  sellerInitials,
 } from "@/app/lib/seller-identity";
 import {
   isSupportedCurrency,
@@ -221,6 +225,7 @@ type Product = {
   bundleConfig: ProductBundleConfig;
   storefront: ProductStorefrontConfig;
   publiclyVisible: boolean;
+  featuredInStore: boolean;
 };
 
 type BundleSelection = {
@@ -353,7 +358,37 @@ const TEXT = {
     total: "Total",
     continue: "Continuar",
     back: "Voltar",
-    productsStep: "Produtos",
+    quickTitle: "Escolha seus produtos",
+    quickHelp: "Toque em Adicionar. Não é preciso criar conta para comprar.",
+    browseAll: "Ver todos os produtos",
+    filterByReceiving: "Filtrar pela forma de recebimento",
+    cartAction: "Ver carrinho",
+    cartNext: "Continuar para meus dados",
+    reviewOrder: "Conferir meu pedido",
+    reviewTitle: "Confira antes de enviar",
+    reviewHelp: "Confira os produtos, seus dados e como vai receber. Seu pedido ainda não foi enviado.",
+    reviewCustomer: "Quem está pedindo",
+    reviewReceiving: "Como vai receber",
+    reviewItems: "Produtos escolhidos",
+    reviewEditData: "Alterar meus dados",
+    reviewEditReceiving: "Alterar recebimento",
+    reviewEditProducts: "Alterar produtos",
+    reviewConfirm: "Confirmar e enviar pedido",
+    reviewCancel: "Voltar e corrigir",
+    reviewTiming: "Data e horário a combinar",
+    reviewPostalPending: "Frete calculado ou confirmado separadamente",
+    reviewPostalCollect: "Frete cobrado no recebimento",
+    optionalNote: "Adicionar observação (opcional)",
+    optionalLocation: "Adicionar link de localização (opcional)",
+    receiptSummary: "Resumo da encomenda",
+    copyOrderNumber: "Copiar número",
+    copiedOrderNumber: "Número copiado!",
+    copyError: "Selecione e copie o número acima.",
+    customerNext: "Escolher como receber",
+    stepNumber: "Etapa {current} de 3",
+    optionalDetails: "Adicionar e-mail (opcional)",
+    productDetailsHint: "Toque na foto para saber mais",
+        productsStep: "Produtos",
     customerStep: "Cliente",
     deliveryStep: "Entrega",
     customerTitle: "Seus dados",
@@ -424,7 +459,7 @@ const TEXT = {
     myOrders: "Meus pedidos",
     visitStore: "Voltar à loja",
     registeredOrderHelp: "Este pedido foi salvo na sua conta e continuará disponível em Meus pedidos.",
-    guestOrderHelp: "Cadastre-se nas próximas compras para acompanhar seus pedidos pelo aplicativo.",
+    guestOrderHelp: "Guarde o número acima para identificar seu pedido ao falar com o vendedor.",
     closeCart:
       "Fechar carrinho",
     remove: "Remover",
@@ -435,7 +470,7 @@ const TEXT = {
     chooseCategory:
       "Escolha uma categoria",
     chooseCategoryHelp:
-      "Vá direto aos produtos que você procura.",
+      "Escolha uma categoria ou use a busca para encontrar o produto.",
     backToCategories:
       "Voltar às categorias",
     categoryProducts:
@@ -522,7 +557,37 @@ const TEXT = {
     total: "Total",
     continue: "Continue",
     back: "Back",
-    productsStep: "Products",
+    quickTitle: "Choose your products",
+    quickHelp: "Tap Add. No account is needed to order.",
+    browseAll: "View all products",
+    filterByReceiving: "Filter by pickup or delivery",
+    cartAction: "View cart",
+    cartNext: "Continue to my details",
+    reviewOrder: "Review my order",
+    reviewTitle: "Review before sending",
+    reviewHelp: "Check your items, contact details and how you will receive them. Your order has not been sent yet.",
+    reviewCustomer: "Customer details",
+    reviewReceiving: "Receiving method",
+    reviewItems: "Selected products",
+    reviewEditData: "Edit my details",
+    reviewEditReceiving: "Change receiving method",
+    reviewEditProducts: "Edit products",
+    reviewConfirm: "Confirm and send order",
+    reviewCancel: "Go back and edit",
+    reviewTiming: "Date and time to be arranged",
+    reviewPostalPending: "Shipping quoted separately",
+    reviewPostalCollect: "Shipping collected on delivery",
+    optionalNote: "Add a note (optional)",
+    optionalLocation: "Add a location link (optional)",
+    receiptSummary: "Order summary",
+    copyOrderNumber: "Copy order number",
+    copiedOrderNumber: "Number copied!",
+    copyError: "Select and copy the number above.",
+    customerNext: "Choose how to receive",
+    stepNumber: "Step {current} of 3",
+    optionalDetails: "Add email (optional)",
+    productDetailsHint: "Tap the photo for details",
+        productsStep: "Products",
     customerStep: "Customer",
     deliveryStep: "Delivery",
     customerTitle:
@@ -589,7 +654,7 @@ const TEXT = {
     myOrders: "My orders",
     visitStore: "Back to store",
     registeredOrderHelp: "This order was saved to your account and will remain available under My orders.",
-    guestOrderHelp: "Register on future purchases to track orders in the app.",
+    guestOrderHelp: "Keep the order number above in case you need to speak to the seller.",
     closeCart: "Close cart",
     remove: "Remove",
     quantity: "Quantity",
@@ -599,7 +664,7 @@ const TEXT = {
     chooseCategory:
       "Choose a category",
     chooseCategoryHelp:
-      "Go directly to the products you are looking for.",
+      "Choose a category or search for a product.",
     backToCategories:
       "Back to categories",
     categoryProducts:
@@ -687,7 +752,37 @@ const TEXT = {
     total: "合計",
     continue: "次へ",
     back: "戻る",
-    productsStep: "商品",
+    quickTitle: "商品を選ぶ",
+    quickHelp: "「追加」を押して商品を選んでください。会員登録は不要です。",
+    browseAll: "すべての商品を見る",
+    filterByReceiving: "受取方法で絞り込む",
+    cartAction: "カートを見る",
+    cartNext: "お客様情報を入力",
+    reviewOrder: "注文内容を確認",
+    reviewTitle: "送信前にご確認ください",
+    reviewHelp: "商品、お客様情報、受取方法をご確認ください。まだ注文は送信されていません。",
+    reviewCustomer: "お客様情報",
+    reviewReceiving: "受取方法",
+    reviewItems: "ご注文の商品",
+    reviewEditData: "お客様情報を修正",
+    reviewEditReceiving: "受取方法を変更",
+    reviewEditProducts: "商品を変更",
+    reviewConfirm: "確認して注文を送信",
+    reviewCancel: "戻って修正",
+    reviewTiming: "日時は要相談",
+    reviewPostalPending: "送料は別途ご案内",
+    reviewPostalCollect: "送料は着払い",
+    optionalNote: "備考を追加（任意）",
+    optionalLocation: "位置情報リンクを追加（任意）",
+    receiptSummary: "ご注文の概要",
+    copyOrderNumber: "注文番号をコピー",
+    copiedOrderNumber: "コピーしました！",
+    copyError: "上の番号を選択してコピーしてください。",
+    customerNext: "受取方法を選ぶ",
+    stepNumber: "3ステップ中 {current} ステップ",
+    optionalDetails: "メールアドレスを追加（任意）",
+    productDetailsHint: "写真をタップして詳細を見る",
+        productsStep: "商品",
     customerStep: "お客様",
     deliveryStep: "受取方法",
     customerTitle: "お客様情報",
@@ -755,7 +850,7 @@ const TEXT = {
     myOrders: "注文履歴",
     visitStore: "ショップに戻る",
     registeredOrderHelp: "この注文はアカウントに保存され、注文履歴からいつでも確認できます。",
-    guestOrderHelp: "次回はアカウント登録すると、アプリで注文状況を確認できます。",
+    guestOrderHelp: "販売者へお問い合わせの際は、上記の注文番号をお伝えください。",
     closeCart:
       "カートを閉じる",
     remove: "削除",
@@ -766,7 +861,7 @@ const TEXT = {
     chooseCategory:
       "カテゴリーを選択",
     chooseCategoryHelp:
-      "お探しの商品カテゴリーからすぐに確認できます。",
+      "カテゴリーを選ぶか、商品を検索してください。",
     backToCategories:
       "カテゴリーに戻る",
     categoryProducts:
@@ -1162,6 +1257,7 @@ function normalizeProduct(
       raw.storefrontOrder,
     ),
     publiclyVisible,
+    featuredInStore: raw.featuredInStore === true,
   };
 }
 
@@ -1295,6 +1391,7 @@ export default function StoreClient({
     sellerId,
     customerSession.registered,
   );
+  const wishlist = useCustomerWishlist(sellerId, customerSession);
   const customerDraftReadyRef =
     useRef(false);
   const customerDraftKey =
@@ -1349,6 +1446,7 @@ export default function StoreClient({
   const [search, setSearch] =
     useState("");
   const [searchOpen, setSearchOpen] = useState(false);
+  const [showAllProducts, setShowAllProducts] = useState(false);
   const [fulfillmentFilter, setFulfillmentFilter] =
     useState<"pickup" | "delivery" | "postal" | null>(null);
 
@@ -1370,6 +1468,9 @@ export default function StoreClient({
 
   const [cartOpen, setCartOpen] =
     useState(false);
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const reviewDialogRef = useRef<HTMLElement | null>(null);
+  const [orderNumberCopyFeedback, setOrderNumberCopyFeedback] = useState("");
 
   const [step, setStep] =
     useState<CheckoutStep>(
@@ -1406,6 +1507,38 @@ export default function StoreClient({
 
   const [submitting, setSubmitting] =
     useState(false);
+
+  useEffect(() => {
+    if (!reviewOpen || typeof document === "undefined") return;
+    const oldOverflow = document.body.style.overflow;
+    const oldFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    document.body.style.overflow = "hidden";
+    reviewDialogRef.current?.focus();
+    const onDialogKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !submitting) {
+        setReviewOpen(false);
+      }
+      if (event.key !== "Tab" || !reviewDialogRef.current) return;
+      const focusable = Array.from(reviewDialogRef.current.querySelectorAll<HTMLElement>("button:not(:disabled), a[href], input:not(:disabled), textarea:not(:disabled)"));
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && (document.activeElement === first || document.activeElement === reviewDialogRef.current)) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", onDialogKeyDown);
+    return () => {
+      document.body.style.overflow = oldOverflow;
+      document.removeEventListener("keydown", onDialogKeyDown);
+      oldFocus?.focus();
+    };
+  }, [reviewOpen, submitting]);
+
 
   const [createdOrderId, setCreatedOrderId] =
     useState("");
@@ -2044,6 +2177,11 @@ const visibleProducts =
     selectedCategory,
     fulfillmentFilter,
   ]);
+
+  const featuredProducts = useMemo(
+    () => products.filter((product) => product.publiclyVisible && product.featuredInStore),
+    [products],
+  );
 
   const visibleNormalProducts = useMemo(
     () => visibleProducts.filter((product) => product.availabilityStatus === "active"),
@@ -2707,6 +2845,60 @@ const visibleProducts =
     goToTop();
   }
 
+  function reviewCheckout() {
+    if (cartItems.length === 0) {
+      setStep("products");
+      setCartOpen(true);
+      return;
+    }
+
+    let error = "";
+    if (!customer.name.trim()) {
+      error = text.requiredName;
+    } else if (!customer.phone.trim()) {
+      error = text.requiredPhone;
+    }
+    if (error) {
+      setStep("customer");
+      setFormError(error);
+    } else if (typeof navigator !== "undefined" && !navigator.onLine) {
+      error = text.offlineOrder;
+      setFormError(error);
+    } else if (
+      productionSchedule.required && delivery.date &&
+      compareDateKeys(delivery.date, productionSchedule.earliestDate) < 0
+    ) {
+      error = productionDateError(language, productionSchedule.earliestDate, storeProfile.regionalLocale);
+      setFormError(error);
+    } else if (delivery.mode === "pickup" && !pickupEvaluation.available) {
+      error = fulfillmentUnavailableMessage("pickup");
+      setFormError(error);
+    } else if (delivery.mode === "delivery") {
+      if (!deliveryEvaluation.available || deliveryEvaluation.quoteStatus === "region_required") {
+        error = fulfillmentUnavailableMessage("delivery");
+      } else if (!delivery.address.trim()) {
+        error = language === "ja" ? "配達先住所を入力してください。" : language === "en" ? "Enter the delivery address." : "Informe o endereço para delivery.";
+      }
+      setFormError(error);
+    } else if (delivery.mode === "postal") {
+      if (!postalEvaluation.available) {
+        error = postalUnavailableMessage;
+      } else if ([delivery.recipientName, delivery.postalCode, delivery.prefecture, delivery.city, delivery.addressLine1].some((value) => !value.trim())) {
+        error = text.postalRequired;
+      }
+      setFormError(error);
+    }
+
+    if (error) {
+      window.requestAnimationFrame(() => {
+        formErrorRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      });
+      return;
+    }
+    setFormError("");
+    setReviewOpen(true);
+  }
+
   async function submitOrder() {
     if (
       submitting ||
@@ -2992,6 +3184,8 @@ const visibleProducts =
   }
 
   function resetOrder() {
+    setReviewOpen(false);
+    setOrderNumberCopyFeedback("");
     setCart({});
     setBundleSelections({});
     writeStoredCustomerProfile(storedProfileFromCheckout(customer, delivery));
@@ -3023,28 +3217,20 @@ const visibleProducts =
     setSearch("");
     setSelectedCategory(null);
     setFulfillmentFilter(null);
+    setShowAllProducts(false);
     setSelectedOfferId("");
     setStep("products");
     goToTop();
   }
 
   const handleStoreToolbarBack = useCallback(() => {
-    if (selectedCategory || fulfillmentFilter || search.trim()) {
-      setSelectedCategory(null);
-      setFulfillmentFilter(null);
-      setSearch("");
-      setSearchOpen(false);
-      window.scrollTo({ top: 0, behavior: "smooth" });
-      return;
-    }
-
-    if (window.history.length > 1) {
-      window.history.back();
-      return;
-    }
-
+    setShowAllProducts(false);
+    setSelectedCategory(null);
+    setFulfillmentFilter(null);
+    setSearch("");
+    setSearchOpen(false);
     window.scrollTo({ top: 0, behavior: "smooth" });
-  }, [fulfillmentFilter, search, selectedCategory]);
+  }, []);
 
   const productGallery =
     selectedProduct
@@ -3138,9 +3324,24 @@ const visibleProducts =
               {text.orderNumber}
             </p>
 
-            <p className="mt-1 break-all font-mono text-lg font-black">
+            <p className="mt-1 break-all font-mono text-lg font-black select-all">
               {createdOrderId}
             </p>
+            <button
+              type="button"
+              onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(createdOrderId);
+                  setOrderNumberCopyFeedback(text.copiedOrderNumber);
+                } catch {
+                  setOrderNumberCopyFeedback(text.copyError);
+                }
+              }}
+              className="mt-3 min-h-11 rounded-xl border border-neutral-300 bg-white px-4 py-2 text-sm font-bold dark:border-neutral-600 dark:bg-neutral-900"
+            >
+              {text.copyOrderNumber}
+            </button>
+            {orderNumberCopyFeedback && <p role="status" className="mt-2 text-xs font-bold text-emerald-700 dark:text-emerald-300">{orderNumberCopyFeedback}</p>}
           </div>
 
           <p className="mt-4 text-sm font-medium text-neutral-500 dark:text-neutral-400">
@@ -3219,92 +3420,123 @@ const visibleProducts =
         customerSession.registered ? "pb-44" : "pb-28",
       ].join(" ")}
     >
+      <ReferralCampaignBanner sellerId={sellerId} />
       <div className="mx-auto w-full max-w-6xl px-4 py-3 sm:px-6 sm:py-5 lg:px-8">
-
-        {step === "products" && !selectedCategory && !fulfillmentFilter && !search.trim() && (
-          <StoreIdentityHero profile={storeProfile} />
+        {step !== "products" && (
+          <nav aria-label={text.stepNumber.replace("{current}", step === "customer" ? "2" : "3")} className="mx-auto mt-3 max-w-2xl">
+            <p className="mb-2 text-sm font-semibold text-neutral-600 dark:text-neutral-300">
+              {text.stepNumber.replace("{current}", step === "customer" ? "2" : "3")}
+            </p>
+            <ol className="grid grid-cols-3 gap-2 text-center text-xs font-semibold sm:text-sm">
+              {[text.productsStep, text.customerStep, text.deliveryStep].map((label, index) => (
+                <li key={label} className="space-y-2">
+                  <div className={["h-1.5 rounded-full", index <= (step === "customer" ? 1 : 2) ? "bg-emerald-600" : "bg-neutral-200 dark:bg-neutral-700"].join(" ")} />
+                  <span className={index === (step === "customer" ? 1 : 2) ? "text-emerald-700 dark:text-emerald-300" : "text-neutral-500"}>{label}</span>
+                </li>
+              ))}
+            </ol>
+          </nav>
         )}
 
 {step === "products" && (
   <>
-    <section className="sticky top-16 z-30 -mx-4 border-b border-neutral-200 bg-neutral-50/95 px-4 py-3 backdrop-blur dark:border-neutral-800 dark:bg-neutral-950/95 sm:mx-0 sm:rounded-2xl sm:border sm:bg-white sm:px-4 sm:dark:bg-neutral-900">
-      <div className="flex items-center gap-2">
-        <button
-          type="button"
-          onClick={handleStoreToolbarBack}
-          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-neutral-200 bg-white transition hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800"
-          aria-label={text.back}
-        >
-          <ChevronLeft size={18} />
-        </button>
-
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-black">
-            {search.trim()
-              ? text.searchResults
-              : selectedCategory ??
-                fulfillmentVitrines.find((option) => option.value === fulfillmentFilter)?.label ??
-                text.categoriesTitle}
-          </p>
-        </div>
-
+    {!selectedCategory && !fulfillmentFilter && !showAllProducts && !search.trim() && featuredProducts.length > 0 && (
+      <FeaturedProductsCarousel
+        products={featuredProducts}
+        wishlist={wishlist}
+        storeHref={`/store/${encodeURIComponent(sellerId)}`}
+        cart={cart}
+        language={language}
+        currency={storeProfile.currency}
+        locale={storeProfile.regionalLocale}
+        acceptOrdersWithoutStock={storeProfile.acceptOrdersWithoutStock}
+        onOpen={(product) => { setSelectedProduct(product); setSelectedImageIndex(0); }}
+        onSetQuantity={setQuantity}
+        onConfigureBundle={setConfiguringBundle}
+      />
+    )}
+    {!selectedCategory && !fulfillmentFilter && !showAllProducts && !search.trim() && (
+      <WishlistShelf
+        wishlist={wishlist}
+        language={language}
+        products={products.filter(p => p.publiclyVisible).map(p => {
+          const quantity = cart[p.id] ?? 0;
+          const stockLimited = p.availabilityStatus !== "made_to_order" && !storeProfile.acceptOrdersWithoutStock && typeof p.stock === "number";
+          const availableStock = Math.max(0, p.stock ?? 0);
+          return {
+            id: p.id,
+            name: p.name,
+            imageUrl: p.imageUrl,
+            priceLabel: formatMoneyMajor(p.price, storeProfile.currency, storeProfile.regionalLocale),
+            quantity,
+            soldOut: stockLimited && availableStock <= 0,
+            atStockLimit: stockLimited && quantity >= availableStock,
+            configurableBundle: p.bundleConfig.enabled && p.bundleConfig.optionProductIds.length >= 2,
+          };
+        })}
+        next={`/store/${encodeURIComponent(sellerId)}`}
+        onView={(id) => { const p = products.find(item => item.id === id); if (p) { setSelectedProduct(p); setSelectedImageIndex(0); } }}
+        onAdd={(id) => { const p = products.find(item => item.id === id && item.publiclyVisible); if (p) setQuantity(p, (cart[id] ?? 0) + 1); }}
+        onDecrease={(id) => { const p = products.find(item => item.id === id && item.publiclyVisible); if (p) setQuantity(p, (cart[id] ?? 0) - 1); }}
+        onConfigureBundle={(id) => { const p = products.find(item => item.id === id && item.publiclyVisible); if (p) setConfiguringBundle(p); }}
+      />
+    )}
+    <div className="mb-3 pt-2 sm:pt-3">
+      <div className="flex items-start justify-between gap-3">
+        {selectedCategory || fulfillmentFilter || showAllProducts || search.trim() ? (
+          <button
+            type="button"
+            onClick={handleStoreToolbarBack}
+            className="inline-flex min-h-11 items-center gap-2 rounded-xl px-1 text-sm font-bold text-neutral-700 hover:text-orange-700 dark:text-neutral-200 dark:hover:text-orange-300"
+          >
+            <ChevronLeft size={19} aria-hidden="true" />
+            {text.backToCategories}
+          </button>
+        ) : (
+          <div className="min-w-0 flex-1">
+            <h1 className="text-2xl font-black sm:text-3xl">{text.quickTitle}</h1>
+            <p className="mt-1 text-sm text-neutral-600 dark:text-neutral-300">{text.chooseCategoryHelp}</p>
+          </div>
+        )}
         <button
           type="button"
           onClick={() => setSearchOpen((current) => !current)}
-          className={[
-            "flex h-10 w-10 shrink-0 items-center justify-center rounded-full border transition",
-            searchOpen || search.trim()
-              ? "border-orange-400 bg-orange-50 text-orange-700 dark:border-orange-700 dark:bg-orange-950/30 dark:text-orange-200"
-              : "border-neutral-200 bg-white hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800",
-          ].join(" ")}
           aria-label={text.openSearch}
+          aria-expanded={searchOpen}
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-neutral-200 bg-white hover:border-orange-400 dark:border-neutral-700 dark:bg-neutral-900"
         >
-          <Search size={18} />
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setCartOpen(true)}
-          className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-neutral-200 bg-white transition hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800"
-          aria-label={text.cart}
-        >
-          <ShoppingCart size={18} />
-          {totalItems > 0 && (
-            <span className="absolute -right-1.5 -top-1.5 inline-flex min-w-5 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-black leading-5 text-white ring-2 ring-neutral-50 dark:ring-neutral-950">
-              {totalItems > 99 ? "99+" : totalItems}
-            </span>
-          )}
+          <Search size={20} aria-hidden="true" />
         </button>
       </div>
 
       {searchOpen && (
-        <label className="mt-3 flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-4 py-2.5 dark:border-neutral-700 dark:bg-neutral-900">
-          <Search className="shrink-0 text-neutral-400" size={18} />
+        <div className="mt-3 flex min-h-12 items-center gap-3 rounded-xl border border-neutral-300 bg-white px-4 py-2 dark:border-neutral-700 dark:bg-neutral-900">
+          <Search size={19} className="shrink-0 text-neutral-500" aria-hidden="true" />
           <input
             autoFocus
+            type="search"
             value={search}
             onChange={(event) => {
               setSearch(event.target.value);
               setSelectedCategory(null);
               setFulfillmentFilter(null);
+              setShowAllProducts(false);
             }}
             placeholder={text.search}
-            className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-neutral-400"
+            aria-label={text.search}
+            className="min-w-0 flex-1 bg-transparent text-base outline-none placeholder:text-neutral-400"
           />
           <button
             type="button"
-            onClick={() => {
-              setSearch("");
-              setSearchOpen(false);
-            }}
-            className="rounded-full p-1 text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+            onClick={() => { setSearch(""); setSearchOpen(false); }}
             aria-label={text.close}
+            className="flex h-9 w-9 items-center justify-center rounded-lg text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-800"
           >
-            <X size={16} />
+            <X size={18} aria-hidden="true" />
           </button>
-        </label>
+        </div>
       )}
-    </section>
+    </div>
 
     {search.trim() ? (
       visibleNormalProducts.length === 0 &&
@@ -3316,6 +3548,8 @@ const visibleProducts =
       ) : (
         <>
           <StoreProductGrid
+            wishlist={wishlist}
+            storeHref={`/store/${encodeURIComponent(sellerId)}`}
             title={text.searchResults}
             help=""
             products={visibleNormalProducts}
@@ -3339,6 +3573,8 @@ const visibleProducts =
           />
 
           <StoreProductGrid
+            wishlist={wishlist}
+            storeHref={`/store/${encodeURIComponent(sellerId)}`}
             title={text.madeToOrderTitle}
             help={text.madeToOrderHelp}
             products={visibleMadeToOrderProducts}
@@ -3363,7 +3599,7 @@ const visibleProducts =
           />
         </>
       )
-    ) : selectedCategory || fulfillmentFilter ? (
+    ) : selectedCategory || fulfillmentFilter || showAllProducts ? (
       visibleNormalProducts.length === 0 &&
       visibleMadeToOrderProducts.length === 0 ? (
         <EmptyState
@@ -3373,6 +3609,8 @@ const visibleProducts =
       ) : (
         <>
           <StoreProductGrid
+            wishlist={wishlist}
+            storeHref={`/store/${encodeURIComponent(sellerId)}`}
             title={
               selectedCategory ??
               fulfillmentVitrines.find((option) => option.value === fulfillmentFilter)?.label ??
@@ -3398,8 +3636,10 @@ const visibleProducts =
             onSetQuantity={setQuantity}
             onConfigureBundle={setConfiguringBundle}
           />
-          {fulfillmentFilter && (
+          {visibleMadeToOrderProducts.length > 0 && (
             <StoreProductGrid
+            wishlist={wishlist}
+            storeHref={`/store/${encodeURIComponent(sellerId)}`}
               title={text.madeToOrderTitle}
               help={text.madeToOrderHelp}
               products={visibleMadeToOrderProducts}
@@ -3427,8 +3667,91 @@ const visibleProducts =
       )
     ) : (
       <>
+        <section aria-label={text.chooseCategory} className="mt-4">
+
+          {categorySummaries.length === 0 ? (
+            madeToOrderProducts.length === 0 ? (
+              <EmptyState icon={<Package size={40} />} message={text.emptyProducts} />
+            ) : null
+          ) : (
+            <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 lg:grid-cols-4">
+              {categorySummaries.map((categoryItem) => (
+                <button
+                  key={categoryItem.name}
+                  type="button"
+                  onClick={() => {
+                    setSelectedCategory(categoryItem.name);
+                    setShowAllProducts(false);
+                    setFulfillmentFilter(null);
+                    setSearch("");
+                    setSearchOpen(false);
+                    window.scrollTo({
+                      top: 0,
+                      behavior: "smooth",
+                    });
+                  }}
+                  className="group relative aspect-[4/3] overflow-hidden rounded-2xl border border-neutral-200 bg-neutral-900 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg dark:border-neutral-700"
+                >
+                  {categoryItem.imageUrl ? (
+                    <img
+                      src={categoryItem.imageUrl}
+                      alt={categoryItem.name}
+                      loading="lazy"
+                      className="h-full w-full object-cover transition duration-300 group-hover:scale-105"
+                    />
+                  ) : (
+                    <div className="flex h-full w-full items-center justify-center bg-neutral-200 dark:bg-neutral-800">
+                      <Package
+                        className="text-neutral-500"
+                        size={40}
+                      />
+                    </div>
+                  )}
+
+                  <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/25 to-transparent" />
+
+                  <div className="absolute inset-x-0 bottom-0 p-4 text-white">
+                    <h3 className="break-words text-base font-black sm:text-lg">
+                      {categoryItem.name}
+                    </h3>
+
+                    <p className="mt-1 text-xs font-semibold text-white/80">
+                      {categoryItem.count}{" "}
+                      {categoryItem.count === 1
+                        ? text.categoryProduct
+                        : text.categoryProducts}
+                    </p>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+          {categorySummaries.length > 0 && (
+            <button
+              type="button"
+              onClick={() => {
+                setShowAllProducts(true);
+                setSelectedCategory(null);
+                setFulfillmentFilter(null);
+                setSearch("");
+                setSearchOpen(false);
+                window.scrollTo({ top: 0, behavior: "smooth" });
+              }}
+              className="mt-4 inline-flex min-h-11 items-center gap-2 rounded-xl px-2 text-sm font-bold text-orange-700 hover:underline dark:text-orange-300"
+            >
+              {text.browseAll} <ChevronRight size={18} aria-hidden="true" />
+            </button>
+          )}
+        </section>
+
         {lastChanceProducts.length > 0 && (
-          <section className="mt-6 rounded-3xl border border-amber-200 bg-gradient-to-br from-amber-50 to-orange-50 p-4 shadow-sm dark:border-amber-900/60 dark:from-amber-950/30 dark:to-orange-950/20 sm:p-5">
+          <details className="mt-5 rounded-2xl border border-amber-200 bg-amber-50/70 p-3 dark:border-amber-900/60 dark:bg-amber-950/20">
+            <summary className="flex min-h-11 cursor-pointer items-center gap-2 text-sm font-bold text-amber-900 dark:text-amber-200">
+              <Flame size={19} />
+              {language === "ja" ? "ラストチャンス" : language === "en" ? "Last chance" : "Última chance"}
+              <span className="rounded-full bg-white/80 px-2 py-1 text-xs dark:bg-neutral-900">{lastChanceProducts.length}</span>
+            </summary>
+            <section className="mt-2 rounded-2xl bg-white/70 p-2 dark:bg-neutral-900/30 sm:p-3">
             <div className="flex items-center gap-3">
               <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-orange-600 text-white shadow-sm">
                 <Flame size={22} />
@@ -3572,11 +3895,13 @@ const visibleProducts =
                 );
               })}
             </div>
-          </section>
+            </section>
+          </details>
         )}
 
         {fulfillmentVitrines.length > 0 && (
-          <section className="mt-6">
+          <details className="mt-6 rounded-2xl border border-neutral-200 bg-white p-4 dark:border-neutral-800 dark:bg-neutral-900">
+            <summary className="cursor-pointer text-sm font-bold text-neutral-700 dark:text-neutral-200">{text.filterByReceiving}</summary>
             <h2 className="text-xl font-black sm:text-2xl">
               {language === "ja"
                 ? "受取方法から選ぶ"
@@ -3591,6 +3916,7 @@ const visibleProducts =
                   type="button"
                   onClick={() => {
                     setFulfillmentFilter(option.value);
+                    setShowAllProducts(false);
                     setSelectedCategory(null);
                     setSearch("");
                     setSearchOpen(false);
@@ -3610,78 +3936,12 @@ const visibleProducts =
                 </button>
               ))}
             </div>
-          </section>
+          </details>
         )}
 
-        <section className="mt-6">
-          <h2 className="text-2xl font-black sm:text-3xl">
-            {text.chooseCategory}
-          </h2>
-
-          <p className="mt-2 text-sm text-neutral-600 dark:text-neutral-300">
-            {text.chooseCategoryHelp}
-          </p>
-
-          {categorySummaries.length === 0 ? (
-            <EmptyState
-              icon={<Package size={40} />}
-              message={text.emptyProducts}
-            />
-          ) : (
-            <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 lg:grid-cols-4">
-              {categorySummaries.map((categoryItem) => (
-                <button
-                  key={categoryItem.name}
-                  type="button"
-                  onClick={() => {
-                    setSelectedCategory(categoryItem.name);
-                    setFulfillmentFilter(null);
-                    setSearch("");
-                    setSearchOpen(false);
-                    window.scrollTo({
-                      top: 0,
-                      behavior: "smooth",
-                    });
-                  }}
-                  className="group relative aspect-[4/3] overflow-hidden rounded-2xl border border-neutral-200 bg-neutral-900 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg dark:border-neutral-700"
-                >
-                  {categoryItem.imageUrl ? (
-                    <img
-                      src={categoryItem.imageUrl}
-                      alt={categoryItem.name}
-                      loading="lazy"
-                      className="h-full w-full object-cover transition duration-300 group-hover:scale-105"
-                    />
-                  ) : (
-                    <div className="flex h-full w-full items-center justify-center bg-neutral-200 dark:bg-neutral-800">
-                      <Package
-                        className="text-neutral-500"
-                        size={40}
-                      />
-                    </div>
-                  )}
-
-                  <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/25 to-transparent" />
-
-                  <div className="absolute inset-x-0 bottom-0 p-4 text-white">
-                    <h3 className="break-words text-base font-black sm:text-lg">
-                      {categoryItem.name}
-                    </h3>
-
-                    <p className="mt-1 text-xs font-semibold text-white/80">
-                      {categoryItem.count}{" "}
-                      {categoryItem.count === 1
-                        ? text.categoryProduct
-                        : text.categoryProducts}
-                    </p>
-                  </div>
-                </button>
-              ))}
-            </div>
-          )}
-        </section>
-
         <StoreProductGrid
+            wishlist={wishlist}
+            storeHref={`/store/${encodeURIComponent(sellerId)}`}
           title={text.madeToOrderTitle}
           help={text.madeToOrderHelp}
           products={madeToOrderProducts}
@@ -3737,6 +3997,7 @@ const visibleProducts =
             <div className="mt-6 space-y-4">
               <Field
                 label={text.name}
+                autoComplete="name"
                 value={
                   customer.name
                 }
@@ -3755,6 +4016,7 @@ const visibleProducts =
 
               <Field
                 label={text.phone}
+                autoComplete="tel"
                 value={
                   customer.phone
                 }
@@ -3772,23 +4034,18 @@ const visibleProducts =
                 required
               />
 
-              <Field
-                label={text.email}
-                value={
-                  customer.email
-                }
-                onChange={(
-                  value,
-                ) =>
-                  setCustomer(
-                    (current) => ({
-                      ...current,
-                      email: value,
-                    }),
-                  )
-                }
-                inputMode="email"
-              />
+              <details className="rounded-xl border border-neutral-200 px-4 py-3 dark:border-neutral-700" open={Boolean(customer.email) || undefined}>
+                <summary className="cursor-pointer text-sm font-semibold text-neutral-600 dark:text-neutral-300">{text.optionalDetails}</summary>
+                <div className="mt-3">
+                  <Field
+                    label={text.email}
+                    value={customer.email}
+                    onChange={(value) => setCustomer((current) => ({ ...current, email: value }))}
+                    inputMode="email"
+                    autoComplete="email"
+                  />
+                </div>
+              </details>
             </div>
 
             <button
@@ -3798,7 +4055,7 @@ const visibleProducts =
               }
               className="mt-7 inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-neutral-950 px-5 py-3 font-bold text-white transition hover:bg-neutral-800 dark:bg-white dark:text-neutral-950 dark:hover:bg-neutral-200"
             >
-              {text.continue}
+              {text.customerNext}
               <ChevronRight
                 size={18}
               />
@@ -3841,6 +4098,9 @@ const visibleProducts =
                     setDelivery((current) => ({
                       ...current,
                       mode: option.value,
+                      recipientName: option.value === "postal" && !current.recipientName.trim()
+                        ? customer.name.trim()
+                        : current.recipientName,
                     }))
                   }
                   className={[
@@ -4001,9 +4261,9 @@ const visibleProducts =
               "delivery" && (
               <div className="mt-4 space-y-4">
                 <Field
-                  label={
-                    text.address
-                  }
+                  label={text.address}
+                  autoComplete="street-address"
+                  required
                   value={
                     delivery.address
                   }
@@ -4020,30 +4280,17 @@ const visibleProducts =
                   }
                 />
 
-                <Field
-                  label={
-                    text.locationLink
-                  }
-                  value={
-                    delivery.locationLink
-                  }
-                  onChange={(
-                    value,
-                  ) =>
-                    setDelivery(
-                      (current) => ({
-                        ...current,
-                        locationLink:
-                          value,
-                      }),
-                    )
-                  }
-                  leadingIcon={
-                    <MapPin
-                      size={18}
+                <details className="rounded-xl border border-neutral-200 p-3 dark:border-neutral-700" open={Boolean(delivery.locationLink) || undefined}>
+                  <summary className="cursor-pointer py-1 text-sm font-semibold text-neutral-700 dark:text-neutral-200">{text.optionalLocation}</summary>
+                  <div className="mt-3">
+                    <Field
+                      label={text.locationLink}
+                      value={delivery.locationLink}
+                      onChange={(value) => setDelivery((current) => ({ ...current, locationLink: value }))}
+                      leadingIcon={<MapPin size={18} />}
                     />
-                  }
-                />
+                  </div>
+                </details>
               </div>
             )}
 
@@ -4094,6 +4341,7 @@ const visibleProducts =
                 <div className="grid gap-4 sm:grid-cols-2">
                   <Field
                     label={text.recipientName}
+                    autoComplete="name"
                     value={delivery.recipientName}
                     required
                     onChange={(value) =>
@@ -4106,6 +4354,7 @@ const visibleProducts =
 
                   <Field
                     label={text.postalCode}
+                    autoComplete="postal-code"
                     value={delivery.postalCode}
                     required
                     onChange={(value) =>
@@ -4118,6 +4367,7 @@ const visibleProducts =
 
                   <Field
                     label={text.prefecture}
+                    autoComplete="address-level1"
                     value={delivery.prefecture}
                     required
                     onChange={(value) =>
@@ -4130,6 +4380,7 @@ const visibleProducts =
 
                   <Field
                     label={text.city}
+                    autoComplete="address-level2"
                     value={delivery.city}
                     required
                     onChange={(value) =>
@@ -4143,6 +4394,7 @@ const visibleProducts =
 
                 <Field
                   label={text.addressLine1}
+                  autoComplete="address-line1"
                   value={delivery.addressLine1}
                   required
                   onChange={(value) =>
@@ -4155,6 +4407,7 @@ const visibleProducts =
 
                 <Field
                   label={text.addressLine2}
+                  autoComplete="address-line2"
                   value={delivery.addressLine2}
                   onChange={(value) =>
                     setDelivery((current) => ({
@@ -4166,31 +4419,20 @@ const visibleProducts =
               </div>
             )}
 
-            <label className="mt-4 block">
-              <span className="text-sm font-bold">
-                {text.note}
-              </span>
-
-              <textarea
-                value={
-                  delivery.note
-                }
-                onChange={(
-                  event,
-                ) =>
-                  setDelivery(
-                    (current) => ({
-                      ...current,
-                      note:
-                        event.target
-                          .value,
-                    }),
-                  )
-                }
-                rows={4}
-                className="mt-2 w-full resize-none rounded-xl border border-neutral-200 bg-white px-4 py-3 outline-none focus:border-orange-400 dark:border-neutral-700 dark:bg-neutral-950"
-              />
-            </label>
+            <details className="mt-4 rounded-xl border border-neutral-200 p-4 dark:border-neutral-700" open={Boolean(delivery.note) || undefined}>
+              <summary className="min-h-8 cursor-pointer text-sm font-semibold text-neutral-700 dark:text-neutral-200">
+                {text.optionalNote}
+              </summary>
+              <label className="mt-3 block">
+                <span className="sr-only">{text.note}</span>
+                <textarea
+                  value={delivery.note}
+                  onChange={(event) => setDelivery((current) => ({ ...current, note: event.target.value }))}
+                  rows={3}
+                  className="w-full resize-y rounded-xl border border-neutral-200 bg-white px-4 py-3 outline-none focus:border-orange-400 dark:border-neutral-700 dark:bg-neutral-950"
+                />
+              </label>
+            </details>
 
             <div className="mt-5">
               <RewardsCheckoutPanel
@@ -4251,9 +4493,7 @@ const visibleProducts =
 
             <button
               type="button"
-              onClick={() =>
-                void submitOrder()
-              }
+              onClick={reviewCheckout}
               disabled={submitting}
               className="mt-7 inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-green-700 px-5 py-3 font-bold text-white transition hover:bg-green-600 disabled:cursor-not-allowed disabled:opacity-60"
             >
@@ -4270,7 +4510,8 @@ const visibleProducts =
                   <ShoppingBag
                     size={18}
                   />
-                  {text.placeOrder}
+                  {text.reviewOrder}
+                  <ChevronRight size={18} />
                 </>
               )}
             </button>
@@ -4292,16 +4533,13 @@ const visibleProducts =
                 onClick={() =>
                   setCartOpen(true)
                 }
-                className="mx-auto flex min-h-14 w-full max-w-6xl items-center justify-between rounded-xl bg-neutral-950 px-5 py-3 font-bold text-white dark:bg-white dark:text-neutral-950"
+                className="mx-auto flex min-h-14 w-full max-w-6xl items-center justify-between gap-3 rounded-xl bg-emerald-700 px-5 py-3 font-bold text-white dark:bg-white dark:text-neutral-950"
               >
                 <span className="flex items-center gap-2">
                   <ShoppingCart
                     size={20}
                   />
-                  {totalItems}{" "}
-                  {totalItems === 1
-                    ? text.item
-                    : text.items}
+                  {text.cartAction} · {totalItems} {totalItems === 1 ? text.item : text.items}
                 </span>
 
                 <span>
@@ -4324,10 +4562,7 @@ const visibleProducts =
               <ShoppingCart
                 size={20}
               />
-              {totalItems}{" "}
-              {totalItems === 1
-                ? text.item
-                : text.items}
+              {text.cartAction} · {totalItems} {totalItems === 1 ? text.item : text.items}
               <span>
                 {formatCurrency(
                   productsTotal,
@@ -4338,6 +4573,111 @@ const visibleProducts =
             </button>
           </>
         )}
+
+      {reviewOpen && step === "delivery" && (
+        <div className="fixed inset-0 z-[90] flex items-end justify-center p-0 sm:items-center sm:p-5">
+          <button
+            type="button"
+            aria-label={text.reviewCancel}
+            className="absolute inset-0 bg-black/70"
+            disabled={submitting}
+            onClick={() => setReviewOpen(false)}
+          />
+          <section
+            ref={reviewDialogRef}
+            tabIndex={-1}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="store-review-title"
+            className="relative z-10 flex max-h-[95dvh] w-full max-w-xl flex-col overflow-hidden rounded-t-3xl bg-white text-neutral-950 shadow-2xl dark:bg-neutral-900 dark:text-neutral-100 sm:rounded-3xl"
+          >
+            <header className="flex shrink-0 items-start justify-between gap-3 border-b border-neutral-200 p-5 dark:border-neutral-700">
+              <div>
+                <h2 id="store-review-title" className="text-xl font-black">{text.reviewTitle}</h2>
+                <p className="mt-1 text-xs leading-relaxed text-neutral-600 dark:text-neutral-300">{text.reviewHelp}</p>
+              </div>
+              <button
+                type="button"
+                aria-label={text.reviewCancel}
+                disabled={submitting}
+                onClick={() => setReviewOpen(false)}
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-neutral-100 dark:bg-neutral-800"
+              ><X size={21} /></button>
+            </header>
+            <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-5 text-sm">
+              <div>
+                <div className="flex items-center justify-between gap-2">
+                  <h3 className="font-black">{text.reviewItems}</h3>
+                  <button type="button" onClick={() => { setReviewOpen(false); setStep("products"); goToTop(); }} className="min-h-10 px-2 font-bold text-emerald-700 underline dark:text-emerald-300">{text.reviewEditProducts}</button>
+                </div>
+                <ul className="mt-2 space-y-2">
+                  {cartItems.map((item) => (
+                    <li key={item.id} className="flex justify-between gap-3">
+                      <span className="min-w-0 break-words">{item.qty} × {item.name}</span>
+                      <span className="shrink-0 font-bold">{formatCurrency(item.subtotal, storeProfile.regionalLocale, storeProfile.currency)}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <div className="border-t border-neutral-200 pt-3 dark:border-neutral-700">
+                <div className="flex items-center justify-between gap-2">
+                  <h3 className="font-black">{text.reviewCustomer}</h3>
+                  <button type="button" onClick={() => { setReviewOpen(false); setStep("customer"); goToTop(); }} className="min-h-10 px-2 font-bold text-emerald-700 underline dark:text-emerald-300">{text.reviewEditData}</button>
+                </div>
+                <p className="break-words">{customer.name}</p>
+                <p className="break-words">{customer.phone}</p>
+                {customer.email && <p className="break-all">{customer.email}</p>}
+              </div>
+              <div className="border-t border-neutral-200 pt-3 dark:border-neutral-700">
+                <div className="flex items-center justify-between gap-2">
+                  <h3 className="font-black">{text.reviewReceiving}</h3>
+                  <button type="button" onClick={() => setReviewOpen(false)} className="min-h-10 px-2 font-bold text-emerald-700 underline dark:text-emerald-300">{text.reviewEditReceiving}</button>
+                </div>
+                <p>{checkoutFulfillmentOptions.find((option) => option.value === delivery.mode)?.label || delivery.mode}</p>
+                {delivery.mode !== "postal" && <p>{[delivery.date, delivery.time].filter(Boolean).join(" · ") || text.reviewTiming}</p>}
+                {delivery.mode === "delivery" && <p className="break-words">{delivery.address}</p>}
+                {delivery.mode === "postal" && (
+                  <p className="break-words">
+                    {delivery.recipientName} · {delivery.postalCode} · {delivery.prefecture} · {delivery.city} · {delivery.addressLine1}{delivery.addressLine2 ? ` · ${delivery.addressLine2}` : ""}
+                  </p>
+                )}
+                {delivery.note && <p className="mt-1 whitespace-pre-wrap text-neutral-600 dark:text-neutral-300">{delivery.note}</p>}
+              </div>
+              {stockConfirmationMessage && <p className="rounded-xl bg-amber-50 p-3 text-xs text-amber-900 dark:bg-amber-950/30 dark:text-amber-200">{stockConfirmationMessage}</p>}
+              {delivery.mode === "postal" && postalEvaluation.quoteStatus !== "calculated" && (
+                <p className="rounded-xl bg-sky-50 p-3 text-xs font-bold text-sky-900 dark:bg-sky-950/30 dark:text-sky-200">
+                  {postalEvaluation.quoteStatus === "collect" ? text.reviewPostalCollect : text.reviewPostalPending}
+                </p>
+              )}
+            </div>
+            <footer className="shrink-0 space-y-3 border-t border-neutral-200 bg-white p-4 pb-[max(1rem,env(safe-area-inset-bottom))] dark:border-neutral-700 dark:bg-neutral-900">
+              {(discount > 0 || rewardsDiscount > 0 || shippingFee > 0) && (
+                <div className="space-y-1 text-sm text-neutral-600 dark:text-neutral-300">
+                  <div className="flex justify-between gap-3"><span>{text.subtotal}</span><span>{formatCurrency(subtotal, storeProfile.regionalLocale, storeProfile.currency)}</span></div>
+                  {discount + rewardsDiscount > 0 && <div className="flex justify-between gap-3"><span>{text.discount}</span><span>- {formatCurrency(discount + rewardsDiscount, storeProfile.regionalLocale, storeProfile.currency)}</span></div>}
+                  {shippingFee > 0 && <div className="flex justify-between gap-3"><span>{text.shippingFee}</span><span>{formatCurrency(shippingFee, storeProfile.regionalLocale, storeProfile.currency)}</span></div>}
+                </div>
+              )}
+              <div className="flex items-center justify-between gap-3 text-lg font-black">
+                <span>{text.total}</span>
+                <span>{formatCurrency(total, storeProfile.regionalLocale, storeProfile.currency)}</span>
+              </div>
+              <button
+                type="button"
+                disabled={submitting}
+                onClick={() => { setReviewOpen(false); void submitOrder(); }}
+                className="flex min-h-14 w-full items-center justify-center gap-2 rounded-2xl bg-emerald-700 px-4 py-3 text-base font-black text-white disabled:opacity-50"
+              >
+                {submitting ? <Loader2 className="animate-spin" size={20} /> : <Check size={20} />}
+                {submitting ? text.sending : text.reviewConfirm}
+              </button>
+              <button type="button" disabled={submitting} onClick={() => setReviewOpen(false)} className="min-h-11 w-full rounded-xl font-semibold text-neutral-600 underline disabled:opacity-50 dark:text-neutral-300">
+                {text.reviewCancel}
+              </button>
+            </footer>
+          </section>
+        </div>
+      )}
 
       {cartOpen && (
         <CartDrawer
@@ -4415,6 +4755,13 @@ const visibleProducts =
               null,
             )
           }
+          cartQuantity={cart[selectedProduct.id] ?? 0}
+          acceptOrdersWithoutStock={storeProfile.acceptOrdersWithoutStock}
+          onSetQuantity={setQuantity}
+          onConfigureBundle={(product) => {
+            setSelectedProduct(null);
+            setConfiguringBundle(product);
+          }}
         />
       )}
     </main>
@@ -4457,7 +4804,8 @@ function QuantitySelector({
       <button
         type="button"
         onClick={onDecrease}
-        className="flex h-10 w-10 items-center justify-center rounded-lg bg-neutral-100 transition hover:bg-neutral-200 dark:bg-neutral-800 dark:hover:bg-neutral-700"
+        aria-label="Diminuir quantidade / Decrease / 数量を減らす"
+        className="flex h-12 w-12 items-center justify-center rounded-lg bg-neutral-100 transition hover:bg-neutral-200 dark:bg-neutral-800 dark:hover:bg-neutral-700"
       >
         <Minus size={18} />
       </button>
@@ -4469,8 +4817,9 @@ function QuantitySelector({
       <button
         type="button"
         onClick={onIncrease}
+        aria-label="Aumentar quantidade / Increase / 数量を増やす"
         disabled={disableIncrease}
-        className="flex h-10 w-10 items-center justify-center rounded-lg bg-neutral-950 text-white transition hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-30 dark:bg-white dark:text-neutral-950 dark:hover:bg-neutral-200"
+        className="flex h-12 w-12 items-center justify-center rounded-lg bg-neutral-950 text-white transition hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-30 dark:bg-white dark:text-neutral-950 dark:hover:bg-neutral-200"
       >
         <Plus size={18} />
       </button>
@@ -4525,6 +4874,7 @@ function Field({
   required = false,
   leadingIcon,
   min,
+  autoComplete,
 }: {
   label: string;
   value: string;
@@ -4540,6 +4890,7 @@ function Field({
   required?: boolean;
   leadingIcon?: ReactNode;
   min?: string;
+  autoComplete?: string;
 }) {
   return (
     <label className="block">
@@ -4552,7 +4903,7 @@ function Field({
         )}
       </span>
 
-      <span className="mt-2 flex items-center gap-2 rounded-xl border border-neutral-200 bg-white px-4 py-3 focus-within:border-orange-400 dark:border-neutral-700 dark:bg-neutral-950">
+      <span className="mt-2 flex min-h-12 items-center gap-2 rounded-xl border border-neutral-200 bg-white px-4 py-3 focus-within:border-orange-400 dark:border-neutral-700 dark:bg-neutral-950">
         {leadingIcon && (
           <span className="text-neutral-400">
             {leadingIcon}
@@ -4560,8 +4911,9 @@ function Field({
         )}
 
         <input
-          type={type}
+          type={type === "text" && inputMode === "email" ? "email" : type === "text" && inputMode === "tel" ? "tel" : type}
           value={value}
+          autoComplete={autoComplete}
           onChange={(event) =>
             onChange(
               event.target.value,
@@ -4825,10 +5177,241 @@ function OfferCompletionPanel({
   );
 }
 
+/** Discrete, touch-first highlights: rendered only when a seller selects products. */
+function FeaturedProductsCarousel({
+  products, wishlist, storeHref, cart, language, currency, locale, acceptOrdersWithoutStock,
+  onOpen, onSetQuantity, onConfigureBundle,
+}: {
+  products: Product[];
+  wishlist: CustomerWishlist;
+  storeHref: string;
+  cart: Record<string, number>;
+  language: Language;
+  currency: SupportedCurrency;
+  locale: RegionalLocale;
+  acceptOrdersWithoutStock: boolean;
+  onOpen: (product: Product) => void;
+  onSetQuantity: (product: Product, quantity: number) => void;
+  onConfigureBundle: (product: Product) => void;
+}) {
+  const trackRef = useRef<HTMLDivElement | null>(null);
+  const animationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const animatingRef = useRef(false);
+  const hoveredRef = useRef(false);
+  const focusedRef = useRef(false);
+  const resumeAfterRef = useRef(0);
+  const [loopEnabled, setLoopEnabled] = useState(false);
+  const [autoPaused, setAutoPaused] = useState(false);
+  const [reducedMotion, setReducedMotion] = useState(false);
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(false);
+  const productIds = products.map((product) => product.id).join("|");
+
+  const updateArrows = useCallback(() => {
+    const track = trackRef.current;
+    if (!track) return;
+    setCanScrollLeft(track.scrollLeft > 3);
+    setCanScrollRight(track.scrollLeft + track.clientWidth < track.scrollWidth - 3);
+  }, []);
+
+  // Clone a full cycle only when the original row is wider than the viewport.
+  // The second cycle makes the last-to-first transition visually continuous.
+  useEffect(() => {
+    const track = trackRef.current;
+    if (!track) return;
+    const measure = () => {
+      const first = track.children.item(0) as HTMLElement | null;
+      const last = track.children.item(products.length - 1) as HTMLElement | null;
+      const contentWidth = first && last
+        ? last.offsetLeft + last.offsetWidth - first.offsetLeft
+        : 0;
+      setLoopEnabled(products.length > 1 && contentWidth > track.clientWidth + 3);
+      updateArrows();
+    };
+    measure();
+    const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(measure) : null;
+    observer?.observe(track);
+    for (const child of Array.from(track.children).slice(0, products.length)) observer?.observe(child);
+    return () => observer?.disconnect();
+  }, [products.length, loopEnabled, updateArrows]);
+
+  useEffect(() => {
+    if (trackRef.current) trackRef.current.scrollLeft = 0;
+  }, [productIds]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const media = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const sync = () => setReducedMotion(media.matches);
+    sync();
+    media.addEventListener?.("change", sync);
+    return () => media.removeEventListener?.("change", sync);
+  }, []);
+
+  const cycleWidth = useCallback(() => {
+    const track = trackRef.current;
+    const first = track?.children.item(0) as HTMLElement | null;
+    const duplicate = track?.children.item(products.length) as HTMLElement | null;
+    return first && duplicate ? duplicate.offsetLeft - first.offsetLeft : 0;
+  }, [products.length]);
+
+  const jumpWithoutAnimation = useCallback((position: number) => {
+    const track = trackRef.current;
+    if (!track) return;
+    track.style.scrollSnapType = "none";
+    track.scrollLeft = position;
+    // Restore snapping after the browser has painted the invisible reset.
+    requestAnimationFrame(() => {
+      if (trackRef.current === track) track.style.scrollSnapType = "";
+    });
+  }, []);
+
+  const normalizeLoop = useCallback(() => {
+    if (!loopEnabled) return;
+    const track = trackRef.current;
+    const cycle = cycleWidth();
+    if (!track || cycle <= 0 || track.scrollLeft < cycle - 2) return;
+    jumpWithoutAnimation(track.scrollLeft - cycle);
+  }, [cycleWidth, jumpWithoutAnimation, loopEnabled]);
+
+  const pauseForInteraction = useCallback(() => {
+    resumeAfterRef.current = Date.now() + 8000;
+  }, []);
+
+  const move = useCallback((direction: number, userAction = false) => {
+    const track = trackRef.current;
+    if (!track || animatingRef.current) return;
+    if (userAction) pauseForInteraction();
+
+    const slide = () => {
+      if (trackRef.current !== track) return;
+      const card = track.children.item(0) as HTMLElement | null;
+      const distance = (card?.offsetWidth ?? 245) + 12;
+      animatingRef.current = true;
+      track.scrollBy({ left: distance * direction, behavior: reducedMotion ? "auto" : "smooth" });
+      if (animationTimerRef.current) clearTimeout(animationTimerRef.current);
+      animationTimerRef.current = setTimeout(() => {
+        animationTimerRef.current = null;
+        animatingRef.current = false;
+        normalizeLoop();
+        updateArrows();
+      }, reducedMotion ? 80 : 700);
+    };
+
+    // From the first card, go backwards from its identical copy without a visible jump.
+    if (loopEnabled && direction < 0 && track.scrollLeft < 3) {
+      const cycle = cycleWidth();
+      if (cycle > 0) {
+        jumpWithoutAnimation(cycle);
+        requestAnimationFrame(slide);
+        return;
+      }
+    }
+    normalizeLoop();
+    slide();
+  }, [cycleWidth, jumpWithoutAnimation, loopEnabled, normalizeLoop, pauseForInteraction, reducedMotion, updateArrows]);
+
+  const handleScroll = useCallback(() => {
+    updateArrows();
+    if (!loopEnabled || animatingRef.current) return;
+    if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+    idleTimerRef.current = setTimeout(() => {
+      idleTimerRef.current = null;
+      normalizeLoop();
+    }, 220);
+  }, [loopEnabled, normalizeLoop, updateArrows]);
+
+  useEffect(() => {
+    if (!loopEnabled || autoPaused || reducedMotion) return;
+    const timer = setInterval(() => {
+      if (document.visibilityState !== "visible" || hoveredRef.current || focusedRef.current
+        || Date.now() < resumeAfterRef.current || animatingRef.current) return;
+      move(1);
+    }, 4400);
+    return () => clearInterval(timer);
+  }, [autoPaused, loopEnabled, move, reducedMotion]);
+
+  useEffect(() => () => {
+    if (animationTimerRef.current) clearTimeout(animationTimerRef.current);
+    if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+  }, []);
+
+  const copy = language === "ja"
+    ? { title: "新着・おすすめ", tag: "おすすめ", add: "追加", configure: "セットを選ぶ", details: "商品を見る", soldOut: "売り切れ", prev: "前の商品", next: "次の商品", pause: "自動再生を停止", play: "自動再生を再開" }
+    : language === "en"
+      ? { title: "New & featured", tag: "Featured", add: "Add", configure: "Customize", details: "View product", soldOut: "Sold out", prev: "Previous products", next: "Next products", pause: "Pause automatic scrolling", play: "Resume automatic scrolling" }
+      : { title: "Novidades e destaques", tag: "Destaque", add: "Adicionar", configure: "Montar kit", details: "Ver produto", soldOut: "Esgotado", prev: "Produtos anteriores", next: "Próximos produtos", pause: "Pausar rolagem automática", play: "Continuar rolagem automática" };
+
+  const visibleProducts = loopEnabled ? [...products, ...products] : products;
+
+  return (
+    <section className="mb-6 pt-2" aria-label={copy.title}>
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <h2 className="text-lg font-black sm:text-xl">{copy.title}</h2>
+        {(loopEnabled || canScrollLeft || canScrollRight) && (
+          <div className="flex gap-2">
+            {loopEnabled && !reducedMotion && (
+              <button type="button" onClick={() => { setAutoPaused((paused) => !paused); resumeAfterRef.current = 0; }} aria-label={autoPaused ? copy.play : copy.pause} aria-pressed={autoPaused} className="flex h-11 w-11 items-center justify-center rounded-xl border border-neutral-300 dark:border-neutral-700">
+                {autoPaused ? <Play size={18} /> : <Pause size={18} />}
+              </button>
+            )}
+            <button type="button" onClick={() => move(-1, true)} disabled={!loopEnabled && !canScrollLeft} aria-label={copy.prev} className="flex h-11 w-11 items-center justify-center rounded-xl border border-neutral-300 disabled:opacity-30 dark:border-neutral-700"><ChevronLeft size={20} /></button>
+            <button type="button" onClick={() => move(1, true)} disabled={!loopEnabled && !canScrollRight} aria-label={copy.next} className="flex h-11 w-11 items-center justify-center rounded-xl border border-neutral-300 disabled:opacity-30 dark:border-neutral-700"><ChevronRight size={20} /></button>
+          </div>
+        )}
+      </div>
+      <div
+        ref={trackRef}
+        onScroll={handleScroll}
+        onMouseEnter={() => { hoveredRef.current = true; }}
+        onMouseLeave={() => { hoveredRef.current = false; }}
+        onFocusCapture={() => { focusedRef.current = true; }}
+        onBlurCapture={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) focusedRef.current = false; }}
+        onPointerDown={pauseForInteraction}
+        className="flex snap-x snap-mandatory gap-3 overflow-x-auto pb-2 overscroll-x-contain"
+        aria-label={copy.title}
+        aria-live="off"
+      >
+        {visibleProducts.map((product, index) => {
+          const qty = cart[product.id] ?? 0;
+          const bundle = product.bundleConfig.enabled && product.bundleConfig.optionProductIds.length >= 2;
+          const soldOut = product.availabilityStatus !== "made_to_order" && typeof product.stock === "number" && product.stock <= 0 && !acceptOrdersWithoutStock;
+          const reachedLimit = product.availabilityStatus !== "made_to_order" && !acceptOrdersWithoutStock && typeof product.stock === "number" && qty >= product.stock;
+          return (
+            <article key={`${product.id}-${index < products.length ? "original" : "repeat"}`} className="relative w-[min(74vw,245px)] shrink-0 snap-start overflow-hidden rounded-2xl border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900 sm:w-[245px]">
+              <div className="absolute right-2 top-2 z-10">{<WishlistHeart id={product.id} wishlist={wishlist} language={language} next={storeHref} />}</div>
+              <button type="button" onClick={() => onOpen(product)} aria-label={`${copy.details}: ${product.name}`} className="relative block aspect-[3/2] w-full bg-neutral-100 dark:bg-neutral-800">
+                {product.imageUrl ? <img src={product.imageUrl} alt={product.name} loading="lazy" className="h-full w-full object-cover" /> : <span className="flex h-full items-center justify-center"><ImageIcon size={32} className="text-neutral-400" /></span>}
+                <span className="absolute left-2 top-2 rounded-full bg-orange-600 px-2.5 py-1 text-[11px] font-bold text-white">{copy.tag}</span>
+              </button>
+              <div className="space-y-2 p-3">
+                <button type="button" onClick={() => onOpen(product)} className="block min-h-12 w-full text-left">
+                  <span className="block truncate text-sm font-black">{product.name}</span>
+                  <span className="block text-base font-black">{formatMoneyMajor(product.price, currency, locale)}</span>
+                </button>
+                {qty > 0 && !bundle ? (
+                  <QuantitySelector qty={qty} onDecrease={() => onSetQuantity(product, qty - 1)} onIncrease={() => onSetQuantity(product, qty + 1)} disableIncrease={reachedLimit} />
+                ) : (
+                  <button type="button" disabled={soldOut} onClick={() => bundle ? onConfigureBundle(product) : onSetQuantity(product, qty + 1)} className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-neutral-950 px-3 py-2 text-sm font-black text-white disabled:opacity-40 dark:bg-white dark:text-neutral-950">
+                    {bundle ? <Gift size={16} /> : <Plus size={16} />}{soldOut ? copy.soldOut : bundle ? copy.configure : copy.add}
+                  </button>
+                )}
+              </div>
+            </article>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 function StoreProductGrid({
   title,
   help,
   products,
+  wishlist,
+  storeHref,
   cart,
   bundleSelections,
   offers,
@@ -4848,6 +5431,8 @@ function StoreProductGrid({
   title: string;
   help: string;
   products: Product[];
+  wishlist: CustomerWishlist;
+  storeHref: string;
   cart: Record<string, number>;
   bundleSelections: Record<string, BundleSelection>;
   offers: OfferDoc[];
@@ -4896,9 +5481,9 @@ function StoreProductGrid({
   })();
 
   return (
-    <section className="mt-8">
+    <section className="mt-7">
       <div className="mb-4">
-        <h2 className="text-2xl font-black sm:text-3xl">{title}</h2>
+        <h2 className="text-xl font-black sm:text-2xl">{title}</h2>
         {help && <p className="mt-2 text-sm text-neutral-600 dark:text-neutral-300">{help}</p>}
       </div>
 
@@ -4913,7 +5498,7 @@ function StoreProductGrid({
                 <div className="h-px flex-1 bg-neutral-200 dark:bg-neutral-800" />
               </div>
             )}
-            <div className="grid grid-cols-2 gap-3 sm:gap-5 lg:grid-cols-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-5 lg:grid-cols-3">
         {row.products.map((product) => {
           const qty = cart[product.id] ?? 0;
           const configurableBundle =
@@ -4947,26 +5532,6 @@ function StoreProductGrid({
             offerEvaluation?.offer.eligibleProductIds.includes(product.id)
               ? offerEvaluation
               : null;
-          const scheduledPriceDate = formatScheduledPriceDate(
-            product.scheduledPriceChange.startsAtMillis,
-            locale,
-            timeZone,
-          );
-          const scheduledNextPrice =
-            product.scheduledPriceChange.nextPriceMinor === null
-              ? ""
-              : formatMoneyMinor(
-                  product.scheduledPriceChange.nextPriceMinor,
-                  currency,
-                  locale,
-                );
-          const scheduledCountdown = product.scheduledPriceChange.showCountdown
-            ? scheduledPriceCountdownText(
-                language,
-                product.scheduledPriceChange.startsAtMillis,
-                now,
-              )
-            : "";
           const scheduledEvaluation = evaluateProductPrice({
             basePriceMinor: product.basePriceMinor,
             scheduledPriceChange: product.scheduledPriceChange,
@@ -4982,27 +5547,19 @@ function StoreProductGrid({
             <article
               key={product.id}
               className={[
-                "overflow-hidden rounded-2xl border bg-white shadow-sm transition dark:bg-neutral-900 sm:rounded-3xl",
-                madeToOrder
-                  ? "border-violet-200 dark:border-violet-900/60"
-                  : soldOut
-                    ? "border-red-300 bg-red-50/40 opacity-80 dark:border-red-900/70 dark:bg-red-950/10"
-                    : needsConfirmation
-                      ? "border-amber-400 bg-amber-50/40 dark:border-amber-700 dark:bg-amber-950/10"
-                    : productOfferEvaluation?.applicable
-                      ? "border-emerald-400 bg-emerald-50/30 shadow-emerald-100 dark:border-emerald-700 dark:bg-emerald-950/10"
-                      : productOfferEvaluation && productOfferEvaluation.eligibleQuantity > 0
-                        ? "border-orange-500 bg-orange-50/40 shadow-orange-100 dark:border-orange-700 dark:bg-orange-950/15"
-                        : highlightedOffer
-                          ? "border-orange-400 bg-orange-50/30 shadow-orange-100 dark:border-orange-700 dark:bg-orange-950/10"
-                          : lastUnits
-                        ? "border-amber-400 bg-amber-50/50 shadow-amber-100 dark:border-amber-700 dark:bg-amber-950/10"
-                        : "border-neutral-200 dark:border-neutral-800",
+                "relative overflow-hidden rounded-2xl border bg-white shadow-sm transition dark:bg-neutral-900 sm:rounded-3xl",
+                soldOut ? "border-neutral-200 opacity-60 dark:border-neutral-800" :
+                productOfferEvaluation?.applicable ? "border-emerald-400 dark:border-emerald-700" :
+                productOfferEvaluation && productOfferEvaluation.eligibleQuantity > 0 ? "border-orange-500 dark:border-orange-700" :
+                qty > 0 ? "border-emerald-500 ring-1 ring-emerald-500/30 dark:border-emerald-600" :
+                "border-neutral-200 dark:border-neutral-800",
               ].join(" ")}
             >
+              <div className="relative"><div className="absolute right-2 top-2 z-10"><WishlistHeart id={product.id} wishlist={wishlist} language={language} next={storeHref} /></div></div>
               <button
                 type="button"
                 onClick={() => onOpen(product)}
+                aria-label={`${text.productDetails}: ${product.name}`}
                 className="relative block aspect-[4/3] w-full bg-neutral-100 text-left dark:bg-neutral-800"
               >
                 {product.imageUrl ? (
@@ -5024,7 +5581,7 @@ function StoreProductGrid({
                   </span>
                 )}
 
-                {!madeToOrder && lastUnits && (
+                {!madeToOrder && lastUnits && !needsConfirmation && !soldOut && (
                   <span className="absolute left-3 top-3 rounded-full bg-amber-500 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-white shadow-lg">
                     {text.lastUnitsBadge.replace("{count}", String(product.stock))}
                   </span>
@@ -5042,14 +5599,14 @@ function StoreProductGrid({
                   </span>
                 )}
 
-                {highlightedOffer && !soldOut && (
-                  <span className="absolute right-3 top-3 rounded-full bg-orange-500 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-white shadow-lg">
+                {highlightedOffer && !soldOut && !madeToOrder && !lastUnits && !needsConfirmation && (
+                  <span title={highlightedOfferText} aria-label={highlightedOfferText} className="absolute right-3 top-3 rounded-full bg-orange-500 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-white shadow-lg">
                     {text.offerBadge}
                   </span>
                 )}
 
-                {product.scheduledPriceStatus === "upcoming" && scheduledEvaluation.shouldShowNotice && (
-                  <span className={`absolute bottom-3 left-3 rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-wider shadow-lg ${scheduledPresentation.badgeClassName}`}>
+                {product.scheduledPriceStatus === "upcoming" && scheduledEvaluation.shouldShowNotice && !madeToOrder && !lastUnits && !needsConfirmation && !soldOut && !highlightedOffer && (
+                  <span title={formatScheduledPriceDate(product.scheduledPriceChange.startsAtMillis, locale, timeZone)} className={`absolute bottom-3 left-3 rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-wider shadow-lg ${scheduledPresentation.badgeClassName}`} >
                     {scheduledPresentation.title}
                   </span>
                 )}
@@ -5070,7 +5627,7 @@ function StoreProductGrid({
                         ? "text-violet-700 dark:text-violet-300"
                         : "text-orange-700 dark:text-orange-300",
                     ].join(" ")}>{product.category}</p>
-                    <h3 className="mt-1 break-words text-sm font-black sm:text-lg">{product.name}</h3>
+                    <h3 className="mt-1 break-words text-base font-black sm:text-lg">{product.name}</h3>
                   </div>
                   <div className="shrink-0 text-right">
                     {product.scheduledPriceStatus === "active" && (
@@ -5078,38 +5635,18 @@ function StoreProductGrid({
                         {formatMoneyMajor(product.basePrice, currency, locale)}
                       </p>
                     )}
-                    <p className="text-sm font-black sm:text-lg">
+                    <p className="text-lg font-black sm:text-lg">
                       {formatMoneyMajor(product.price, currency, locale)}
                     </p>
                   </div>
                 </div>
 
                 {product.description && (
-                  <p className="mt-3 hidden text-sm text-neutral-600 dark:text-neutral-300 sm:line-clamp-3">
+                  <p className="mt-2 line-clamp-2 text-sm text-neutral-600 dark:text-neutral-300">
                     {product.description}
                   </p>
                 )}
 
-                {product.scheduledPriceStatus === "upcoming" && scheduledEvaluation.shouldShowNotice && (
-                  <div className={`mt-3 rounded-xl border px-3 py-3 ${scheduledPresentation.className}`}>
-                    <p className="text-[10px] font-black uppercase tracking-wider">
-                      {scheduledPresentation.title}
-                    </p>
-                    <p className="mt-1 text-xs font-black sm:text-sm">
-                      {language === "ja"
-                        ? `${scheduledPriceDate}までは現在価格。新価格：${scheduledNextPrice}`
-                        : language === "en"
-                          ? `Buy at today’s price until ${scheduledPriceDate}. New price: ${scheduledNextPrice}.`
-                          : `Aproveite o preço atual até ${scheduledPriceDate}. Novo preço: ${scheduledNextPrice}.`}
-                    </p>
-                    {product.scheduledPriceChange.message && (
-                      <p className="mt-1 text-xs font-semibold opacity-85">{product.scheduledPriceChange.message}</p>
-                    )}
-                    {scheduledEvaluation.shouldShowCountdown && scheduledCountdown && (
-                      <p className="mt-2 text-[11px] font-black uppercase tracking-wide">{scheduledCountdown}</p>
-                    )}
-                  </div>
-                )}
 
                 {madeToOrder && (
                   <p className="mt-3 rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-xs font-bold text-violet-700 dark:border-violet-900/50 dark:bg-violet-950/20 dark:text-violet-300">
@@ -5119,26 +5656,13 @@ function StoreProductGrid({
                   </p>
                 )}
 
-                {needsConfirmation && (
-                  <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold leading-relaxed text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-200">
-                    {text.stockConfirmationNotice} {productionLeadTimeNotice(language, product.productionLeadTimeDays)}
-                  </p>
-                )}
 
-                {!soldOut && productOfferEvaluation ? (
-                  <div className="mt-3">
-                    <OfferProgressBadge
-                      evaluation={productOfferEvaluation}
-                      productId={product.id}
-                      language={language}
-                    />
+
+                {!soldOut && productOfferEvaluation && productOfferEvaluation.eligibleQuantity > 0 && (
+                  <div className="mt-2">
+                    <OfferProgressBadge evaluation={productOfferEvaluation} productId={product.id} language={language} />
                   </div>
-                ) : highlightedOffer && !soldOut ? (
-                  <div className="mt-3 rounded-xl border border-orange-300 bg-orange-50 px-3 py-2 text-orange-900 dark:border-orange-800 dark:bg-orange-950/20 dark:text-orange-200">
-                    <p className="text-[10px] font-black uppercase tracking-wider">{text.offerBadge}</p>
-                    <p className="mt-0.5 text-xs font-black sm:text-sm">{highlightedOfferText}</p>
-                  </div>
-                ) : null}
+                )}
 
                 {configurableBundle && qty > 0 ? (
                   <div className="mt-3 space-y-2">
@@ -5167,7 +5691,7 @@ function StoreProductGrid({
                     onClick={() => configurableBundle ? onConfigureBundle(product) : onSetQuantity(product, 1)}
                     disabled={soldOut}
                     className={[
-                      "mt-3 inline-flex min-h-10 w-full items-center justify-center gap-1.5 rounded-xl px-3 py-2 text-xs font-bold text-white transition disabled:cursor-not-allowed disabled:opacity-40 sm:mt-5 sm:min-h-12 sm:gap-2 sm:px-4 sm:py-3 sm:text-base",
+                      "mt-4 inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl px-4 py-3 text-base font-bold text-white transition disabled:cursor-not-allowed disabled:opacity-40",
                       madeToOrder
                         ? "bg-violet-600 hover:bg-violet-700"
                         : "bg-neutral-950 hover:bg-neutral-800 dark:bg-white dark:text-neutral-950 dark:hover:bg-neutral-200",
@@ -5389,62 +5913,6 @@ function BundleConfiguratorDialog({
         </footer>
       </section>
     </div>
-  );
-}
-
-function StoreIdentityHero({ profile }: { profile: StoreProfile }) {
-  return (
-    <section
-      className="mb-4 overflow-hidden rounded-3xl border bg-white shadow-sm dark:bg-neutral-900"
-      style={{ borderColor: `${profile.primaryColor}66` }}
-    >
-      {profile.bannerUrl && (
-        <div className="h-28 overflow-hidden bg-neutral-100 sm:h-36 dark:bg-neutral-800">
-          <img
-            src={profile.bannerUrl}
-            alt=""
-            className="h-full w-full object-cover"
-          />
-        </div>
-      )}
-      <div className="flex items-start gap-4 p-4 sm:p-5">
-        {profile.logoUrl ? (
-          <img
-            src={profile.logoUrl}
-            alt={profile.name}
-            className="h-16 w-16 shrink-0 rounded-2xl border-2 border-white object-cover shadow-md dark:border-neutral-800"
-          />
-        ) : (
-          <span
-            className="flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl text-lg font-black text-white shadow-md"
-            style={{ backgroundColor: profile.primaryColor }}
-            aria-hidden="true"
-          >
-            {sellerInitials(profile.name)}
-          </span>
-        )}
-        <div className="min-w-0 flex-1">
-          <h1 className="break-words text-xl font-black sm:text-2xl">
-            {profile.name}
-          </h1>
-          {profile.description && (
-            <p className="mt-1 line-clamp-3 whitespace-pre-wrap text-sm font-medium leading-relaxed text-neutral-500 dark:text-neutral-400">
-              {profile.description}
-            </p>
-          )}
-          <div className="mt-3 flex gap-1.5" aria-hidden="true">
-            <span
-              className="h-1.5 w-14 rounded-full"
-              style={{ backgroundColor: profile.primaryColor }}
-            />
-            <span
-              className="h-1.5 w-8 rounded-full"
-              style={{ backgroundColor: profile.accentColor }}
-            />
-          </div>
-        </div>
-      </div>
-    </section>
   );
 }
 
@@ -5932,7 +6400,7 @@ function CartDrawer({
               disabled={items.length === 0}
               className="mt-5 inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-neutral-950 px-5 py-3 font-bold text-white transition hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-white dark:text-neutral-950 dark:hover:bg-neutral-200"
             >
-              {text.continue}
+              {text.cartNext}
               <ChevronRight size={18} />
             </button>
           </footer>
@@ -6216,6 +6684,10 @@ function ProductModal({
   language,
   onImageIndexChange,
   onClose,
+  cartQuantity,
+  acceptOrdersWithoutStock,
+  onSetQuantity,
+  onConfigureBundle,
 }: {
   product: Product;
   images: string[];
@@ -6230,6 +6702,10 @@ function ProductModal({
     value: number,
   ) => void;
   onClose: () => void;
+  cartQuantity: number;
+  acceptOrdersWithoutStock: boolean;
+  onSetQuantity: (product: Product, quantity: number) => void;
+  onConfigureBundle: (product: Product) => void;
 }) {
   const currentImage =
     images[imageIndex] ??
@@ -6264,6 +6740,16 @@ function ProductModal({
     language,
     scheduledEvaluation.noticePhase,
   );
+  const configurableBundle = product.bundleConfig.enabled && product.bundleConfig.optionProductIds.length >= 2;
+  const stockLimited = product.availabilityStatus !== "made_to_order"
+    && !acceptOrdersWithoutStock && typeof product.stock === "number";
+  const soldOut = stockLimited && (product.stock ?? 0) <= 0;
+  const atStockLimit = stockLimited && cartQuantity >= (product.stock ?? 0);
+  const cartCopy = language === "ja"
+    ? { add: "カートに追加", customize: "セットを選ぶ", edit: "セットを変更", soldOut: "売り切れ" }
+    : language === "en"
+      ? { add: "Add to cart", customize: "Customize kit", edit: "Edit kit", soldOut: "Sold out" }
+      : { add: "Adicionar ao carrinho", customize: "Montar kit", edit: "Editar kit", soldOut: "Esgotado" };
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4">
@@ -6410,6 +6896,22 @@ function ProductModal({
             </p>
           )}
         </div>
+        <footer className="sticky bottom-0 border-t border-neutral-200 bg-white p-4 dark:border-neutral-800 dark:bg-neutral-900">
+          {configurableBundle ? (
+            <button type="button" onClick={() => onConfigureBundle(product)} disabled={soldOut && cartQuantity === 0}
+              className="flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-neutral-950 px-4 text-base font-bold text-white disabled:opacity-40 dark:bg-white dark:text-neutral-950">
+              <Gift size={20} aria-hidden="true" />{soldOut && cartQuantity === 0 ? cartCopy.soldOut : cartQuantity > 0 ? cartCopy.edit : cartCopy.customize}
+            </button>
+          ) : cartQuantity > 0 ? (
+            <QuantitySelector qty={cartQuantity} onDecrease={() => onSetQuantity(product, cartQuantity - 1)}
+              onIncrease={() => onSetQuantity(product, cartQuantity + 1)} disableIncrease={atStockLimit || soldOut} />
+          ) : (
+            <button type="button" onClick={() => onSetQuantity(product, 1)} disabled={soldOut || atStockLimit}
+              className="flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-neutral-950 px-4 text-base font-bold text-white disabled:opacity-40 dark:bg-white dark:text-neutral-950">
+              <Plus size={20} aria-hidden="true" />{soldOut ? cartCopy.soldOut : cartCopy.add}
+            </button>
+          )}
+        </footer>
       </section>
     </div>
   );

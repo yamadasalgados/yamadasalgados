@@ -169,7 +169,7 @@ export default function StoreOrdersClient() {
           body: JSON.stringify({ sellerId, scope: "store" }),
         });
         if (!cancelled && response.ok) {
-          window.dispatchEvent(new Event("yamada:seller-order-badge-refresh"));
+          window.dispatchEvent(new Event("order-system:seller-order-badge-refresh"));
         }
       } catch (error) {
         console.warn("[StoreOrdersClient] Falha ao limpar badge:", error);

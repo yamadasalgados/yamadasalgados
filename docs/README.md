@@ -1,4 +1,4 @@
-# Yamada Landing — Estrutura
+# Order System — Estrutura
 
 - app/event/[id] -> Cliente (pedido)
 - app/seller/*   -> Dashboard do vendedor

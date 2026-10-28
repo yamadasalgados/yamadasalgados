@@ -454,7 +454,7 @@ const [messageSummaries, setMessageSummaries] = useState<Record<string, MessageS
           body: JSON.stringify({ sellerId: sellerUid, eventId: safeId, scope: "event" }),
         });
         if (!cancelled && response.ok) {
-          window.dispatchEvent(new Event("yamada:seller-order-badge-refresh"));
+          window.dispatchEvent(new Event("order-system:seller-order-badge-refresh"));
         }
       } catch (error) {
         console.warn("[EventPanel] Falha ao limpar badge do evento:", error);

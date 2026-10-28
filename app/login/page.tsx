@@ -1,725 +1,494 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { auth } from "@/app/lib/firebase";
 import {
+  GoogleAuthProvider,
+  RecaptchaVerifier,
   onAuthStateChanged,
   signInWithEmailAndPassword,
-  createUserWithEmailAndPassword,
-  updateProfile,
-  GoogleAuthProvider,
-  signInWithPopup,
-  RecaptchaVerifier,
   signInWithPhoneNumber,
+  signInWithPopup,
+  signOut,
   type ConfirmationResult,
   type User,
 } from "firebase/auth";
-import {
-  ensureUserProfile,
-  type EnsureResult,
-} from "@/app/lib/ensureUserProfile";
-import {
-  accessIsActive,
-} from "@/app/lib/access-control";
-import {
-  hasCompleteSellerOnboarding,
-} from "@/app/lib/seller-regional-profile";
+
 import { AppearanceButtons } from "@/app/_components/RoleNavigation";
-import { resolveAuthenticatedAccount } from "@/app/lib/auth-role-client";
+import PlatformLoginBrand from "@/app/_components/PlatformLoginBrand";
+import { resolveAuthenticatedAccount, type ResolvedAccount } from "@/app/lib/auth-role-client";
+import { auth } from "@/app/lib/firebase";
 import { useI18n } from "@/app/lib/i18n";
-import { PLATFORM_LOGO_PATH, PLATFORM_NAME } from "@/app/lib/platform-brand";
 
 type AuthMode = "email" | "google" | "phone";
-type Busy = null | "email" | "register" | "google" | "sendCode" | "verifyCode";
+type Busy = null | "email" | "google" | "sendCode" | "verifyCode";
 
-type Role = "admin" | "seller";
+function friendlyAuthError(error: unknown, fallback: string): string {
+  const code =
+    error && typeof error === "object" && "code" in error
+      ? String((error as { code?: unknown }).code || "")
+      : "";
 
-function friendlyAuthError(err: any, tt: (k: string, fallback: string) => string) {
-  const code = String(err?.code || "");
-
-  // Email/senha
-  if (code === "auth/invalid-credential") return tt("auth.err.invalidCredential", "E-mail ou senha inválidos.");
-  if (code === "auth/user-not-found") return tt("auth.err.userNotFound", "Usuário não encontrado. Crie uma conta.");
-  if (code === "auth/wrong-password") return tt("auth.err.wrongPassword", "Senha incorreta.");
-  if (code === "auth/too-many-requests") return tt("auth.err.tooManyRequests", "Muitas tentativas. Aguarde e tente novamente.");
-  if (code === "auth/invalid-email") return tt("auth.err.invalidEmail", "E-mail inválido.");
-  if (code === "auth/email-already-in-use") return tt("auth.err.emailInUse", "Esse e-mail já está em uso. Tente entrar.");
-  if (code === "auth/weak-password") return tt("auth.err.weakPassword", "Senha fraca. Use pelo menos 6 caracteres.");
-
-  // Google
-  if (code === "auth/popup-closed-by-user") return tt("auth.err.popupClosed", "Login cancelado.");
-  if (code === "auth/popup-blocked") return tt("auth.err.popupBlocked", "O navegador bloqueou o pop-up. Libere pop-ups e tente novamente.");
-  if (code === "auth/unauthorized-domain") return tt("auth.err.unauthorizedDomain", "Domínio não autorizado no Firebase Auth (Authorized domains).");
-  if (code === "auth/operation-not-allowed") return tt("auth.err.operationNotAllowed", "Método de login não habilitado no Firebase Auth.");
-
-  // Telefone
-  if (code === "auth/invalid-phone-number") return tt("auth.err.invalidPhone", "Número inválido. Use DDI, ex: +81...");
-  if (code === "auth/missing-phone-number") return tt("auth.err.missingPhone", "Informe o telefone.");
-  if (code === "auth/captcha-check-failed") return tt("auth.err.captchaFailed", "Falha no reCAPTCHA. Recarregue a página e tente novamente.");
-  if (code === "auth/code-expired") return tt("auth.err.codeExpired", "Código expirado. Peça um novo.");
-  if (code === "auth/invalid-verification-code") return tt("auth.err.invalidSmsCode", "Código inválido.");
-
-  return tt("auth.err.generic", "Não foi possível entrar. Tente novamente.");
+  switch (code) {
+    case "auth/invalid-credential":
+    case "auth/user-not-found":
+    case "auth/wrong-password":
+      return "E-mail ou senha inválidos.";
+    case "auth/too-many-requests":
+      return "Muitas tentativas. Aguarde e tente novamente.";
+    case "auth/invalid-email":
+      return "E-mail inválido.";
+    case "auth/popup-closed-by-user":
+      return "Login cancelado.";
+    case "auth/popup-blocked":
+      return "O navegador bloqueou a janela de login. Libere pop-ups e tente novamente.";
+    case "auth/unauthorized-domain":
+      return "Este domínio ainda não está autorizado para login.";
+    case "auth/operation-not-allowed":
+      return "Este método de login não está habilitado.";
+    case "auth/invalid-phone-number":
+    case "auth/missing-phone-number":
+      return "Informe o telefone com DDI, por exemplo +81...";
+    case "auth/captcha-check-failed":
+      return "Falha no reCAPTCHA. Recarregue a página e tente novamente.";
+    case "auth/code-expired":
+      return "O código expirou. Solicite um novo.";
+    case "auth/invalid-verification-code":
+      return "Código inválido.";
+    default:
+      return fallback;
+  }
 }
 
 export default function LoginPage() {
   const router = useRouter();
-  const { t, lang } = useI18n();
+  const { lang } = useI18n();
+  const language = lang === "en" || lang === "ja" ? lang : "pt";
 
-  // helper para evitar quebrar caso uma key não exista no dicionário
-  const tt = useCallback(
-    (key: string, fallback: string) => {
-      try {
-        const v = t(key);
-        return v === key ? fallback : v;
-      } catch {
-        return fallback;
-      }
-    },
-    [t]
+  const copy = useMemo(
+    () =>
+      language === "ja"
+        ? {
+            title: "販売者ログイン",
+            subtitle: "店舗・注文・イベント管理画面へログインします。",
+            email: "メールアドレス",
+            password: "パスワード",
+            enter: "ログイン",
+            entering: "確認中…",
+            google: "Googleでログイン",
+            sms: "SMS",
+            phone: "電話番号",
+            send: "コードを送信",
+            code: "確認コード",
+            verify: "確認してログイン",
+            unknown: "このアカウントには販売者アクセスが設定されていません。",
+            generic: "ログインできませんでした。もう一度お試しください。",
+            businessQuestion: "このシステムをお店で利用したいですか？",
+            requestAccess: "利用について問い合わせる",
+            customerAccess: "お客様はこちらからログイン",
+          }
+        : language === "en"
+          ? {
+              title: "Seller access",
+              subtitle: "Sign in to manage your store, orders and events.",
+              email: "Email",
+              password: "Password",
+              enter: "Sign in",
+              entering: "Checking…",
+              google: "Continue with Google",
+              sms: "SMS",
+              phone: "Phone number",
+              send: "Send code",
+              code: "Verification code",
+              verify: "Verify and sign in",
+              unknown: "Seller access has not been enabled for this account.",
+              generic: "Could not sign in. Please try again.",
+              businessQuestion: "Want to use the platform for your business?",
+              requestAccess: "Request access",
+              customerAccess: "Shopping? Customer sign in",
+            }
+          : {
+              title: "Acesso do vendedor",
+              subtitle: "Entre para gerenciar sua loja, pedidos e eventos.",
+              email: "E-mail",
+              password: "Senha",
+              enter: "Entrar",
+              entering: "Validando…",
+              google: "Continuar com Google",
+              sms: "SMS",
+              phone: "Telefone",
+              send: "Enviar código",
+              code: "Código de confirmação",
+              verify: "Confirmar e entrar",
+              unknown: "O acesso de vendedor ainda não está habilitado para esta conta.",
+              generic: "Não foi possível entrar. Tente novamente.",
+              businessQuestion: "Quer usar a plataforma no seu negócio?",
+              requestAccess: "Solicitar acesso",
+              customerAccess: "Vai comprar? Entrar como cliente",
+            },
+    [language],
   );
 
-  const portalCopy =
-    lang === "ja"
-      ? {
-          title: "注文ポータルにログイン",
-          subtitle: "アカウントを確認し、お客様・販売者・管理者の正しい画面へ自動的に移動します。",
-          customer: "お客様としてログイン・登録",
-          sellerHint: "新しい販売者アカウントを作成する場合は、下の「新規登録」を選択してください。",
-          unknown: "このアカウントの種類を確認できませんでした。お客様用または販売者用の登録画面を選択してください。",
-        }
-      : lang === "en"
-        ? {
-            title: "Order portal sign in",
-            subtitle: "We identify the account and send customers, sellers and admins to the correct area automatically.",
-            customer: "Customer sign in or registration",
-            sellerHint: "To create a new seller account, choose Create account below.",
-            unknown: "We could not identify this account type. Choose the customer or seller registration flow.",
-          }
-        : {
-            title: "Acesso ao portal de pedidos",
-            subtitle: "Identificamos a conta e direcionamos cliente, seller ou admin automaticamente para a área correta.",
-            customer: "Entrar ou cadastrar como cliente",
-            sellerHint: "Para criar uma nova conta de seller, selecione Criar conta abaixo.",
-            unknown: "Não foi possível identificar o tipo desta conta. Escolha o cadastro de cliente ou seller.",
-          };
-
-  const [checkingAuth, setCheckingAuth] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
+  const [checking, setChecking] = useState(true);
   const [mode, setMode] = useState<AuthMode>("email");
-  const [isRegister, setIsRegister] = useState(false);
-
-  const [name, setName] = useState("");
+  const [busy, setBusy] = useState<Busy>(null);
+  const [error, setError] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-
   const [phone, setPhone] = useState("");
   const [smsCode, setSmsCode] = useState("");
-  const confirmationResultRef = useRef<ConfirmationResult | null>(null);
-
-  const recaptchaVerifierRef = useRef<RecaptchaVerifier | null>(null);
   const [recaptchaReady, setRecaptchaReady] = useState(false);
+  const confirmationRef = useRef<ConfirmationResult | null>(null);
+  const recaptchaRef = useRef<RecaptchaVerifier | null>(null);
+  const routingRef = useRef(false);
+  const [existingUser, setExistingUser] = useState<User | null>(null);
+  const [existingAccount, setExistingAccount] = useState<ResolvedAccount | null>(null);
 
-  const [busy, setBusy] = useState<Busy>(null);
-  const didRedirectRef = useRef(false);
-
-  const canUsePhone = useMemo(() => {
-    if (typeof window === "undefined") return false;
-    return true;
-  }, []);
-
-  const resolveAfterLogin = useCallback(
-    async (
-      result: EnsureResult,
-    ) => {
-      const userData = result.userDoc;
-      const sellerData = result.sellerDoc;
-
-      const role: Role =
-        userData.role === "admin"
-          ? "admin"
-          : "seller";
-
-      if (role === "admin") {
-        router.replace("/admin");
-        return;
-      }
-
-      if (
-        !hasCompleteSellerOnboarding(
-          sellerData,
-        )
-      ) {
-        router.replace(
-          "/seller/onboarding",
-        );
-        return;
-      }
-
-      router.replace(
-        accessIsActive(
-          sellerData,
-          userData,
-        )
-          ? "/seller"
-          : "/seller/rent",
-      );
-    },
-    [router],
-  );
-
-  const goAfterLogin = useCallback(
-    async (user: User, createSellerIfUnknown = false) => {
-      if (didRedirectRef.current) return;
-      didRedirectRef.current = true;
+  const routeAuthenticatedUser = useCallback(
+    async (user: User) => {
+      if (routingRef.current) return;
+      routingRef.current = true;
 
       try {
-        const resolved = await resolveAuthenticatedAccount(user);
-
-        if (resolved.role !== "unknown") {
-          router.replace(resolved.destination || "/");
+        const resolved = await resolveAuthenticatedAccount(user, "/customer/orders");
+        if (resolved.role === "unknown") {
+          await signOut(auth).catch(() => undefined);
+          routingRef.current = false;
+          setChecking(false);
+          setError(copy.unknown);
           return;
         }
 
-        if (!createSellerIfUnknown) {
-          didRedirectRef.current = false;
-          setCheckingAuth(false);
-          setError(portalCopy.unknown);
-          return;
-        }
-
-        const result = await ensureUserProfile(user, lang);
-        await resolveAfterLogin(result);
-      } catch (e: any) {
-        didRedirectRef.current = false;
-        setCheckingAuth(false);
-        setError(
-          e?.message ||
-            tt(
-              "auth.err.validateProfile",
-              "Falha ao validar o tipo de conta no Firestore.",
-            ),
-        );
+        // Admin, seller e customer são identificados pelo backend. A interface
+        // desta página continua sendo exclusivamente apresentada como acesso do vendedor.
+        router.replace(resolved.destination || "/login");
+      } catch (routeError) {
+        routingRef.current = false;
+        setChecking(false);
+        setError(friendlyAuthError(routeError, copy.generic));
       }
     },
-    [lang, portalCopy.unknown, resolveAfterLogin, router, tt],
+    [copy.generic, copy.unknown, router],
   );
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, async (user) => {
-      if (user) {
-        await goAfterLogin(user);
-      } else {
-        setCheckingAuth(false);
+    let active = true;
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      if (!active || routingRef.current) return;
+      if (!user) {
+        setExistingUser(null);
+        setExistingAccount(null);
+        setChecking(false);
+        return;
       }
+      // Não redirecionar automaticamente uma sessão antiga entre login de
+      // cliente e vendedor. Exibir escolha explícita, evitando loops.
+      void resolveAuthenticatedAccount(user)
+        .then((resolved) => {
+          if (!active || routingRef.current) return;
+          setExistingUser(user);
+          setExistingAccount(resolved);
+        })
+        .catch((cause) => {
+          if (active && !routingRef.current) setError(friendlyAuthError(cause, copy.generic));
+        })
+        .finally(() => {
+          if (active && !routingRef.current) setChecking(false);
+        });
     });
-    return () => unsub();
-  }, [goAfterLogin]);
+    return () => { active = false; unsubscribe(); };
+  }, [copy.generic]);
+
+  const switchAccount = async () => {
+    setBusy("email");
+    try {
+      await signOut(auth);
+      routingRef.current = false;
+      setExistingUser(null);
+      setExistingAccount(null);
+      setPassword("");
+      setError("");
+    } catch (cause) {
+      setError(friendlyAuthError(cause, copy.generic));
+    } finally {
+      setBusy(null);
+      setChecking(false);
+    }
+  };
 
   useEffect(() => {
-    if (mode !== "phone") return;
-    if (!canUsePhone) return;
-    if (typeof window === "undefined") return;
+    if (mode !== "phone" || typeof window === "undefined") return;
 
-    if (recaptchaVerifierRef.current) {
+    if (recaptchaRef.current) {
       setRecaptchaReady(true);
       return;
     }
 
     try {
-      const verifier = new RecaptchaVerifier(auth, "recaptcha-container", {
+      recaptchaRef.current = new RecaptchaVerifier(auth, "seller-login-recaptcha", {
         size: "invisible",
       });
-      recaptchaVerifierRef.current = verifier;
       setRecaptchaReady(true);
-    } catch (e) {
-      console.error("Recaptcha init error:", e);
+    } catch {
       setRecaptchaReady(false);
     }
 
     return () => {
       try {
-        recaptchaVerifierRef.current?.clear();
+        recaptchaRef.current?.clear();
       } catch {}
-      recaptchaVerifierRef.current = null;
+      recaptchaRef.current = null;
       setRecaptchaReady(false);
     };
-  }, [mode, canUsePhone]);
+  }, [mode]);
 
-  const handleEmailLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const submitEmail = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
     if (busy) return;
-
-    setError(null);
+    setError("");
     setBusy("email");
-
     try {
-      const cred = await signInWithEmailAndPassword(auth, email.trim(), password);
-      await goAfterLogin(cred.user, true);
-    } catch (err: any) {
-      console.error(err);
-      setError(friendlyAuthError(err, tt));
-      didRedirectRef.current = false;
+      const credential = await signInWithEmailAndPassword(auth, email.trim(), password);
+      await routeAuthenticatedUser(credential.user);
+    } catch (submitError) {
+      routingRef.current = false;
+      setError(friendlyAuthError(submitError, copy.generic));
     } finally {
       setBusy(null);
     }
   };
 
-  const handleEmailRegister = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const submitGoogle = async () => {
     if (busy) return;
-
-    setError(null);
-
-    const nm = name.trim();
-    const em = email.trim();
-
-    if (!nm) {
-      setError(tt("login.err.missingName", "Informe seu nome."));
-      return;
-    }
-    if (!em) {
-      setError(tt("login.err.missingEmail", "Informe um e-mail."));
-      return;
-    }
-    if (password.length < 6) {
-      setError(tt("login.err.weakPassword", "Senha fraca. Use pelo menos 6 caracteres."));
-      return;
-    }
-    if (password !== confirmPassword) {
-      setError(tt("login.err.passwordMismatch", "As senhas não conferem."));
-      return;
-    }
-
-    setBusy("register");
-
-    try {
-      const cred = await createUserWithEmailAndPassword(auth, em, password);
-      try {
-        await updateProfile(cred.user, { displayName: nm });
-      } catch {
-        // se falhar, não bloqueia o cadastro
-      }
-      await goAfterLogin(cred.user, true);
-    } catch (err: any) {
-      console.error(err);
-      setError(friendlyAuthError(err, tt));
-      didRedirectRef.current = false;
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const handleGoogleLogin = async () => {
-    if (busy) return;
-
-    setError(null);
+    setError("");
     setBusy("google");
-
     try {
-      const provider = new GoogleAuthProvider();
-      const cred = await signInWithPopup(auth, provider);
-      await goAfterLogin(cred.user, true);
-    } catch (err: any) {
-      console.error(err);
-      setError(friendlyAuthError(err, tt));
-      didRedirectRef.current = false;
+      const credential = await signInWithPopup(auth, new GoogleAuthProvider());
+      await routeAuthenticatedUser(credential.user);
+    } catch (googleError) {
+      routingRef.current = false;
+      setError(friendlyAuthError(googleError, copy.generic));
     } finally {
       setBusy(null);
     }
   };
 
-  const handleSendCode = async () => {
-    if (busy) return;
-
-    setError(null);
-
-    if (!phone.trim()) {
-      setError(tt("login.err.missingPhone", "Informe um telefone com DDI, ex: +81..."));
+  const sendCode = async () => {
+    if (busy || !phone.trim()) return;
+    if (!recaptchaRef.current || !recaptchaReady) {
+      setError(copy.generic);
       return;
     }
 
-    if (!recaptchaVerifierRef.current || !recaptchaReady) {
-      setError(tt("login.err.recaptchaNotReady", "reCAPTCHA ainda não carregou. Aguarde um instante e tente novamente."));
-      return;
-    }
-
+    setError("");
     setBusy("sendCode");
-
     try {
-      const result = await signInWithPhoneNumber(auth, phone.trim(), recaptchaVerifierRef.current);
-      confirmationResultRef.current = result;
-      alert(tt("login.sms.sentAlert", "Código SMS enviado. Digite o código para finalizar o login."));
-    } catch (err: any) {
-      console.error(err);
-      setError(friendlyAuthError(err, tt));
+      confirmationRef.current = await signInWithPhoneNumber(
+        auth,
+        phone.trim(),
+        recaptchaRef.current,
+      );
+    } catch (sendError) {
+      setError(friendlyAuthError(sendError, copy.generic));
       try {
-        recaptchaVerifierRef.current?.clear();
+        recaptchaRef.current?.clear();
       } catch {}
-      recaptchaVerifierRef.current = null;
+      recaptchaRef.current = null;
       setRecaptchaReady(false);
     } finally {
       setBusy(null);
     }
   };
 
-  const handleVerifyCode = async () => {
-    if (busy) return;
-
-    setError(null);
-
-    if (!smsCode.trim()) {
-      setError(tt("login.err.missingSmsCode", "Digite o código SMS recebido."));
-      return;
-    }
-
-    if (!confirmationResultRef.current) {
-      setError(tt("login.err.sendCodeFirst", "Envie o código SMS primeiro."));
-      return;
-    }
-
+  const verifyCode = async () => {
+    if (busy || !confirmationRef.current || !smsCode.trim()) return;
+    setError("");
     setBusy("verifyCode");
-
     try {
-      const cred = await confirmationResultRef.current.confirm(smsCode.trim());
-      await goAfterLogin(cred.user, true);
-    } catch (err: any) {
-      console.error(err);
-      setError(friendlyAuthError(err, tt));
-      didRedirectRef.current = false;
+      const credential = await confirmationRef.current.confirm(smsCode.trim());
+      await routeAuthenticatedUser(credential.user);
+    } catch (verifyError) {
+      routingRef.current = false;
+      setError(friendlyAuthError(verifyError, copy.generic));
     } finally {
       setBusy(null);
     }
   };
 
-  // quando trocar o modo, limpa erros e estados de cadastro
-  useEffect(() => {
-    setError(null);
-    setBusy(null);
-    confirmationResultRef.current = null;
-    setSmsCode("");
-    if (mode !== "email") setIsRegister(false);
-    // não zera email/senha pra facilitar o usuário
-  }, [mode]);
-
-  if (checkingAuth) {
+  if (checking) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-neutral-50 text-neutral-950 dark:bg-neutral-950 dark:text-white">
-        <p className="text-sm font-bold text-neutral-600 dark:text-neutral-300">{t("common.loading")}</p>
+      <main className="flex min-h-screen items-center justify-center bg-neutral-50 text-sm font-bold text-neutral-500 dark:bg-neutral-950 dark:text-neutral-400">
+        {copy.entering}
       </main>
     );
   }
 
   return (
     <main className="relative flex min-h-screen items-center justify-center bg-neutral-50 px-4 py-8 text-neutral-950 dark:bg-neutral-950 dark:text-white">
-      <div className="absolute right-4 top-4 flex items-center gap-2 sm:right-6 sm:top-6">
+      <div className="absolute right-4 top-4 sm:right-6 sm:top-6">
         <AppearanceButtons />
       </div>
-      <div className="w-full max-w-sm space-y-6 rounded-3xl border border-neutral-200 bg-white px-6 py-8 shadow-xl dark:border-neutral-800 dark:bg-neutral-900 sm:px-8">
 
-        <div className="flex flex-col items-center gap-2">
-          <div className="h-20 w-20 rounded-full overflow-hidden bg-neutral-100 dark:bg-neutral-800 flex items-center justify-center">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={PLATFORM_LOGO_PATH} alt={PLATFORM_NAME} className="h-full w-full object-cover" />
-          </div>
-
-          <h1 className="text-xl font-black text-neutral-950 dark:text-white">
-            {mode === "email" && isRegister
-              ? tt("login.register.title", "Criar conta de seller")
-              : portalCopy.title}
-          </h1>
-
-          <p className="text-center text-xs font-medium text-neutral-600 dark:text-neutral-300">
-            {mode === "email" && isRegister
-              ? tt("login.register.subtitle", "Crie sua conta para acessar o painel de vendas.")
-              : portalCopy.subtitle}
+      <section className="w-full max-w-md rounded-3xl border border-neutral-200 bg-white px-6 py-8 shadow-xl dark:border-neutral-800 dark:bg-neutral-900 sm:px-8">
+        <div className="flex flex-col items-center text-center">
+          <PlatformLoginBrand />
+          <h1 className="mt-5 text-2xl font-black tracking-tight">{copy.title}</h1>
+          <p className="mt-2 max-w-xs text-sm font-medium leading-relaxed text-neutral-500 dark:text-neutral-400">
+            {copy.subtitle}
           </p>
         </div>
 
-        <div className="grid grid-cols-3 gap-2">
-          <button
-            type="button"
-            onClick={() => setMode("email")}
-            className={`rounded-full px-3 py-2 text-xs font-semibold border transition ${
-              mode === "email"
-                ? "bg-black text-white border-black"
-                : "bg-white text-neutral-800 border-neutral-300 hover:bg-neutral-50 dark:bg-neutral-900 dark:text-neutral-200 dark:border-neutral-700 dark:hover:bg-neutral-800"
-            }`}
-          >
-            {t("login.mode.email")}
-          </button>
+        <Link href="/customer/login" className="mt-6 flex min-h-11 w-full items-center justify-center rounded-xl border border-neutral-300 px-4 py-3 text-sm font-bold text-neutral-800 transition hover:bg-neutral-100 dark:border-neutral-700 dark:text-neutral-100 dark:hover:bg-neutral-800">
+          {copy.customerAccess}
+        </Link>
 
-          <button
-            type="button"
-            onClick={() => setMode("google")}
-            className={`rounded-full px-3 py-2 text-xs font-semibold border transition ${
-              mode === "google"
-                ? "bg-black text-white border-black"
-                : "bg-white text-neutral-800 border-neutral-300 hover:bg-neutral-50 dark:bg-neutral-900 dark:text-neutral-200 dark:border-neutral-700 dark:hover:bg-neutral-800"
-            }`}
-          >
-            {t("login.mode.google")}
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setMode("phone")}
-            className={`rounded-full px-3 py-2 text-xs font-semibold border transition ${
-              mode === "phone"
-                ? "bg-black text-white border-black"
-                : "bg-white text-neutral-800 border-neutral-300 hover:bg-neutral-50 dark:bg-neutral-900 dark:text-neutral-200 dark:border-neutral-700 dark:hover:bg-neutral-800"
-            }`}
-          >
-            {t("login.mode.sms")}
-          </button>
+        {existingUser && existingAccount ? (
+          <div className="mt-7 space-y-4 rounded-2xl border border-amber-300 bg-amber-50 p-4 dark:border-amber-900/70 dark:bg-amber-950/30">
+            <p className="font-black">Sessão já conectada</p>
+            <p className="break-all text-sm text-neutral-700 dark:text-neutral-300">{existingUser.email || existingUser.phoneNumber || "Conta Google/SMS"}</p>
+            <p className="text-sm text-neutral-700 dark:text-neutral-300">{existingAccount.role === "admin" ? "Você está conectado como administrador." : existingAccount.role === "seller" ? "Você está conectado como vendedor." : existingAccount.role === "customer" ? "Você está conectado como cliente." : "Sua conta ainda não possui perfil de vendedor."}</p>
+            {existingAccount.role === "admin" || existingAccount.role === "seller" ? (
+              <Link href={existingAccount.destination || "/login"} className="block rounded-xl bg-neutral-950 px-4 py-3 text-center text-sm font-black text-white dark:bg-white dark:text-neutral-950">Abrir meu painel</Link>
+            ) : (
+              <Link href="/customer/orders" className="block rounded-xl bg-neutral-950 px-4 py-3 text-center text-sm font-black text-white dark:bg-white dark:text-neutral-950">Ir para minha conta de cliente</Link>
+            )}
+            <button type="button" onClick={() => void switchAccount()} disabled={busy !== null} className="w-full rounded-xl border border-neutral-400 px-4 py-3 text-sm font-black dark:border-neutral-600">Sair desta conta e entrar com outra</button>
+          </div>
+        ) : <>
+        <div className="mt-7 grid grid-cols-3 gap-2">
+          {(["email", "google", "phone"] as const).map((item) => (
+            <button
+              key={item}
+              type="button"
+              onClick={() => {
+                setMode(item);
+                setError("");
+              }}
+              className={`rounded-xl border px-3 py-2.5 text-xs font-black transition ${
+                mode === item
+                  ? "border-neutral-950 bg-neutral-950 text-white dark:border-white dark:bg-white dark:text-neutral-950"
+                  : "border-neutral-200 bg-white text-neutral-600 hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800"
+              }`}
+            >
+              {item === "email" ? copy.email : item === "google" ? "Google" : copy.sms}
+            </button>
+          ))}
         </div>
 
-        {/* EMAIL: LOGIN / REGISTER */}
         {mode === "email" && (
-          <div className="space-y-4">
-            {!isRegister ? (
-              <form onSubmit={handleEmailLogin} className="space-y-4">
-                <div className="space-y-1">
-                  <label className="text-xs font-medium text-neutral-700 dark:text-neutral-200">{t("login.email")}</label>
-                  <input
-                    type="email"
-                    className="w-full border border-neutral-300 rounded-xl px-3 py-3 text-sm text-neutral-900 bg-white focus:outline-none focus:ring-2 focus:ring-orange-500 dark:border-neutral-700 dark:bg-neutral-950 dark:text-white"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    placeholder={tt("login.email.placeholder", "vendedor@exemplo.com")}
-                    autoComplete="email"
-                    required
-                  />
-                </div>
-
-                <div className="space-y-1">
-                  <label className="text-xs font-medium text-neutral-700 dark:text-neutral-200">{t("login.password")}</label>
-                  <input
-                    type="password"
-                    className="w-full border border-neutral-300 rounded-xl px-3 py-3 text-sm text-neutral-900 bg-white focus:outline-none focus:ring-2 focus:ring-orange-500 dark:border-neutral-700 dark:bg-neutral-950 dark:text-white"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder={tt("login.password.placeholder", "••••••••")}
-                    autoComplete="current-password"
-                    required
-                  />
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={busy === "email"}
-                  className="w-full inline-flex justify-center items-center px-4 py-2 rounded-full bg-black text-white text-sm font-medium hover:bg-neutral-800 disabled:opacity-60 disabled:cursor-not-allowed transition"
-                >
-                  {busy === "email" ? t("login.entering") : t("login.enter")}
-                </button>
-              </form>
-            ) : (
-              <form onSubmit={handleEmailRegister} className="space-y-4">
-                <div className="space-y-1">
-                  <label className="text-xs font-medium text-neutral-700 dark:text-neutral-200">
-                    {tt("login.register.name", "Nome")}
-                  </label>
-                  <input
-                    type="text"
-                    className="w-full border border-neutral-300 rounded-xl px-3 py-3 text-sm text-neutral-900 bg-white focus:outline-none focus:ring-2 focus:ring-orange-500 dark:border-neutral-700 dark:bg-neutral-950 dark:text-white"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    placeholder={tt("login.register.name.placeholder", "Seu nome")}
-                    autoComplete="name"
-                    required
-                  />
-                </div>
-
-                <div className="space-y-1">
-                  <label className="text-xs font-medium text-neutral-700 dark:text-neutral-200">{t("login.email")}</label>
-                  <input
-                    type="email"
-                    className="w-full border border-neutral-300 rounded-xl px-3 py-3 text-sm text-neutral-900 bg-white focus:outline-none focus:ring-2 focus:ring-orange-500 dark:border-neutral-700 dark:bg-neutral-950 dark:text-white"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    placeholder={tt("login.email.placeholder", "vendedor@exemplo.com")}
-                    autoComplete="email"
-                    required
-                  />
-                </div>
-
-                <div className="space-y-1">
-                  <label className="text-xs font-medium text-neutral-700 dark:text-neutral-200">
-                    {tt("login.register.password", "Senha")}
-                  </label>
-                  <input
-                    type="password"
-                    className="w-full border border-neutral-300 rounded-xl px-3 py-3 text-sm text-neutral-900 bg-white focus:outline-none focus:ring-2 focus:ring-orange-500 dark:border-neutral-700 dark:bg-neutral-950 dark:text-white"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder={tt("login.register.password.placeholder", "mínimo 6 caracteres")}
-                    autoComplete="new-password"
-                    required
-                  />
-                </div>
-
-                <div className="space-y-1">
-                  <label className="text-xs font-medium text-neutral-700 dark:text-neutral-200">
-                    {tt("login.register.confirmPassword", "Confirmar senha")}
-                  </label>
-                  <input
-                    type="password"
-                    className="w-full border border-neutral-300 rounded-xl px-3 py-3 text-sm text-neutral-900 bg-white focus:outline-none focus:ring-2 focus:ring-orange-500 dark:border-neutral-700 dark:bg-neutral-950 dark:text-white"
-                    value={confirmPassword}
-                    onChange={(e) => setConfirmPassword(e.target.value)}
-                    placeholder={tt("login.register.confirmPassword.placeholder", "repita a senha")}
-                    autoComplete="new-password"
-                    required
-                  />
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={busy === "register"}
-                  className="w-full inline-flex justify-center items-center px-4 py-2 rounded-full bg-black text-white text-sm font-medium hover:bg-neutral-800 disabled:opacity-60 disabled:cursor-not-allowed transition"
-                >
-                  {busy === "register"
-                    ? tt("login.register.creating", "Criando...")
-                    : tt("login.register.createBtn", "Criar conta")}
-                </button>
-
-                <p className="text-[11px] text-neutral-500 dark:text-neutral-400 text-center"></p>
-              </form>
-            )}
-
-            <div className="flex items-center justify-center pt-1">
-              <button
-                type="button"
-                onClick={() => {
-                  setError(null);
-                  setIsRegister((v) => !v);
-                }}
-                className="text-xs font-semibold text-orange-600 hover:text-orange-700"
-              >
-                {!isRegister
-                  ? tt("login.register.toggleToRegister", "Não tem conta? Criar agora")
-                  : tt("login.register.toggleToLogin", "Já tem conta? Entrar")}
-              </button>
-            </div>
-
-            <div className="flex items-center justify-center pt-1">
-              <span className="text-[11px] text-neutral-500 dark:text-neutral-400">
-                {tt("login.sessionHint", "Sua sessão será mantida neste dispositivo.")}
-              </span>
-            </div>
-          </div>
+          <form onSubmit={submitEmail} className="mt-6 space-y-4">
+            <label className="block space-y-1.5">
+              <span className="text-xs font-black">{copy.email}</span>
+              <input
+                type="email"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                autoComplete="email"
+                required
+                className="w-full rounded-xl border border-neutral-300 bg-transparent px-4 py-3 outline-none focus:border-neutral-950 dark:border-neutral-700 dark:focus:border-white"
+              />
+            </label>
+            <label className="block space-y-1.5">
+              <span className="text-xs font-black">{copy.password}</span>
+              <input
+                type="password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                autoComplete="current-password"
+                required
+                className="w-full rounded-xl border border-neutral-300 bg-transparent px-4 py-3 outline-none focus:border-neutral-950 dark:border-neutral-700 dark:focus:border-white"
+              />
+            </label>
+            <button
+              type="submit"
+              disabled={busy === "email"}
+              className="min-h-12 w-full rounded-xl bg-neutral-950 px-4 py-3 text-sm font-black text-white transition hover:bg-neutral-800 disabled:opacity-50 dark:bg-white dark:text-neutral-950 dark:hover:bg-neutral-200"
+            >
+              {busy === "email" ? copy.entering : copy.enter}
+            </button>
+          </form>
         )}
 
-        {/* GOOGLE */}
         {mode === "google" && (
-          <div className="space-y-3">
+          <div className="mt-6">
             <button
               type="button"
-              onClick={handleGoogleLogin}
+              onClick={() => void submitGoogle()}
               disabled={busy === "google"}
-              className="w-full inline-flex justify-center items-center px-4 py-2 rounded-full bg-black text-white text-sm font-medium hover:bg-neutral-800 disabled:opacity-60 disabled:cursor-not-allowed transition"
+              className="min-h-12 w-full rounded-xl bg-neutral-950 px-4 py-3 text-sm font-black text-white transition hover:bg-neutral-800 disabled:opacity-50 dark:bg-white dark:text-neutral-950 dark:hover:bg-neutral-200"
             >
-              {busy === "google" ? t("login.entering") : t("login.googleBtn")}
+              {busy === "google" ? copy.entering : copy.google}
             </button>
-
-            <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
-              {tt(
-                "login.google.domainHint",
-                "Se aparecer “domínio não autorizado”, adicione seu domínio em Firebase Auth → Authorized domains."
-              )}
-            </p>
-
-            <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
-              {tt(
-                "login.google.firstAccessHint",
-                "Se for seu primeiro acesso com Google, a conta será criada automaticamente."
-              )}
-            </p>
           </div>
         )}
 
-        {/* PHONE */}
         {mode === "phone" && (
-          <div className="space-y-3">
-            {!canUsePhone ? (
-              <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-3 text-xs text-neutral-700 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-300">
-                {t("login.phone.unsupported")}
-              </div>
-            ) : (
-              <div className="space-y-2 rounded-xl border border-neutral-200 p-3 bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-950">
-                <div className="space-y-1">
-                  <label className="text-[11px] font-medium text-neutral-700 dark:text-neutral-200">{t("login.phone.label")}</label>
+          <div className="mt-6 space-y-4">
+            <label className="block space-y-1.5">
+              <span className="text-xs font-black">{copy.phone}</span>
+              <input
+                type="tel"
+                value={phone}
+                onChange={(event) => setPhone(event.target.value)}
+                placeholder="+81..."
+                autoComplete="tel"
+                className="w-full rounded-xl border border-neutral-300 bg-transparent px-4 py-3 outline-none focus:border-neutral-950 dark:border-neutral-700 dark:focus:border-white"
+              />
+            </label>
+            <button
+              type="button"
+              onClick={() => void sendCode()}
+              disabled={busy === "sendCode" || !phone.trim()}
+              className="min-h-11 w-full rounded-xl border border-neutral-300 px-4 py-2.5 text-xs font-black disabled:opacity-50 dark:border-neutral-700"
+            >
+              {busy === "sendCode" ? copy.entering : copy.send}
+            </button>
+            {confirmationRef.current && (
+              <>
+                <label className="block space-y-1.5">
+                  <span className="text-xs font-black">{copy.code}</span>
                   <input
-                    type="tel"
-                    className="w-full rounded-xl border border-neutral-300 bg-white px-3 py-3 text-xs text-neutral-950 focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/70 dark:border-neutral-700 dark:bg-neutral-900 dark:text-white"
-                    value={phone}
-                    onChange={(e) => setPhone(e.target.value)}
-                    placeholder={t("login.phone.placeholder")}
-                    autoComplete="tel"
-                  />
-                </div>
-
-                <button
-                  type="button"
-                  onClick={handleSendCode}
-                  disabled={busy === "sendCode" || !phone.trim()}
-                  className="inline-flex min-h-10 w-full items-center justify-center rounded-xl border border-neutral-300 px-3 py-2 text-[11px] font-black text-neutral-800 transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-neutral-700 dark:text-neutral-100 dark:hover:bg-neutral-800"
-                >
-                  {busy === "sendCode" ? t("login.sms.sending") : t("login.sms.send")}
-                </button>
-
-                <div className="space-y-1 pt-1">
-                  <label className="text-[11px] font-medium text-neutral-700 dark:text-neutral-200">{t("login.sms.code")}</label>
-                  <input
-                    type="text"
-                    className="w-full rounded-xl border border-neutral-300 bg-white px-3 py-3 text-xs text-neutral-950 focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/70 dark:border-neutral-700 dark:bg-neutral-900 dark:text-white"
                     value={smsCode}
-                    onChange={(e) => setSmsCode(e.target.value)}
-                    placeholder={tt("login.sms.code.placeholder", "123456")}
+                    onChange={(event) => setSmsCode(event.target.value)}
                     inputMode="numeric"
+                    className="w-full rounded-xl border border-neutral-300 bg-transparent px-4 py-3 outline-none focus:border-neutral-950 dark:border-neutral-700 dark:focus:border-white"
                   />
-                </div>
-
+                </label>
                 <button
                   type="button"
-                  onClick={handleVerifyCode}
+                  onClick={() => void verifyCode()}
                   disabled={busy === "verifyCode" || !smsCode.trim()}
-                  className="inline-flex min-h-10 w-full items-center justify-center rounded-xl bg-green-600 px-3 py-2 text-[11px] font-black text-white transition hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="min-h-12 w-full rounded-xl bg-neutral-950 px-4 py-3 text-sm font-black text-white disabled:opacity-50 dark:bg-white dark:text-neutral-950"
                 >
-                  {busy === "verifyCode" ? t("login.sms.verifying") : t("login.sms.confirm")}
+                  {busy === "verifyCode" ? copy.entering : copy.verify}
                 </button>
-
-                <p className="text-[10px] text-neutral-500 dark:text-neutral-400">
-                  {tt(
-                    "login.phone.firstAccessHint",
-                    "Se for seu primeiro acesso por telefone, a conta será criada automaticamente."
-                  )}
-                </p>
-              </div>
+              </>
             )}
           </div>
         )}
 
-        <div className="rounded-2xl border border-neutral-200 bg-neutral-50 p-4 text-center dark:border-neutral-700 dark:bg-neutral-950/70">
-          <p className="text-xs font-medium text-neutral-600 dark:text-neutral-300">{portalCopy.sellerHint}</p>
+        </>}
+        {error && (
+          <p className="mt-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs font-bold text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300">
+            {error}
+          </p>
+        )}
+
+        <div className="mt-7 border-t border-neutral-200 pt-5 text-center dark:border-neutral-800">
+          <p className="text-xs font-medium text-neutral-500 dark:text-neutral-400">
+            {copy.businessQuestion}
+          </p>
           <Link
-            href="/customer/login?next=/customer/orders"
-            className="mt-3 inline-flex min-h-10 w-full items-center justify-center rounded-xl border border-neutral-300 bg-white px-4 py-2 text-xs font-black transition hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800"
+            href="/partners"
+            className="mt-2 inline-flex text-xs font-black text-neutral-900 underline-offset-4 hover:underline dark:text-white"
           >
-            {portalCopy.customer}
+            {copy.requestAccess}
           </Link>
         </div>
 
-        {error && (
-          <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-3 text-xs font-bold text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300">{error}</p>
-        )}
-
-        <div id="recaptcha-container" />
-      </div>
+        <div id="seller-login-recaptcha" />
+      </section>
     </main>
   );
 }

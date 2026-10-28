@@ -586,10 +586,10 @@ export default function OrderPrintDialog({
 
         <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6">
           <div
-            className="yamada-print-root mx-auto grid max-w-[680px] gap-5 md:grid-cols-2"
+            className="order-print-root mx-auto grid max-w-[680px] gap-5 md:grid-cols-2"
             data-print-mode={printMode}
           >
-            <article className="yamada-print-ticket yamada-print-production mx-auto w-full max-w-[320px] bg-white p-4 font-mono text-black shadow-lg print:shadow-none">
+            <article className="order-print-ticket order-print-production mx-auto w-full max-w-[320px] bg-white p-4 font-mono text-black shadow-lg print:shadow-none">
               <div className="text-center">
                 {productionReceipt.showLogo && logoUrl ? (
                   <img
@@ -688,7 +688,7 @@ export default function OrderPrintDialog({
               </p>
             </article>
 
-            <article className="yamada-print-ticket yamada-print-customer mx-auto w-full max-w-[320px] bg-white p-4 font-mono text-black shadow-lg print:shadow-none">
+            <article className="order-print-ticket order-print-customer mx-auto w-full max-w-[320px] bg-white p-4 font-mono text-black shadow-lg print:shadow-none">
               <div className="text-center">
                 {customerReceipt.showLogo && logoUrl ? (
                   <img
@@ -891,12 +891,12 @@ export default function OrderPrintDialog({
             visibility: hidden !important;
           }
 
-          .yamada-print-root,
-          .yamada-print-root * {
+          .order-print-root,
+          .order-print-root * {
             visibility: visible !important;
           }
 
-          .yamada-print-root {
+          .order-print-root {
             position: absolute !important;
             inset: 0 auto auto 0 !important;
             display: block !important;
@@ -908,7 +908,7 @@ export default function OrderPrintDialog({
             color: #000000 !important;
           }
 
-          .yamada-print-ticket {
+          .order-print-ticket {
             box-sizing: border-box !important;
             display: block !important;
             width: 74mm !important;
@@ -925,25 +925,25 @@ export default function OrderPrintDialog({
             -webkit-print-color-adjust: exact !important;
           }
 
-          .yamada-print-production {
+          .order-print-production {
             break-after: page !important;
             page-break-after: always !important;
           }
 
-          .yamada-print-customer {
+          .order-print-customer {
             break-after: auto !important;
             page-break-after: auto !important;
           }
 
-          .yamada-print-root[data-print-mode="production"]
-            .yamada-print-customer,
-          .yamada-print-root[data-print-mode="customer"]
-            .yamada-print-production {
+          .order-print-root[data-print-mode="production"]
+            .order-print-customer,
+          .order-print-root[data-print-mode="customer"]
+            .order-print-production {
             display: none !important;
           }
 
-          .yamada-print-root[data-print-mode="production"]
-            .yamada-print-production {
+          .order-print-root[data-print-mode="production"]
+            .order-print-production {
             break-after: auto !important;
             page-break-after: auto !important;
           }

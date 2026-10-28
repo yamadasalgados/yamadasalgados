@@ -95,8 +95,21 @@ async function ensureCustomer(
   const now = admin.firestore.Timestamp.now();
 
   return db.runTransaction(async (transaction) => {
+    // Read both identities in the transaction: role changes and customer creation
+    // cannot race and silently turn a seller login into a points wallet.
+    const identity = await transaction.get(db.collection("users").doc(decoded.uid));
+    if (identity.exists && (
+      identity.data()?.role === "admin" ||
+      identity.data()?.role === "seller" ||
+      (typeof identity.data()?.sellerId === "string" && identity.data()!.sellerId.trim() !== "")
+    )) {
+      throw new CustomerSessionError("Esta é uma conta de vendedor/administrador. Entre com uma conta de cliente para participar de pontos e indicações.", 403);
+    }
     const snapshot = await transaction.get(reference);
     const current = snapshot.data() ?? {};
+    if (current.accountStatus === "suspended" || current.accountStatus === "disabled") {
+      throw new CustomerSessionError("Esta conta está temporariamente indisponível.", 403);
+    }
     const name =
       cleanString(input.name, 120) ||
       cleanString(current.name ?? current.displayName, 120) ||
@@ -159,7 +172,7 @@ async function ensureCustomer(
         photoURL: photoURL || null,
         preferredLanguage,
         address,
-        accountStatus: current.accountStatus === "disabled" ? "disabled" : "active",
+        accountStatus: current.accountStatus === "active" || current.accountStatus == null ? "active" : current.accountStatus,
         updatedAt: now,
         lastLoginAt: now,
       },

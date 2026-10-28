@@ -22,7 +22,7 @@ const checks = [
   { label: "marca comercial fixa", pattern: /Yamada/ },
   { label: "domínio comercial fixo", pattern: /yamadasalgados\.vercel\.app/i },
   { label: "e-mail administrativo fixo", pattern: /admin@yamada\.app/i },
-  { label: "título antigo da plataforma", pattern: /Order System/i },
+  { label: "título antigo da plataforma", pattern: /Order Portal/i },
   { label: "lista fixa de administradores", pattern: /\bADMIN_EMAILS\b/ },
 ];
 

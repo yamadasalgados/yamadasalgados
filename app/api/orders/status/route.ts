@@ -4,6 +4,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAdminAuth, getAdminDb } from "@/app/lib/firebaseAdmin";
 import { isAdminOrOperationalSellerOwnerRecord } from "@/app/lib/seller-authorization";
 import { normalizeProductInventory } from "@/app/lib/inventory-schema";
+import { prepareFirstDeliveryReferral } from "@/app/lib/referral-rewards-server";
+import { prepareCustomerInterest } from "@/app/lib/customer-interests-server";
+import { REFERRAL_CAMPAIGN } from "@/app/lib/referral-campaign";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -374,6 +377,7 @@ function applyRewardTransition(params: {
   orderSource: OrderSource;
   eventId: string;
   now: admin.firestore.Timestamp;
+  referralCreditUids?: Set<string>;
 }): Record<string, unknown> {
   const {
     transaction,
@@ -396,7 +400,7 @@ function applyRewardTransition(params: {
   }
 
   const walletData = context.walletSnapshot?.data() ?? {};
-  const currentBalance = nonNegativeInteger(walletData.pointsBalance);
+  const currentBalance = nonNegativeInteger(walletData.pointsBalance) + (params.referralCreditUids?.has(context.customerUid) ? REFERRAL_CAMPAIGN.pointsPerPerson : 0);
   const storeName = cleanString(walletData.storeName, 160) || "Loja";
   const currency = orderData.currency === "BRL" || orderData.currency === "USD"
     ? orderData.currency
@@ -684,6 +688,17 @@ export async function POST(request: NextRequest) {
         walletSnapshot: rewardWalletSnapshot,
         movementSnapshot: rewardMovementSnapshot,
       };
+      // Read referral wallet/ledger/sentinel BEFORE any transaction writes. The
+      // returned closure only writes AFTER all product reads have finished.
+      const awardReferral = clean.status === "delivered"
+        ? await prepareFirstDeliveryReferral({ db, tx: transaction, orderData, sellerId: clean.sellerId, orderId: clean.orderId, orderPath: orderRef.path, now })
+        : null;
+
+      // Capture purchase interests only when the server transitions to delivered.
+      // The write callback is postponed until all reads in the transaction finish.
+      const recordInterest = clean.status === "delivered"
+        ? await prepareCustomerInterest({ db, tx: transaction, orderData,
+            sellerId: clean.sellerId, orderPath: orderRef.path, now }) : null;
 
       const usesInventoryItems = Array.isArray(orderData.inventoryItems) && orderData.inventoryItems.length > 0;
       const rawItems = usesInventoryItems
@@ -696,7 +711,10 @@ export async function POST(request: NextRequest) {
 
       // Pedidos anteriores ao 03B.3 continuam operáveis sem movimentar estoque.
       if (!inventoryManaged || items.length === 0) {
+        if (recordInterest) recordInterest();
+        const referralCreditUids = awardReferral ? awardReferral() : new Set<string>();
         const nextRewards = applyRewardTransition({
+          referralCreditUids,
           transaction,
           context: rewardContext,
           requestedStatus: clean.status,
@@ -995,7 +1013,10 @@ export async function POST(request: NextRequest) {
         clean.status === "ready" && shortages.length > 0
           ? "pending"
           : clean.status;
+      if (nextStatus === "delivered" && recordInterest) recordInterest();
+      const referralCreditUids = nextStatus === "delivered" && awardReferral ? awardReferral() : new Set<string>();
       const nextRewards = applyRewardTransition({
+        referralCreditUids,
         transaction,
         context: rewardContext,
         requestedStatus: nextStatus,

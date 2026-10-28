@@ -4,9 +4,6 @@ import type {
 import {
   doc,
   getDoc,
-  serverTimestamp,
-  setDoc,
-  writeBatch,
   type DocumentData,
 } from "firebase/firestore";
 
@@ -14,7 +11,6 @@ import {
   db,
 } from "@/app/lib/firebase";
 import {
-  defaultSellerAccess,
   effectivePlanLimits,
   getEffectiveSellerAccess,
   normalizeAccountStatus,
@@ -112,13 +108,10 @@ export async function ensureUserProfile(
     await getDoc(userReference);
 
   if (!userSnapshot.exists()) {
-    return createFirstProfile({
-      uid,
-      email,
-      displayName,
-      photoURL,
-      language: requested,
-    });
+    // Contas seller precisam ser provisionadas previamente pelo fluxo
+    // administrativo. Um usuário autenticado não pode transformar a própria
+    // conta em seller apenas acessando uma rota protegida.
+    throw new Error("SELLER_PROFILE_NOT_PROVISIONED");
   }
 
   const storedUser =
@@ -295,117 +288,8 @@ function buildCompatibilityUserView(
   };
 }
 
-async function createFirstProfile({
-  uid,
-  email,
-  displayName,
-  photoURL,
-  language,
-}: {
-  uid: string;
-  email: string | null;
-  displayName: string | null;
-  photoURL: string | null;
-  language: SupportedLanguage;
-}): Promise<EnsureResult> {
-  const timestamp =
-    serverTimestamp();
-
-  const newUser = {
-    schemaVersion: 2,
-    role: "seller" as const,
-    sellerId: uid,
-
-    email,
-    displayName,
-    photoURL,
-    uiLanguage: language,
-
-    accountStatus:
-      "active" as const,
-
-    createdAt: timestamp,
-    updatedAt: timestamp,
-    createdBy: uid,
-    updatedBy: uid,
-  };
-
-  const newSeller = {
-    schemaVersion: 2,
-    ownerUid: uid,
-
-    storeName: null,
-    storefrontLanguage: language,
-
-    regional: {
-      operatingCountry: null,
-      currency: null,
-      locale: null,
-      timeZone: null,
-    },
-
-    onboarding: {
-      complete: false,
-      completedAt: null,
-      schemaVersion: 2,
-    },
-
-    accountStatus:
-      "active" as const,
-
-    access:
-      defaultSellerAccess(),
-
-    limitsOverride: null,
-
-    regionId: null,
-    regionName: null,
-    whatsapp: null,
-    messengerId: null,
-    pickupLink: null,
-    pickupNote: null,
-
-    createdAt: timestamp,
-    updatedAt: timestamp,
-    createdBy: uid,
-    updatedBy: uid,
-  };
-
-  const batch = writeBatch(db);
-
-  batch.set(
-    doc(db, "users", uid),
-    newUser,
-  );
-
-  batch.set(
-    doc(db, "sellers", uid),
-    newSeller,
-  );
-
-  await batch.commit();
-
-  return {
-    userDoc: buildCompatibilityUserView(
-      newUser,
-      newSeller,
-      {
-        role: "seller",
-        sellerId: uid,
-        email,
-        displayName,
-        photoURL,
-        language,
-      },
-    ),
-    sellerDoc: newSeller,
-  };
-}
-
 async function readOrCreateSellerDocument({
   sellerId,
-  ownerUid,
-  language,
 }: {
   sellerId: string;
   ownerUid: string;
@@ -417,58 +301,11 @@ async function readOrCreateSellerDocument({
   const snapshot =
     await getDoc(reference);
 
-  if (snapshot.exists()) {
-    return snapshot.data();
+  if (!snapshot.exists()) {
+    // O documento do seller também precisa ser provisionado pelo backend/admin.
+    // Isso impede que uma conta autenticada incompleta crie um tenant por conta própria.
+    throw new Error("SELLER_DOCUMENT_NOT_PROVISIONED");
   }
 
-  const timestamp =
-    serverTimestamp();
-
-  const seller = {
-    schemaVersion: 2,
-    ownerUid,
-
-    storeName: null,
-    storefrontLanguage: language,
-
-    regional: {
-      operatingCountry: null,
-      currency: null,
-      locale: null,
-      timeZone: null,
-    },
-
-    onboarding: {
-      complete: false,
-      completedAt: null,
-      schemaVersion: 2,
-    },
-
-    accountStatus:
-      "active" as const,
-
-    access:
-      defaultSellerAccess(),
-
-    limitsOverride: null,
-
-    regionId: null,
-    regionName: null,
-    whatsapp: null,
-    messengerId: null,
-    pickupLink: null,
-    pickupNote: null,
-
-    createdAt: timestamp,
-    updatedAt: timestamp,
-    createdBy: ownerUid,
-    updatedBy: ownerUid,
-  };
-
-  await setDoc(
-    reference,
-    seller,
-  );
-
-  return seller;
+  return snapshot.data();
 }

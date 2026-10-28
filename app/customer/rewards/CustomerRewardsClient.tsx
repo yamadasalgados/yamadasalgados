@@ -6,6 +6,7 @@ import { useSearchParams } from "next/navigation";
 import { Suspense, useMemo } from "react";
 
 import BackLink from "@/app/_components/BackLink";
+import ReferralCampaignBanner from "@/app/_components/ReferralCampaignBanner";
 import FeedbackBanner from "@/app/_components/FeedbackBanner";
 import useCustomerRewards from "@/app/hooks/useCustomerRewards";
 import useCustomerSession from "@/app/hooks/useCustomerSession";
@@ -25,6 +26,7 @@ const COPY = {
     empty: "Ainda não há movimentações nesta carteira.",
     earn: "Pontos ganhos",
     eventEarn: "Pontos de vendas do evento",
+    referralBonus: "Bônus de indicação",
     gift: "Pontos recebidos de presente",
     redeem: "Pontos usados",
     refund: "Estorno de pontos",
@@ -51,6 +53,7 @@ const COPY = {
     empty: "There are no wallet transactions yet.",
     earn: "Points earned",
     eventEarn: "Event sales points",
+    referralBonus: "Referral bonus",
     gift: "Gifted points",
     redeem: "Points used",
     refund: "Points refund",
@@ -77,6 +80,7 @@ const COPY = {
     empty: "ポイント履歴はまだありません。",
     earn: "ポイント獲得",
     eventEarn: "イベント販売ポイント",
+    referralBonus: "友達紹介ボーナス",
     gift: "プレゼントポイント",
     redeem: "ポイント使用",
     refund: "ポイント返還",
@@ -156,6 +160,7 @@ function Inner() {
           </div>
           <p className="mt-5 rounded-xl bg-black/15 px-4 py-3 text-xs font-bold text-violet-50">{text.rule}</p>
         </section>
+        <ReferralCampaignBanner sellerId={sellerId} embedded />
 
         <section className="rounded-3xl border border-neutral-200 bg-white p-5 shadow-sm dark:border-neutral-800 dark:bg-neutral-900 sm:p-7">
           <h2 className="text-lg font-black">{text.history}</h2>
@@ -172,6 +177,7 @@ function Inner() {
                   transaction.type === "earn" ||
                   transaction.type === "event_earn" ||
                   transaction.type === "gift" ||
+                  transaction.type === "referral_bonus" ||
                   transaction.type === "refund";
                 const label =
                   transaction.type === "earn"

@@ -66,6 +66,8 @@ type Props = {
   setProductionLeadTimeDays: (value: string) => void;
   status: ProductStatus;
   setStatus: (value: ProductStatus) => void;
+  featuredInStore: boolean;
+  setFeaturedInStore: (value: boolean) => void;
   storefrontSubgroup: string;
   setStorefrontSubgroup: (value: string) => void;
   storefrontSubgroupOrder: string;
@@ -134,7 +136,7 @@ export default function ProductForm(props: Props) {
     localDeliveryEligible, setLocalDeliveryEligible, postalEligible, setPostalEligible,
     shippingWeightGrams, setShippingWeightGrams, productionLeadTimeDays,
     setProductionLeadTimeDays, status, setStatus,
-    storefrontSubgroup, setStorefrontSubgroup, storefrontSubgroupOrder,
+    featuredInStore, setFeaturedInStore, storefrontSubgroup, setStorefrontSubgroup, storefrontSubgroupOrder,
     setStorefrontSubgroupOrder, storefrontProductOrder, setStorefrontProductOrder,
     availableProducts, currentProductId, productType, setProductType, mixedPackEligible, setMixedPackEligible,
     mixedPackUnits, setMixedPackUnits, mixedPackOptionProductIds, setMixedPackOptionProductIds,
@@ -359,6 +361,13 @@ export default function ProductForm(props: Props) {
         <h3 className="text-sm font-black">{storefrontCopy.title}</h3>
         <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">{storefrontCopy.help}</p>
       </div>
+      <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-3 dark:border-amber-900 dark:bg-amber-950/20">
+        <input type="checkbox" checked={featuredInStore} disabled={disabled} onChange={(event) => setFeaturedInStore(event.target.checked)} className="mt-1 h-5 w-5 shrink-0 accent-orange-600" />
+        <span>
+          <span className="block text-sm font-black">{lang === "ja" ? "トップページで注目商品にする" : lang === "en" ? "Feature this product at the top of the store" : "Destacar este produto no topo da loja"}</span>
+          <span className="mt-1 block text-xs text-neutral-600 dark:text-neutral-300">{lang === "ja" ? "選択した公開商品だけを横スクロールで表示します。未選択ならセクションは表示されません。" : lang === "en" ? "Only selected, publicly available products appear in the highlights carousel. Without any selections, this section stays hidden." : "Somente produtos marcados e disponíveis aparecem no carrossel. Sem destaques, a seção fica oculta."}</span>
+        </span>
+      </label>
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="space-y-1 sm:col-span-2">
           <label htmlFor="product-storefront-subgroup" className="text-xs font-black uppercase tracking-wider">{storefrontCopy.subgroup}</label>

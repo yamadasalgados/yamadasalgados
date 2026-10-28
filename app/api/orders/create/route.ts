@@ -128,6 +128,7 @@ type OrderErrorCode =
   | "IDEMPOTENCY_CONFLICT"
   | "TOO_MANY_REQUESTS"
   | "AUTH_REQUIRED"
+  | "ACCOUNT_DISABLED"
   | "REWARDS_UNAVAILABLE"
   | "INSUFFICIENT_POINTS";
 
@@ -1154,6 +1155,10 @@ export async function POST(request: NextRequest) {
       const markerSnapshot = snapshots[cursor++];
       const sellerSnapshot = snapshots[cursor++];
       const customerSnapshot = customerRef ? snapshots[cursor++] : null;
+      if (customerSnapshot?.exists &&
+          (customerSnapshot.data()?.accountStatus === "suspended" || customerSnapshot.data()?.accountStatus === "disabled")) {
+        throw new OrderError("ACCOUNT_DISABLED", "Esta conta não está disponível para encomendas.", 403);
+      }
       const rewardWalletSnapshot = rewardWalletRef ? snapshots[cursor++] : null;
       const eventSnapshot = eventRef ? snapshots[cursor++] : null;
       const orderItemSnapshots = orderItemRefs.map(() => snapshots[cursor++]);
@@ -2496,7 +2501,7 @@ export async function POST(request: NextRequest) {
           email: clean.customer.email || customerIdentity.email || null,
           preferredLanguage: clean.language,
           address: customerAddress,
-          accountStatus: customerData.accountStatus === "disabled" ? "disabled" : "active",
+          accountStatus: customerData.accountStatus === "active" || customerData.accountStatus == null ? "active" : customerData.accountStatus,
           rewards: customerRewards,
           orderCount: admin.firestore.FieldValue.increment(1),
           lastOrderId: orderRef.id,

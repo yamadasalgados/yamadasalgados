@@ -5,6 +5,7 @@ import {
   Check,
   CheckCircle2,
   Clock3,
+  Copy,
   ExternalLink,
   Gift,
   Loader2,
@@ -46,6 +47,7 @@ const COPY = {
     loginTitle: "Entre para acompanhar este pedido",
     login: "Entrar ou cadastrar",
     orderNumber: "Número do pedido",
+    copied: "Copiado!",
     received: "Pedido recebido",
     receivedHelp: "O vendedor recebeu sua solicitação.",
     production: "Em preparação",
@@ -106,6 +108,7 @@ const COPY = {
     loginTitle: "Sign in to track this order",
     login: "Sign in or register",
     orderNumber: "Order number",
+    copied: "Copied!",
     received: "Order received",
     receivedHelp: "The seller received your request.",
     production: "In preparation",
@@ -166,6 +169,7 @@ const COPY = {
     loginTitle: "ログインして注文を確認",
     login: "ログイン・新規登録",
     orderNumber: "注文番号",
+    copied: "コピー完了",
     received: "注文受付",
     receivedHelp: "販売者が注文を受け付けました。",
     production: "準備中",
@@ -270,6 +274,7 @@ export default function CustomerOrderDetailClient({ referenceId }: Props) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
+  const [copiedId, setCopiedId] = useState(false);
 
   const refresh = useCallback(async (soft = false) => {
     if (!session.registered || !referenceId) return;
@@ -306,6 +311,15 @@ export default function CustomerOrderDetailClient({ referenceId }: Props) {
     };
   }, [refresh, session.loading, session.registered]);
 
+  const copyOrderId = useCallback(async () => {
+    if (!order?.orderId || typeof navigator === "undefined" || !navigator.clipboard) return;
+    try {
+      await navigator.clipboard.writeText(order.orderId);
+      setCopiedId(true);
+      window.setTimeout(() => setCopiedId(false), 2000);
+    } catch {}
+  }, [order?.orderId]);
+
   const stage = useMemo(() => (order ? currentStage(order) : "received"), [order]);
   const stages: Array<{ id: Stage; label: string; help: string }> = [
     { id: "received", label: text.received, help: text.receivedHelp },
@@ -313,7 +327,8 @@ export default function CustomerOrderDetailClient({ referenceId }: Props) {
     { id: "ready", label: text.ready, help: text.readyHelp },
     { id: "delivered", label: text.delivered, help: text.deliveredHelp },
   ];
-  const stageIndex = stages.findIndex((item) => item.id === stage);
+  const stageIndex = Math.max(0, stages.findIndex((item) => item.id === stage));
+  const activeStageItem = stages[stageIndex] || stages[0];
 
   if (session.loading) {
     return (
@@ -326,8 +341,8 @@ export default function CustomerOrderDetailClient({ referenceId }: Props) {
   if (!session.registered) {
     return (
       <main className="min-h-screen bg-neutral-50 p-4 text-neutral-950 dark:bg-neutral-950 dark:text-white">
-        <section className="mx-auto mt-20 max-w-lg rounded-3xl border border-neutral-200 bg-white p-8 text-center shadow-sm dark:border-neutral-800 dark:bg-neutral-900">
-          <UserRound className="mx-auto" size={44} />
+        <section className="mx-auto mt-16 max-w-lg rounded-3xl border border-neutral-200 bg-white p-8 text-center shadow-sm dark:border-neutral-800 dark:bg-neutral-900">
+          <UserRound className="mx-auto text-neutral-400" size={44} />
           <h1 className="mt-5 text-2xl font-black">{text.loginTitle}</h1>
           <Link
             href={`/customer/login?next=${encodeURIComponent(`/customer/orders/${referenceId}`)}`}
@@ -341,8 +356,8 @@ export default function CustomerOrderDetailClient({ referenceId }: Props) {
   }
 
   return (
-    <main className="min-h-screen bg-neutral-50 px-4 py-6 text-neutral-950 dark:bg-neutral-950 dark:text-white sm:px-6">
-      <div className="mx-auto max-w-4xl space-y-5">
+    <main className="min-h-screen bg-neutral-50 px-4 pb-28 pt-4 text-neutral-950 dark:bg-neutral-950 dark:text-white sm:px-6 sm:py-6">
+      <div className="mx-auto max-w-4xl space-y-4 sm:space-y-5">
         <PageHeader
           back={<BackLink href="/customer/orders" label={text.back} />}
           title={text.title}
@@ -351,7 +366,7 @@ export default function CustomerOrderDetailClient({ referenceId }: Props) {
               type="button"
               onClick={() => void refresh(true)}
               disabled={refreshing}
-              className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-neutral-300 bg-white px-4 py-2 text-xs font-black transition hover:bg-neutral-50 disabled:opacity-60 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800"
+              className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-neutral-300 bg-white px-4 py-2 text-xs font-black transition hover:bg-neutral-50 active:scale-[0.98] disabled:opacity-60 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800"
             >
               <RefreshCw className={refreshing ? "animate-spin" : ""} size={15} /> {text.refresh}
             </button>
@@ -367,31 +382,43 @@ export default function CustomerOrderDetailClient({ referenceId }: Props) {
           <FeedbackBanner tone="error" role="alert">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <span>{error || text.error}</span>
-              <button type="button" onClick={() => void refresh()} className="rounded-xl bg-red-600 px-4 py-2 text-xs font-black text-white">
+              <button type="button" onClick={() => void refresh()} className="min-h-11 rounded-xl bg-red-600 px-4 py-2 text-xs font-black text-white">
                 {text.retry}
               </button>
             </div>
           </FeedbackBanner>
         ) : (
           <>
-            <section className="rounded-3xl border border-neutral-200 bg-white p-5 shadow-sm dark:border-neutral-800 dark:bg-neutral-900">
+            <section className="rounded-3xl border border-neutral-200 bg-white p-4 shadow-sm dark:border-neutral-800 dark:bg-neutral-900 sm:p-6">
               <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                <div>
-                  <p className="text-[11px] font-black uppercase tracking-widest text-neutral-400">{text.orderNumber}</p>
-                  <p className="mt-1 break-all font-mono text-lg font-black">#{order.orderId}</p>
-                  <h2 className="mt-3 text-2xl font-black">{order.eventTitle || order.storeName}</h2>
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-[11px] font-black uppercase tracking-widest text-neutral-400">
+                      {text.orderNumber}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => void copyOrderId()}
+                      className="inline-flex min-h-8 items-center gap-1.5 rounded-lg bg-neutral-100 px-2.5 py-1 font-mono text-xs font-black text-neutral-800 transition hover:bg-neutral-200 active:scale-95 dark:bg-neutral-800 dark:text-neutral-200"
+                    >
+                      #{order.orderId}
+                      <Copy size={12} className="text-neutral-400" />
+                      {copiedId && <span className="font-sans text-[10px] text-emerald-600 dark:text-emerald-400">{text.copied}</span>}
+                    </button>
+                  </div>
+                  <h2 className="mt-2 text-xl font-black sm:text-2xl">{order.eventTitle || order.storeName}</h2>
                   <p className="mt-1 text-xs font-bold text-neutral-400">
                     {order.createdAt ? new Intl.DateTimeFormat(locale, { dateStyle: "long", timeStyle: "short" }).format(new Date(order.createdAt)) : "—"}
                   </p>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {order.eventHref && (
-                    <Link href={order.eventHref} className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-neutral-300 px-3 py-2 text-xs font-black dark:border-neutral-700">
+                    <Link href={order.eventHref} className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-neutral-300 px-3.5 py-2 text-xs font-black transition hover:bg-neutral-50 active:scale-[0.98] dark:border-neutral-700">
                       <ExternalLink size={15} /> {text.event}
                     </Link>
                   )}
                   {order.storeHref && (
-                    <Link href={order.storeHref} className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-neutral-300 px-3 py-2 text-xs font-black dark:border-neutral-700">
+                    <Link href={order.storeHref} className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-neutral-300 px-3.5 py-2 text-xs font-black transition hover:bg-neutral-50 active:scale-[0.98] dark:border-neutral-700">
                       <Store size={15} /> {text.store}
                     </Link>
                   )}
@@ -399,57 +426,103 @@ export default function CustomerOrderDetailClient({ referenceId }: Props) {
               </div>
 
               {order.status === "cancelled" ? (
-                <div className="mt-6 rounded-2xl border border-red-200 bg-red-50 p-5 text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300">
+                <div className="mt-5 rounded-2xl border border-red-200 bg-red-50 p-4 text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300">
                   <div className="flex items-center gap-3">
-                    <XCircle size={26} />
+                    <XCircle size={26} className="shrink-0" />
                     <div>
                       <p className="font-black">{text.cancelled}</p>
-                      <p className="mt-1 text-sm">{text.cancelledHelp}</p>
+                      <p className="mt-0.5 text-xs sm:text-sm">{text.cancelledHelp}</p>
                     </div>
                   </div>
                 </div>
               ) : (
-                <div className="mt-7 grid gap-3 md:grid-cols-4">
-                  {stages.map((item, index) => {
-                    const complete = index <= stageIndex;
-                    const active = index === stageIndex;
-                    return (
-                      <div key={item.id} className={`rounded-2xl border p-4 ${complete ? "border-emerald-300 bg-emerald-50 dark:border-emerald-900/60 dark:bg-emerald-950/30" : "border-neutral-200 bg-neutral-50 dark:border-neutral-800 dark:bg-neutral-950/50"}`}>
-                        <div className={`flex h-8 w-8 items-center justify-center rounded-full ${complete ? "bg-emerald-600 text-white" : "bg-neutral-200 text-neutral-500 dark:bg-neutral-800"}`}>
-                          {complete ? <Check size={17} /> : index + 1}
+                <div className="mt-6 space-y-4">
+                  {/* Stepper horizontal compacto para mobile */}
+                  <div className="grid grid-cols-4 gap-2">
+                    {stages.map((item, index) => {
+                      const complete = index <= stageIndex;
+                      const active = index === stageIndex;
+                      return (
+                        <div key={item.id} className="flex flex-col items-center text-center">
+                          <div className="flex w-full items-center">
+                            <span
+                              className={`h-1 flex-1 rounded-full ${
+                                index === 0 ? "bg-transparent" : index <= stageIndex ? "bg-emerald-500" : "bg-neutral-200 dark:bg-neutral-800"
+                              }`}
+                            />
+                            <div
+                              className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-xs font-black transition ${
+                                active
+                                  ? "bg-emerald-600 text-white ring-4 ring-emerald-500/20"
+                                  : complete
+                                    ? "bg-emerald-600 text-white"
+                                    : "bg-neutral-200 text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400"
+                              }`}
+                            >
+                              {complete ? <Check size={16} /> : index + 1}
+                            </div>
+                            <span
+                              className={`h-1 flex-1 rounded-full ${
+                                index === stages.length - 1 ? "bg-transparent" : index < stageIndex ? "bg-emerald-500" : "bg-neutral-200 dark:bg-neutral-800"
+                              }`}
+                            />
+                          </div>
+                          <p
+                            className={`mt-2 line-clamp-2 text-[11px] font-black leading-tight sm:text-xs ${
+                              active
+                                ? "text-emerald-700 dark:text-emerald-300"
+                                : complete
+                                  ? "text-neutral-900 dark:text-white"
+                                  : "text-neutral-400"
+                            }`}
+                          >
+                            {item.label}
+                          </p>
                         </div>
-                        <p className={`mt-3 text-sm font-black ${active ? "text-emerald-700 dark:text-emerald-300" : ""}`}>{item.label}</p>
-                        <p className="mt-1 text-[11px] leading-relaxed text-neutral-500">{item.help}</p>
-                      </div>
-                    );
-                  })}
+                      );
+                    })}
+                  </div>
+
+                  {/* Banner focado apenas na etapa atual para evitar ruído visual */}
+                  <div className="rounded-2xl border border-emerald-200 bg-emerald-50/80 px-4 py-3 text-center dark:border-emerald-900/50 dark:bg-emerald-950/30">
+                    <p className="text-xs font-black text-emerald-900 dark:text-emerald-200">
+                      {activeStageItem.label}
+                    </p>
+                    <p className="mt-0.5 text-xs font-medium text-emerald-800/80 dark:text-emerald-300/80">
+                      {activeStageItem.help}
+                    </p>
+                  </div>
                 </div>
               )}
 
-              <p className="mt-4 text-right text-[10px] font-bold uppercase tracking-wider text-neutral-400">
+              <p className="mt-3 text-right text-[10px] font-bold uppercase tracking-wider text-neutral-400">
                 {text.updated}: {order.updatedAt ? new Intl.DateTimeFormat(locale, { dateStyle: "short", timeStyle: "short" }).format(new Date(order.updatedAt)) : "—"}
               </p>
             </section>
 
-            <section className="rounded-3xl border border-neutral-200 bg-white p-5 shadow-sm dark:border-neutral-800 dark:bg-neutral-900">
-              <h2 className="flex items-center gap-2 text-lg font-black"><ShoppingBag size={20} /> {text.items}</h2>
+            <section className="rounded-3xl border border-neutral-200 bg-white p-4 shadow-sm dark:border-neutral-800 dark:bg-neutral-900 sm:p-6">
+              <h2 className="flex items-center gap-2 text-base font-black sm:text-lg">
+                <ShoppingBag size={19} /> {text.items}
+              </h2>
               <div className="mt-4 divide-y divide-neutral-100 dark:divide-neutral-800">
                 {order.items.map((item) => (
-                  <div key={`${item.productId}-${item.name}`} className="flex gap-4 py-4 first:pt-0 last:pb-0">
+                  <div key={`${item.productId}-${item.name}`} className="flex gap-3.5 py-3.5 first:pt-0 last:pb-0">
                     {item.imageUrl ? (
-                      <img src={item.imageUrl} alt="" className="h-16 w-16 shrink-0 rounded-xl object-cover" />
+                      <img src={item.imageUrl} alt="" className="h-14 w-14 shrink-0 rounded-xl object-cover sm:h-16 sm:w-16" />
                     ) : (
-                      <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-xl bg-neutral-100 dark:bg-neutral-800"><PackageCheck size={22} /></div>
+                      <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-neutral-100 dark:bg-neutral-800 sm:h-16 sm:w-16">
+                        <PackageCheck size={20} />
+                      </div>
                     )}
                     <div className="min-w-0 flex-1">
-                      <p className="font-black">{item.name}</p>
-                      <p className="mt-1 text-xs font-bold text-neutral-500">{text.quantity}: {item.quantity}</p>
+                      <p className="text-sm font-black sm:text-base">{item.name}</p>
+                      <p className="mt-0.5 text-xs font-bold text-neutral-500">{text.quantity}: {item.quantity}</p>
                       {item.options.length > 0 && (
-                        <ul className="mt-2 space-y-1 rounded-xl bg-violet-50 p-3 text-xs font-bold text-violet-800 dark:bg-violet-950/30 dark:text-violet-200">
+                        <ul className="mt-2 space-y-1 rounded-xl bg-violet-50 p-2.5 text-xs font-bold text-violet-800 dark:bg-violet-950/30 dark:text-violet-200">
                           {item.options.map((option) => (
                             <li key={option.productId || option.name} className="flex justify-between gap-3">
                               <span>{option.name}</span>
-                              <span>{option.quantity}</span>
+                              <span>{option.quantity}×</span>
                             </li>
                           ))}
                         </ul>
@@ -465,19 +538,19 @@ export default function CustomerOrderDetailClient({ referenceId }: Props) {
                 ))}
               </div>
 
-              <div className="mt-5 space-y-2 border-t border-neutral-100 pt-4 text-sm dark:border-neutral-800">
+              <div className="mt-4 space-y-2 border-t border-neutral-100 pt-4 text-sm dark:border-neutral-800">
                 <div className="flex justify-between text-neutral-500"><span>{text.subtotal}</span><span>{formatMoneyMinor(order.subtotalMinor, order.currency, locale)}</span></div>
                 {order.offerDiscountMinor > 0 && <div className="flex justify-between text-emerald-600"><span>{text.discount}</span><span>- {formatMoneyMinor(order.offerDiscountMinor, order.currency, locale)}</span></div>}
                 {order.rewardsDiscountMinor > 0 && <div className="flex justify-between text-violet-600"><span>{text.pointsDiscount}</span><span>- {formatMoneyMinor(order.rewardsDiscountMinor, order.currency, locale)}</span></div>}
                 {order.shippingFeeMinor > 0 && <div className="flex justify-between text-neutral-500"><span>{text.shipping}</span><span>{formatMoneyMinor(order.shippingFeeMinor, order.currency, locale)}</span></div>}
-                <div className="flex justify-between border-t border-neutral-100 pt-3 text-xl font-black dark:border-neutral-800"><span>{text.total}</span><span>{formatMoneyMinor(order.totalAmountMinor, order.currency, locale)}</span></div>
+                <div className="flex justify-between border-t border-neutral-100 pt-3 text-lg font-black dark:border-neutral-800 sm:text-xl"><span>{text.total}</span><span>{formatMoneyMinor(order.totalAmountMinor, order.currency, locale)}</span></div>
               </div>
             </section>
 
             {(order.pointsRedeemed > 0 || order.pointsToEarn > 0 || order.eventPointsAssigned > 0) && (
-              <section className="rounded-3xl border border-violet-200 bg-violet-50 p-5 shadow-sm dark:border-violet-900/60 dark:bg-violet-950/25">
-                <h2 className="flex items-center gap-2 text-lg font-black text-violet-950 dark:text-violet-100"><Gift size={20} /> {language === "ja" ? "ポイント" : language === "en" ? "Rewards" : "Recompensas"}</h2>
-                <div className="mt-4 space-y-2 text-sm font-bold text-violet-800 dark:text-violet-200">
+              <section className="rounded-3xl border border-violet-200 bg-violet-50 p-4 shadow-sm dark:border-violet-900/60 dark:bg-violet-950/25 sm:p-5">
+                <h2 className="flex items-center gap-2 text-base font-black text-violet-950 dark:text-violet-100"><Gift size={19} /> {language === "ja" ? "ポイント" : language === "en" ? "Rewards" : "Recompensas"}</h2>
+                <div className="mt-3 space-y-2 text-sm font-bold text-violet-800 dark:text-violet-200">
                   {order.pointsRedeemed > 0 && <div className="flex justify-between"><span>{order.rewardRedemptionStatus === "refunded" ? text.pointsRefunded : text.pointsUsed}</span><span>{order.pointsRedeemed}</span></div>}
                   {order.rewardProductName && <div className="flex justify-between gap-4"><span>{text.rewardProduct}</span><span className="text-right">{order.rewardProductName}</span></div>}
                   {order.pointsToEarn > 0 && (
@@ -516,10 +589,10 @@ export default function CustomerOrderDetailClient({ referenceId }: Props) {
               </section>
             )}
 
-            <div className="grid gap-5 md:grid-cols-2">
-              <section className="rounded-3xl border border-neutral-200 bg-white p-5 shadow-sm dark:border-neutral-800 dark:bg-neutral-900">
-                <h2 className="flex items-center gap-2 text-lg font-black"><CalendarDays size={20} /> {text.delivery}</h2>
-                <dl className="mt-4 space-y-3 text-sm">
+            <div className="grid gap-4 md:grid-cols-2">
+              <section className="rounded-3xl border border-neutral-200 bg-white p-4 shadow-sm dark:border-neutral-800 dark:bg-neutral-900 sm:p-5">
+                <h2 className="flex items-center gap-2 text-base font-black"><CalendarDays size={19} /> {text.delivery}</h2>
+                <dl className="mt-3.5 space-y-2.5 text-sm">
                   <InfoRow
                     label={text.mode}
                     value={order.fulfillmentLabel || deliveryModeLabel(order.deliveryMode, text)}
@@ -535,21 +608,26 @@ export default function CustomerOrderDetailClient({ referenceId }: Props) {
                   <InfoRow label={text.address} value={order.address || text.noInfo} />
                 </dl>
                 {order.fulfillmentInstructions && (
-                  <div className="mt-4 rounded-2xl bg-blue-50 p-4 text-sm text-blue-900 dark:bg-blue-950/30 dark:text-blue-100">
+                  <div className="mt-3.5 rounded-2xl bg-blue-50 p-3.5 text-xs font-medium text-blue-900 dark:bg-blue-950/30 dark:text-blue-100">
                     <p className="whitespace-pre-wrap">{order.fulfillmentInstructions}</p>
                   </div>
                 )}
                 {order.locationLink && (
-                  <a href={order.locationLink} target="_blank" rel="noreferrer" className="mt-4 inline-flex items-center gap-2 text-xs font-black underline">
+                  <a href={order.locationLink} target="_blank" rel="noreferrer" className="mt-3.5 inline-flex min-h-10 items-center gap-2 rounded-xl border border-neutral-200 px-3 py-2 text-xs font-black underline dark:border-neutral-700">
                     <MapPin size={15} /> {text.address}
                   </a>
                 )}
-                {order.note && <div className="mt-4 rounded-2xl bg-neutral-50 p-4 text-sm dark:bg-neutral-950/60"><p className="text-xs font-black uppercase text-neutral-400">{text.note}</p><p className="mt-2 whitespace-pre-wrap">{order.note}</p></div>}
+                {order.note && (
+                  <div className="mt-3.5 rounded-2xl bg-neutral-50 p-3.5 text-sm dark:bg-neutral-950/60">
+                    <p className="text-[10px] font-black uppercase tracking-wider text-neutral-400">{text.note}</p>
+                    <p className="mt-1 whitespace-pre-wrap text-xs sm:text-sm">{order.note}</p>
+                  </div>
+                )}
               </section>
 
-              <section className="rounded-3xl border border-neutral-200 bg-white p-5 shadow-sm dark:border-neutral-800 dark:bg-neutral-900">
-                <h2 className="flex items-center gap-2 text-lg font-black"><UserRound size={20} /> {text.customer}</h2>
-                <dl className="mt-4 space-y-3 text-sm">
+              <section className="rounded-3xl border border-neutral-200 bg-white p-4 shadow-sm dark:border-neutral-800 dark:bg-neutral-900 sm:p-5">
+                <h2 className="flex items-center gap-2 text-base font-black"><UserRound size={19} /> {text.customer}</h2>
+                <dl className="mt-3.5 space-y-2.5 text-sm">
                   <InfoRow label={text.name} value={order.customerName || text.noInfo} />
                   <InfoRow label={text.phone} value={order.customerPhone || text.noInfo} />
                   <InfoRow label={text.email} value={order.customerEmail || text.noInfo} />
@@ -557,15 +635,19 @@ export default function CustomerOrderDetailClient({ referenceId }: Props) {
               </section>
             </div>
 
-            <section className="rounded-3xl border border-neutral-200 bg-white p-5 shadow-sm dark:border-neutral-800 dark:bg-neutral-900">
-              <h2 className="flex items-center gap-2 text-lg font-black"><Clock3 size={20} /> {text.history}</h2>
-              <div className="mt-4 space-y-3">
+            <section className="rounded-3xl border border-neutral-200 bg-white p-4 shadow-sm dark:border-neutral-800 dark:bg-neutral-900 sm:p-5">
+              <h2 className="flex items-center gap-2 text-base font-black"><Clock3 size={19} /> {text.history}</h2>
+              <div className="mt-3.5 space-y-2.5">
                 {order.history.map((entry, index) => (
-                  <div key={`${entry.createdAt}-${index}`} className="flex gap-3 rounded-2xl bg-neutral-50 p-4 dark:bg-neutral-950/60">
-                    <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-neutral-900 text-white dark:bg-white dark:text-black"><CheckCircle2 size={15} /></div>
-                    <div>
-                      <p className="text-sm font-black">{statusLabel(entry.status, text)}</p>
-                      <p className="mt-1 text-xs font-bold text-neutral-400">{new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(new Date(entry.createdAt))}</p>
+                  <div key={`${entry.createdAt}-${index}`} className="flex items-center gap-3 rounded-2xl bg-neutral-50 p-3.5 dark:bg-neutral-950/60">
+                    <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-neutral-900 text-white dark:bg-white dark:text-black">
+                      <CheckCircle2 size={15} />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-black sm:text-sm">{statusLabel(entry.status, text)}</p>
+                      <p className="text-[11px] font-bold text-neutral-400">
+                        {new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(new Date(entry.createdAt))}
+                      </p>
                     </div>
                   </div>
                 ))}
@@ -580,9 +662,9 @@ export default function CustomerOrderDetailClient({ referenceId }: Props) {
 
 function InfoRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex items-start justify-between gap-4 border-b border-neutral-100 pb-3 last:border-0 last:pb-0 dark:border-neutral-800">
-      <dt className="shrink-0 font-bold text-neutral-400">{label}</dt>
-      <dd className="break-words text-right font-black">{value}</dd>
+    <div className="flex items-start justify-between gap-4 border-b border-neutral-100 pb-2.5 last:border-0 last:pb-0 dark:border-neutral-800">
+      <dt className="shrink-0 text-xs font-bold text-neutral-400">{label}</dt>
+      <dd className="break-words text-right text-xs font-black sm:text-sm">{value}</dd>
     </div>
   );
 }

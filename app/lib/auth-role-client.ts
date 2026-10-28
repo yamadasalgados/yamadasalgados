@@ -6,6 +6,7 @@ export type ResolvedAccount = {
   role: ResolvedAccountRole;
   destination: string;
   sellerId?: string;
+  issue?: "ADMIN_INACTIVE" | "SELLER_INACTIVE" | "SELLER_NOT_PROVISIONED" | "SELLER_STORE_INACTIVE";
 };
 
 export async function resolveAuthenticatedAccount(
@@ -29,6 +30,7 @@ export async function resolveAuthenticatedAccount(
         role?: ResolvedAccountRole;
         destination?: string;
         sellerId?: string;
+        issue?: ResolvedAccount["issue"];
         error?: string;
       }
     | null;
@@ -41,5 +43,6 @@ export async function resolveAuthenticatedAccount(
     role: payload.role,
     destination: payload.destination || "",
     sellerId: payload.sellerId,
+    issue: payload.issue,
   };
 }

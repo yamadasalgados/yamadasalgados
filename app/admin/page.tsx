@@ -35,6 +35,12 @@ export default function AdminHomePage() {
           href="/admin/events"
           icon="📅"
         />
+        <ActionCard
+          title="Interessados"
+          desc="Solicitações de negócios que querem usar a plataforma."
+          href="/admin/partners"
+          icon="🤝"
+        />
       </section>
     </div>
   );

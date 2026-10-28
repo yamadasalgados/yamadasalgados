@@ -16,33 +16,37 @@ export default function PageHeader({
   meta?: ReactNode;
 }) {
   return (
-    <header className="overflow-hidden rounded-[2rem] border border-neutral-200 bg-white shadow-sm dark:border-neutral-800 dark:bg-neutral-900">
-      <div className="flex flex-col gap-5 p-5 sm:p-6 lg:flex-row lg:items-center lg:justify-between lg:p-7">
-        <div className="min-w-0">
-          {back && <div className="mb-3">{back}</div>}
+    <header className="overflow-hidden rounded-3xl border border-neutral-200 bg-white shadow-sm dark:border-neutral-800 dark:bg-neutral-900 sm:rounded-[2rem]">
+      <div className="flex flex-col gap-4 p-4 sm:gap-5 sm:p-6 lg:flex-row lg:items-center lg:justify-between lg:p-7">
+        <div className="min-w-0 flex-1">
+          {back && <div className="mb-2.5">{back}</div>}
 
           {eyebrow && (
-            <p className="text-xs font-black uppercase tracking-[0.2em] text-orange-600 dark:text-orange-300">
+            <p className="text-[11px] font-black uppercase tracking-[0.18em] text-orange-600 dark:text-orange-300">
               {eyebrow}
             </p>
           )}
 
-          <h1 className="mt-2 text-3xl font-black tracking-tight sm:text-4xl">
+          <h1 className="mt-1 text-2xl font-black tracking-tight text-neutral-950 dark:text-white sm:text-3xl lg:text-4xl">
             {title}
           </h1>
 
           {description && (
-            <p className="mt-2 max-w-3xl text-sm font-medium leading-relaxed text-neutral-500 dark:text-neutral-400">
+            <p className="mt-1.5 max-w-3xl text-xs font-medium leading-relaxed text-neutral-500 dark:text-neutral-400 sm:text-sm">
               {description}
             </p>
           )}
         </div>
 
-        {action && <div className="shrink-0">{action}</div>}
+        {action && (
+          <div className="flex shrink-0 flex-wrap items-center gap-2 pt-1 lg:pt-0">
+            {action}
+          </div>
+        )}
       </div>
 
       {meta && (
-        <div className="border-t border-neutral-100 bg-neutral-50/80 px-5 py-4 dark:border-neutral-800 dark:bg-neutral-950/40 sm:px-6 lg:px-7">
+        <div className="border-t border-neutral-100 bg-neutral-50/80 px-4 py-3.5 dark:border-neutral-800 dark:bg-neutral-950/40 sm:px-6 lg:px-7">
           {meta}
         </div>
       )}

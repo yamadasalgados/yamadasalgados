@@ -7,7 +7,7 @@ type Props = {
   url: string;
 };
 
-const DISMISS_KEY = "yamada_open_in_browser_dismissed_v1";
+const DISMISS_KEY = "order_system_open_in_browser_dismissed_v1";
 
 export default function OpenInBrowserGate({ url }: Props) {
   const { t } = useI18n();

@@ -42,7 +42,7 @@ type State =
 
 type TestState = "idle" | "loading" | "success" | "error";
 
-const PROMPT_DISMISSED_KEY = "yamada:customer-push-prompt-dismissed:v2";
+const PROMPT_DISMISSED_KEY = "order-system:customer-push-prompt-dismissed:v2";
 
 const COPY = {
   pt: {

@@ -2,6 +2,7 @@
 
 import {
   CalendarDays,
+  ChevronRight,
   Clock3,
   Loader2,
   PackageCheck,
@@ -123,23 +124,26 @@ type StageCopy = {
 function orderStage(
   order: CustomerOrderSummary,
   text: StageCopy,
-): { label: string; className: string } {
+): { label: string; className: string; dotClassName: string } {
   if (order.status === "cancelled") {
     return {
       label: text.cancelled,
       className: "border-red-200 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300",
+      dotClassName: "bg-red-500",
     };
   }
   if (order.status === "delivered") {
     return {
       label: text.delivered,
       className: "border-neutral-200 bg-neutral-100 text-neutral-700 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200",
+      dotClassName: "bg-neutral-500",
     };
   }
   if (order.status === "ready") {
     return {
       label: text.ready,
       className: "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300",
+      dotClassName: "bg-emerald-500 animate-pulse",
     };
   }
   if (
@@ -149,11 +153,13 @@ function orderStage(
     return {
       label: text.production,
       className: "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300",
+      dotClassName: "bg-amber-500",
     };
   }
   return {
     label: text.received,
     className: "border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-900/60 dark:bg-blue-950/30 dark:text-blue-300",
+    dotClassName: "bg-blue-500",
   };
 }
 
@@ -236,13 +242,13 @@ export default function CustomerOrdersClient() {
   if (!session.registered) {
     return (
       <main className="min-h-screen bg-neutral-50 p-4 text-neutral-950 dark:bg-neutral-950 dark:text-white">
-        <section className="mx-auto mt-20 max-w-lg rounded-3xl border border-neutral-200 bg-white p-8 text-center shadow-sm dark:border-neutral-800 dark:bg-neutral-900">
-          <UserRound className="mx-auto" size={44} />
-          <h1 className="mt-5 text-2xl font-black">{text.loginTitle}</h1>
+        <section className="mx-auto mt-16 max-w-lg rounded-3xl border border-neutral-200 bg-white p-7 text-center shadow-sm dark:border-neutral-800 dark:bg-neutral-900">
+          <UserRound className="mx-auto text-neutral-400" size={44} />
+          <h1 className="mt-4 text-2xl font-black">{text.loginTitle}</h1>
           <p className="mt-2 text-sm text-neutral-500">{text.loginBody}</p>
           <Link
             href="/customer/login?next=%2Fcustomer%2Forders"
-            className="mt-6 inline-flex min-h-12 w-full items-center justify-center rounded-xl bg-black px-5 py-3 font-black text-white dark:bg-white dark:text-black"
+            className="mt-6 inline-flex min-h-12 w-full items-center justify-center rounded-xl bg-black px-5 py-3 font-black text-white transition active:scale-[0.99] dark:bg-white dark:text-black"
           >
             {text.login}
           </Link>
@@ -252,8 +258,8 @@ export default function CustomerOrdersClient() {
   }
 
   return (
-    <main className="min-h-screen bg-neutral-50 px-4 py-6 text-neutral-950 dark:bg-neutral-950 dark:text-white sm:px-6">
-      <div className="mx-auto max-w-4xl space-y-6">
+    <main className="min-h-screen bg-neutral-50 px-4 pb-28 pt-4 text-neutral-950 dark:bg-neutral-950 dark:text-white sm:px-6 sm:py-6">
+      <div className="mx-auto max-w-4xl space-y-4 sm:space-y-6">
         <PageHeader
           title={text.title}
           description={text.subtitle}
@@ -262,7 +268,7 @@ export default function CustomerOrdersClient() {
               type="button"
               onClick={() => void refresh(true)}
               disabled={refreshing}
-              className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-neutral-300 bg-white px-4 py-2 text-xs font-black transition hover:bg-neutral-50 disabled:opacity-60 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800"
+              className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-neutral-300 bg-white px-4 py-2 text-xs font-black transition hover:bg-neutral-50 active:scale-[0.98] disabled:opacity-60 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800"
             >
               <RefreshCw className={refreshing ? "animate-spin" : ""} size={15} />
               {text.refresh}
@@ -270,22 +276,41 @@ export default function CustomerOrdersClient() {
           }
         />
 
-        <div className="grid grid-cols-3 gap-2 rounded-2xl border border-neutral-200 bg-white p-2 dark:border-neutral-800 dark:bg-neutral-900">
-          {(["all", "open", "completed"] as Filter[]).map((value) => (
-            <button
-              key={value}
-              type="button"
-              onClick={() => setFilter(value)}
-              className={`rounded-xl px-3 py-2.5 text-xs font-black transition ${
-                filter === value
-                  ? "bg-black text-white dark:bg-white dark:text-black"
-                  : "text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-800"
-              }`}
-            >
-              {value === "all" ? text.all : value === "open" ? text.open : text.completed}
-              <span className="ml-1 opacity-65">{counts[value]}</span>
-            </button>
-          ))}
+        <div
+          role="tablist"
+          aria-label={text.title}
+          className="sticky top-[3.75rem] z-20 grid grid-cols-3 gap-1.5 rounded-2xl border border-neutral-200 bg-white/95 p-1.5 shadow-sm backdrop-blur-md dark:border-neutral-800 dark:bg-neutral-900/95"
+        >
+          {(["open", "completed", "all"] as Filter[]).map((value) => {
+            const active = filter === value;
+            return (
+              <button
+                key={value}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                onClick={() => setFilter(value)}
+                className={`flex min-h-11 items-center justify-center gap-1.5 rounded-xl px-2.5 py-2 text-xs font-black transition active:scale-[0.98] ${
+                  active
+                    ? "bg-black text-white shadow-sm dark:bg-white dark:text-black"
+                    : "text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+                }`}
+              >
+                <span className="truncate">
+                  {value === "all" ? text.all : value === "open" ? text.open : text.completed}
+                </span>
+                <span
+                  className={`inline-flex min-w-5 items-center justify-center rounded-full px-1.5 py-0.5 text-[10px] leading-none ${
+                    active
+                      ? "bg-white/20 text-white dark:bg-black/15 dark:text-black"
+                      : "bg-neutral-100 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300"
+                  }`}
+                >
+                  {counts[value]}
+                </span>
+              </button>
+            );
+          })}
         </div>
 
         {loading ? (
@@ -297,65 +322,94 @@ export default function CustomerOrdersClient() {
           <FeedbackBanner tone="error" role="alert">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <span>{error || text.error}</span>
-              <button type="button" onClick={() => void refresh()} className="rounded-xl bg-red-600 px-4 py-2 text-xs font-black text-white">
+              <button type="button" onClick={() => void refresh()} className="min-h-11 rounded-xl bg-red-600 px-4 py-2 text-xs font-black text-white">
                 {text.retry}
               </button>
             </div>
           </FeedbackBanner>
         ) : filtered.length === 0 ? (
-          <div className="rounded-3xl border border-dashed border-neutral-300 bg-white p-12 text-center dark:border-neutral-700 dark:bg-neutral-900">
+          <div className="rounded-3xl border border-dashed border-neutral-300 bg-white p-10 text-center dark:border-neutral-700 dark:bg-neutral-900">
             <ShoppingBag className="mx-auto text-neutral-400" size={38} />
             <p className="mt-4 text-sm font-bold text-neutral-500">{text.empty}</p>
+            {filter !== "all" && orders.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setFilter("all")}
+                className="mt-4 inline-flex min-h-11 items-center justify-center rounded-xl border border-neutral-300 px-4 py-2 text-xs font-black dark:border-neutral-700"
+              >
+                {text.all} ({counts.all})
+              </button>
+            )}
           </div>
         ) : (
-          <div className="space-y-4">
+          <div className="space-y-3.5">
             {filtered.map((order) => {
               const stage = orderStage(order, text);
               const title = order.eventTitle || order.storeName || (order.source === "event" ? text.eventOrder : text.storeOrder);
               const deliveryLabel = [order.deliveryDate || text.noDate, order.deliveryTimeSlot].filter(Boolean).join(" • ");
 
               return (
-                <article key={order.referenceId} className="rounded-3xl border border-neutral-200 bg-white p-5 shadow-sm dark:border-neutral-800 dark:bg-neutral-900">
-                  <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                    <div className="min-w-0">
-                      <p className="text-[11px] font-black uppercase tracking-widest text-neutral-400">
-                        {order.source === "event" ? text.eventOrder : text.storeOrder}
-                      </p>
-                      <h2 className="mt-1 truncate text-xl font-black">{title}</h2>
-                      <p className="mt-1 break-all font-mono text-xs text-neutral-400">#{order.orderId}</p>
+                <article
+                  key={order.referenceId}
+                  className="rounded-3xl border border-neutral-200 bg-white p-4 shadow-sm transition hover:border-neutral-300 dark:border-neutral-800 dark:bg-neutral-900 sm:p-5"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-[10px] font-black uppercase tracking-widest text-neutral-400">
+                          {order.source === "event" ? text.eventOrder : text.storeOrder}
+                        </span>
+                        <span className="font-mono text-[11px] font-bold text-neutral-400">
+                          #{order.orderId.slice(0, 10)}
+                        </span>
+                      </div>
+                      <h2 className="mt-1 truncate text-lg font-black sm:text-xl">{title}</h2>
                     </div>
-                    <span className={`inline-flex w-fit rounded-full border px-3 py-1.5 text-xs font-black ${stage.className}`}>
+
+                    <span className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-black ${stage.className}`}>
+                      <span className={`h-2 w-2 rounded-full ${stage.dotClassName}`} />
                       {stage.label}
                     </span>
                   </div>
 
-                  <div className="mt-5 grid gap-3 sm:grid-cols-3">
-                    <div className="flex items-center gap-3 rounded-2xl bg-neutral-50 p-3 dark:bg-neutral-950/60">
-                      <CalendarDays size={18} className="text-neutral-400" />
-                      <span className="text-xs font-bold">{deliveryLabel}</span>
-                    </div>
-                    <div className="flex items-center gap-3 rounded-2xl bg-neutral-50 p-3 dark:bg-neutral-950/60">
-                      <PackageCheck size={18} className="text-neutral-400" />
-                      <span className="text-xs font-bold">{order.totalItems} {text.items}</span>
-                    </div>
-                    <div className="flex items-center gap-3 rounded-2xl bg-neutral-50 p-3 dark:bg-neutral-950/60">
-                      <Clock3 size={18} className="text-neutral-400" />
-                      <span className="text-xs font-bold">
-                        {order.createdAt ? new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(new Date(order.createdAt)) : "—"}
+                  {/* Chips compactos sem ruído visual em ecrãs pequenos */}
+                  <div className="mt-3.5 flex flex-wrap items-center gap-2 text-xs font-bold text-neutral-600 dark:text-neutral-300">
+                    <span className="inline-flex items-center gap-1.5 rounded-xl bg-neutral-100 px-3 py-1.5 dark:bg-neutral-800">
+                      <PackageCheck size={15} className="text-neutral-400" />
+                      {order.totalItems} {text.items}
+                    </span>
+                    <span className="inline-flex items-center gap-1.5 rounded-xl bg-neutral-100 px-3 py-1.5 dark:bg-neutral-800">
+                      <CalendarDays size={15} className="text-neutral-400" />
+                      {deliveryLabel}
+                    </span>
+                    {order.createdAt ? (
+                      <span className="inline-flex items-center gap-1.5 rounded-xl bg-neutral-100 px-3 py-1.5 text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">
+                        <Clock3 size={14} className="text-neutral-400" />
+                        {new Intl.DateTimeFormat(locale, { dateStyle: "short", timeStyle: "short" }).format(new Date(order.createdAt))}
                       </span>
-                    </div>
+                    ) : null}
                   </div>
 
-                  <div className="mt-5 flex flex-col gap-3 border-t border-neutral-100 pt-4 dark:border-neutral-800 sm:flex-row sm:items-center sm:justify-between">
-                    <p className="text-2xl font-black">{formatMoneyMinor(order.totalAmountMinor, order.currency, locale)}</p>
-                    <div className="flex flex-wrap gap-2">
+                  <div className="mt-4 flex items-center justify-between gap-3 border-t border-neutral-100 pt-3.5 dark:border-neutral-800">
+                    <p className="text-xl font-black sm:text-2xl">
+                      {formatMoneyMinor(order.totalAmountMinor, order.currency, locale)}
+                    </p>
+                    <div className="flex items-center gap-2">
                       {order.storeHref && (
-                        <Link href={order.storeHref} className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-neutral-300 px-3 py-2 text-xs font-black dark:border-neutral-700">
-                          <Store size={15} /> {text.visitStore}
+                        <Link
+                          href={order.storeHref}
+                          className="inline-flex min-h-11 items-center gap-1.5 rounded-xl border border-neutral-300 px-3 py-2 text-xs font-black transition hover:bg-neutral-50 active:scale-[0.98] dark:border-neutral-700 dark:hover:bg-neutral-800"
+                        >
+                          <Store size={15} />
+                          <span className="hidden sm:inline">{text.visitStore}</span>
                         </Link>
                       )}
-                      <Link href={`/customer/orders/${encodeURIComponent(order.referenceId)}`} className="inline-flex min-h-10 items-center justify-center rounded-xl bg-black px-4 py-2 text-xs font-black text-white dark:bg-white dark:text-black">
-                        {text.details} →
+                      <Link
+                        href={`/customer/orders/${encodeURIComponent(order.referenceId)}`}
+                        className="inline-flex min-h-11 items-center justify-center gap-1 rounded-xl bg-black px-4 py-2 text-xs font-black text-white transition active:scale-[0.98] dark:bg-white dark:text-black"
+                      >
+                        {text.details}
+                        <ChevronRight size={15} />
                       </Link>
                     </div>
                   </div>
@@ -364,7 +418,6 @@ export default function CustomerOrdersClient() {
             })}
           </div>
         )}
-
       </div>
     </main>
   );

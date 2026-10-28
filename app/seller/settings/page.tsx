@@ -73,6 +73,9 @@ const COPY = {
         description: "Perfis de impressora, vias, papel, intensidade, QR Code e caixas de conferência.",
         meta: "Print Service",
       },
+      referrals: {
+        title: "Indique e ganhe", description: "Ative ou encerre convites, defina prazo e limite por indicador.", meta: "Campanha de pontos",
+      },
       account: {
         title: "Conta, acesso e plano",
         description: "Consulte o plano atual, status da assinatura e acesse a área de contratação.",
@@ -134,6 +137,7 @@ const COPY = {
         description: "Printer profiles, copies, paper, intensity, QR codes, and checklist boxes.",
         meta: "Print Service",
       },
+      referrals: { title: "Refer a friend", description: "Campaign status, referral limits and end dates.", meta: "Referral rewards" },
       account: {
         title: "Account, access, and plan",
         description: "Review the current plan and subscription status, and open plan management.",
@@ -195,6 +199,7 @@ const COPY = {
         description: "プリンター、控え、用紙、濃度、QRコード、確認欄を設定します。",
         meta: "Print Service",
       },
+      referrals: { title: "友達紹介", description: "受付終了日、紹介人数の上限とキャンペーンを設定します。", meta: "紹介ポイント" },
       account: {
         title: "アカウント・アクセス・プラン",
         description: "現在のプランと契約状態を確認し、プラン管理へ移動します。",
@@ -260,6 +265,12 @@ export default function SellerSettingsPage() {
       accent: "violet" as const,
     },
     {
+      href: "/seller/settings/referrals",
+      icon: Gift,
+      ...copy.categories.referrals,
+      accent: "violet" as const,
+    },
+    {
       href: "/seller/settings/account",
       icon: UserRound,
       ...copy.categories.account,
@@ -274,6 +285,7 @@ export default function SellerSettingsPage() {
     { href: "/seller/products", label: copy.shortcuts.products, icon: ShoppingBag },
     { href: "/seller/offers", label: copy.shortcuts.offers, icon: Gift },
     { href: "/seller/rewards", label: copy.shortcuts.rewards, icon: Sparkles },
+    { href: "/seller/customers", label: languageKey(lang) === "ja" ? "顧客管理" : languageKey(lang) === "en" ? "Customers (CRM)" : "Clientes (CRM)", icon: UserRound },
     { href: "/seller/reports", label: copy.shortcuts.reports, icon: ChartNoAxesCombined },
     { href: "/seller/onboarding", label: copy.shortcuts.onboarding, icon: Settings },
     { href: "/seller/rent", label: copy.shortcuts.plans, icon: Tags },

@@ -21,6 +21,7 @@ import {
 import {
   auth,
 } from "@/app/lib/firebase";
+import { resolveAuthenticatedAccount } from "@/app/lib/auth-role-client";
 import {
   ensureUserProfile,
   type EnsureResult,
@@ -342,6 +343,20 @@ export default function SellerGuard({
       setError("");
 
       try {
+        // Never attempt Firestore /users reads as a customer: rules correctly reject those.
+        const resolved = await resolveAuthenticatedAccount(user);
+        if (resolved.role === "customer") {
+          router.replace("/customer/orders");
+          return;
+        }
+        if (resolved.role === "admin") {
+          router.replace("/admin");
+          return;
+        }
+        if (resolved.role !== "seller") {
+          setError("Este acesso é exclusivo para vendedores. Se você é cliente, utilize 'Sua conta'.");
+          return;
+        }
         const result =
           await ensureUserProfile(
             user,
@@ -358,16 +373,39 @@ export default function SellerGuard({
         );
 
         setProfile(null);
-        setError(
-          loadError instanceof Error
-            ? loadError.message
-            : "PROFILE_LOAD_FAILED",
-        );
+        const raw = loadError instanceof Error ? loadError.message : "PROFILE_LOAD_FAILED";
+        if (/permission-denied|Missing or insufficient permissions/i.test(raw)) {
+          const hints: Record<string, string> = {
+            MISSING_USERS_PROFILE: "Não existe users/{UID} para esta conta. Solicite provisionamento ao administrador.",
+            USER_NOT_SELLER: "Esta conta não tem role=seller no Firestore. Troque de conta ou solicite a correção pelo administrador.",
+            ADMIN_NOT_SELLER: "Sua conta é administradora. Utilize o painel Admin.",
+            USER_NOT_ACTIVE: "Seu perfil users/{UID} não tem accountStatus=active.",
+            SELLER_NOT_FOUND: "Não existe sellers/{sellerId} para o sellerId do seu perfil.",
+            SELLER_NOT_ACTIVE: "O documento da loja não tem accountStatus=active.",
+            SELLER_OWNER_MISMATCH: "O UID não está associado à loja esperada. Solicite revisão do sellerId e ownerUid.",
+            PROFILE_VALID_CHECK_PUBLISHED_RULES: "Os documentos parecem corretos no servidor. Confira se as regras publicadas no Firebase são as mesmas da versão local e se o aplicativo aponta para o projeto Firebase esperado.",
+          };
+          let diagnosis = "";
+          try {
+            const token = await user.getIdToken();
+            const response = await fetch("/api/auth/access-check", {
+              headers: { authorization: `Bearer ${token}` },
+              cache: "no-store",
+            });
+            const payload = await response.json() as { diagnosis?: string };
+            diagnosis = payload.diagnosis ?? "";
+          } catch (diagnosticError) {
+            console.warn("[SellerGuard] diagnosis unavailable", diagnosticError);
+          }
+          setError(hints[diagnosis] ?? "O Firestore não autorizou a leitura do perfil. Verifique role, status, sellerId, ownerUid e regras publicadas; não abra acesso público.");
+        } else {
+          setError(raw);
+        }
       } finally {
         setChecking(false);
       }
     },
-    [lang],
+    [lang, router],
   );
 
   useEffect(() => {
@@ -488,6 +526,9 @@ export default function SellerGuard({
             {copy.retry}
           </button>
 
+          <Link href="/customer/login" className="block rounded-xl border border-red-300 bg-white py-3 text-sm font-black text-neutral-950 dark:border-neutral-700 dark:bg-neutral-900 dark:text-white">
+            Entrar como cliente
+          </Link>
           <button
             type="button"
             onClick={() =>

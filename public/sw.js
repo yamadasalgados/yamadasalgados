@@ -1,4 +1,4 @@
-const STATIC_CACHE = "order-portal-static-06d2";
+const STATIC_CACHE = "order-system-static-06e2a";
 const STATIC_PATH_PREFIXES = ["/_next/static/", "/icons/"];
 const DEFAULT_ICON = "/icon-192x192.png";
 const DEFAULT_BADGE = "/notification-badge.png";

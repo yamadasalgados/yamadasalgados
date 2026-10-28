@@ -1,0 +1,28 @@
+#!/usr/bin/env node
+"use strict";
+const fs = require("node:fs");
+const path=require('node:path');
+let pass=0; let fails=0;
+const t=(label,ok)=>{if(ok){console.log(`✓ ${label}`); pass++;} else {console.error(`✗ ${label}`);fails++;}};
+const read=p=>fs.readFileSync(path.resolve(p),'utf8');
+const exists=p=>fs.existsSync(p);
+const dim=p=>{const b=fs.readFileSync(p);return `${b.readUInt32BE(16)}x${b.readUInt32BE(20)}`;};
+const layout=read('app/layout.tsx');
+const footer=read('app/_components/PlatformBrandFooter.tsx');
+const brand=read('app/_components/PlatformLoginBrand.tsx');
+const manifest=JSON.parse(read('public/manifest.webmanifest'));
+t('RootLayout usa marca no rodapé exatamente uma vez',layout.split('<PlatformBrandFooter />').length===2);
+t('RootLayout importa o componente do rodapé',layout.includes('import PlatformBrandFooter from "@/app/_components/PlatformBrandFooter";'));
+t('Rodapé centralizado e responsivo', footer.includes('justify-center')&&footer.includes('max-w-[240px]')&&footer.includes('<footer'));
+t('Rodapé no fluxo da página (sem fixed/sticky)', !footer.includes('position:fixed')&&!footer.includes('fixed ')&&!footer.includes('sticky '));
+t('Rodapé utiliza exatamente a arte escolhida',exists('public/order-system-footer.png')&&dim('public/order-system-footer.png')==='433x132');
+t('Logotipo do app atualizado',exists('public/platform-logo.png')&&dim('public/platform-logo.png')==='1024x1024');
+t('Login não repete nome da marca sob o novo ícone',!brand.includes('{PLATFORM_NAME}'));
+t('Ícone PWA 192×192',dim('public/icon-192x192.png')==='192x192');
+t('Ícone PWA 512×512',dim('public/icon-512x512.png')==='512x512');
+t('Ícone PWA maskable',dim('public/icon-maskable-512x512.png')==='512x512');
+t('Ícone Apple Touch',dim('public/apple-touch-icon.png')==='180x180');
+t('Favicon Next.js atualizado',exists('app/favicon.ico'));
+t('Manifesto mantém a marca da plataforma',manifest.name==='Order System');
+t('Manifesto usa ícones compatíveis',manifest.icons.some(i=>i.sizes==='192x192'&&i.src==='/icon-192x192.png')&&manifest.icons.some(i=>i.purpose==='maskable'));
+if(fails){console.error(`${pass} aprovadas, ${fails} falhas.`);process.exitCode=1;}else console.log(`${pass}/${pass} verificações de identidade v6.1 aprovadas.`);

@@ -178,13 +178,13 @@ export default function SellerPushNotifications({
       return;
     }
     setPromptDismissed(
-      window.localStorage.getItem(`yamada:seller-push-prompt:v2:${sellerId}`) === "1",
+      window.localStorage.getItem(`order-system:seller-push-prompt:v2:${sellerId}`) === "1",
     );
   }, [promptOnce, sellerId]);
 
   const dismissPrompt = useCallback(() => {
     if (promptOnce && sellerId) {
-      window.localStorage.setItem(`yamada:seller-push-prompt:v2:${sellerId}`, "1");
+      window.localStorage.setItem(`order-system:seller-push-prompt:v2:${sellerId}`, "1");
     }
     setPromptDismissed(true);
   }, [promptOnce, sellerId]);

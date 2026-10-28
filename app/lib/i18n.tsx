@@ -19,7 +19,8 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     try {
-      const saved = localStorage.getItem("yamada_lang") as Lang | null;
+      const saved = (localStorage.getItem("order_system_lang_v1") || localStorage.getItem("yamada_lang")) as Lang | null;
+      if (saved) { try { localStorage.setItem("order_system_lang_v1", saved); } catch {} }
       const validLangs: Lang[] = ["pt", "en", "ja"];
 
       const browserLanguages = [
@@ -55,7 +56,7 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
     }
 
     try {
-      localStorage.setItem("yamada_lang", l);
+      localStorage.setItem("order_system_lang_v1", l);
     } catch (e) {
       console.warn("[i18n] Falha ao salvar localStorage:", e);
     }

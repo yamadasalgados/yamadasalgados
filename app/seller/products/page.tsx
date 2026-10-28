@@ -428,6 +428,7 @@ export default function ProductsCatalogPage() {
             imageUrl: String(data.imageUrl || data.image || ""),
             extraImageUrls: Array.isArray(data.extraImageUrls) ? data.extraImageUrls.filter(Boolean) : [],
             bundleConfig: normalizeProductBundleConfig(data.bundleConfig),
+            featuredInStore: data.featuredInStore === true,
             storefront: normalizeProductStorefrontConfig(
               data.storefront,
               data.storefrontSubgroup,
@@ -1542,6 +1543,11 @@ function ProductCard({
             </div>
           )}
 
+          {product.featuredInStore && (
+            <span className="mb-2 inline-flex rounded-full bg-amber-100 px-3 py-1 text-[11px] font-black text-amber-900 dark:bg-amber-950 dark:text-amber-200">
+              ★ {lang === "ja" ? "注目商品" : lang === "en" ? "Featured in store" : "Destaque na loja"}
+            </span>
+          )}
           {product.storefront.subgroup && (
             <div className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-bold text-sky-800 dark:border-sky-900/50 dark:bg-sky-950/20 dark:text-sky-200">
               <span className="font-black">

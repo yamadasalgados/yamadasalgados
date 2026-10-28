@@ -29,10 +29,18 @@ body {
   max-width: 100%;
   overflow-x: hidden;
   -webkit-text-size-adjust: 100%;
-  @apply bg-[hsla(var(--background))] text-[hsla(var(--foreground))];
+  -webkit-tap-highlight-color: transparent;
+  scroll-behavior: smooth;
+  @apply bg-[hsla(var(--background))] text-[hsla(var(--foreground))] antialiased;
 }
 
-/* Utilitários de Superfície */
+/* Acessibilidade: anel de foco nítido apenas na navegação por teclado */
+:focus-visible {
+  outline: 2px solid rgb(249 115 22);
+  outline-offset: 2px;
+}
+
+/* Utilitários de Superfície e Ergonomia Mobile */
 @layer components {
   .bg-card {
     background-color: hsl(var(--card));
@@ -41,28 +49,47 @@ body {
   .border-app {
     border-color: hsl(var(--border));
   }
+  .touch-target {
+    min-height: 2.75rem;
+    min-width: 2.75rem;
+  }
+}
+
+@layer utilities {
+  .scrollbar-none {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
 }
 
 /* Evita zoom automático do Safari em inputs com fonte < 16px */
 @supports (-webkit-touch-callout: none) {
-  input, textarea, select {
+  input,
+  textarea,
+  select {
     font-size: 16px !important;
   }
 }
+
 /* 06D1 — shared input used by white-label identity settings */
 .field-input {
   width: 100%;
+  min-height: 2.875rem;
   border-radius: 1rem;
   border: 1px solid rgb(212 212 212);
   background: white;
   padding: 0.75rem 1rem;
   font-size: 0.875rem;
   outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
 .field-input:focus {
   border-color: rgb(249 115 22);
-  box-shadow: 0 0 0 4px rgb(249 115 22 / 0.1);
+  box-shadow: 0 0 0 4px rgb(249 115 22 / 0.12);
 }
 
 html[data-theme="dark"] .field-input {

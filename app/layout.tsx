@@ -9,6 +9,7 @@ import {
   PLATFORM_NAME,
   PLATFORM_SHORT_NAME,
 } from "@/app/lib/platform-brand";
+import PlatformBrandFooter from "@/app/_components/PlatformBrandFooter";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -26,16 +27,14 @@ export const metadata: Metadata = {
   },
   icons: {
     icon: PLATFORM_LOGO_PATH,
-    apple: "/icon-192x192.png",
+    apple: "/apple-touch-icon.png",
   },
 };
 
-// Configuração estrita de viewport ideal para Mobile/PWA.
+// Respeitar acessibilidade: permitir zoom manual no catálogo e no checkout.
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  maximumScale: 1,
-  userScalable: false,
   viewportFit: "cover",
 };
 
@@ -50,7 +49,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 try {
                   // A chave antiga é mantida para preservar a preferência de tema
                   // de usuários que já utilizavam a aplicação antes do white-label.
-                  var theme = localStorage.getItem('yamada_theme_v1');
+                  var theme = localStorage.getItem('order_system_theme_v1') || localStorage.getItem('yamada_theme_v1');
+                  if (theme) { try { localStorage.setItem('order_system_theme_v1', theme); } catch (e) {} }
                   var supportDarkMode = window.matchMedia('(prefers-color-scheme: dark)').matches;
                   if (!theme && supportDarkMode) theme = 'dark';
                   if (!theme) theme = 'light';
@@ -78,6 +78,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 
           <div className="flex min-h-screen flex-col">
             <main className="flex-1 flex flex-col">{children}</main>
+            <PlatformBrandFooter />
           </div>
         </I18nProvider>
       </body>

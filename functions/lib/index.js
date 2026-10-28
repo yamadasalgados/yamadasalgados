@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.notifyPushTestRequest = exports.notifySellerEventOrderCreated = exports.notifySellerStoreOrderCreated = exports.notifyCustomerEventOrderStatus = exports.notifyCustomerStoreOrderStatus = exports.notifyOnNewEvent = void 0;
+exports.notifyWishlistRestock = exports.notifyMarketingCampaign = exports.notifyPushTestRequest = exports.notifySellerEventOrderCreated = exports.notifySellerStoreOrderCreated = exports.notifyCustomerEventOrderStatus = exports.notifyCustomerStoreOrderStatus = exports.notifyOnNewEvent = void 0;
 var notifications_1 = require("./notifications");
 Object.defineProperty(exports, "notifyOnNewEvent", { enumerable: true, get: function () { return notifications_1.notifyOnNewEvent; } });
 Object.defineProperty(exports, "notifyCustomerStoreOrderStatus", { enumerable: true, get: function () { return notifications_1.notifyCustomerStoreOrderStatus; } });
@@ -8,4 +8,6 @@ Object.defineProperty(exports, "notifyCustomerEventOrderStatus", { enumerable: t
 Object.defineProperty(exports, "notifySellerStoreOrderCreated", { enumerable: true, get: function () { return notifications_1.notifySellerStoreOrderCreated; } });
 Object.defineProperty(exports, "notifySellerEventOrderCreated", { enumerable: true, get: function () { return notifications_1.notifySellerEventOrderCreated; } });
 Object.defineProperty(exports, "notifyPushTestRequest", { enumerable: true, get: function () { return notifications_1.notifyPushTestRequest; } });
+Object.defineProperty(exports, "notifyMarketingCampaign", { enumerable: true, get: function () { return notifications_1.notifyMarketingCampaign; } });
+Object.defineProperty(exports, "notifyWishlistRestock", { enumerable: true, get: function () { return notifications_1.notifyWishlistRestock; } });
 //# sourceMappingURL=index.js.map

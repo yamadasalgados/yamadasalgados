@@ -67,6 +67,10 @@ export async function GET(request: NextRequest) {
     }
 
     const db = getAdminDb();
+    const identity = await db.collection("users").doc(decoded.uid).get();
+    if (identity.exists && (identity.data()?.role === "seller" || identity.data()?.role === "admin")) {
+      throw new RewardError("Esta sessão pertence a um vendedor/administrador. Entre como cliente para consultar pontos.", 403);
+    }
     const customerRef = db.collection("customers").doc(decoded.uid);
     const walletRef = customerRef.collection("rewardWallets").doc(sellerId);
     const sellerRef = db.collection("sellers").doc(sellerId);
@@ -100,7 +104,8 @@ export async function GET(request: NextRequest) {
         data.type === "refund" ||
         data.type === "adjustment" ||
         data.type === "gift" ||
-        data.type === "event_earn"
+        data.type === "event_earn" ||
+        data.type === "referral_bonus"
           ? data.type
           : "earn";
       return {

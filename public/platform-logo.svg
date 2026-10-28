@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title">
+  <title id="title">Order System</title>
+  <defs>
+    <linearGradient id="ring" x1="40" y1="25" x2="218" y2="226" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8BE7E0"/><stop offset="1" stop-color="#60A5FA"/>
+    </linearGradient>
+    <linearGradient id="bg" x1="0" x2="256" y1="0" y2="256" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1D2738"/><stop offset="1" stop-color="#0B1220"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="60" fill="url(#bg)"/>
+  <circle cx="128" cy="128" r="75" fill="none" stroke="url(#ring)" stroke-width="19"/>
+  <path d="m91 127 24 24 50-51" fill="none" stroke="#FFFFFF" stroke-width="17" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="198" cy="58" r="11" fill="#8BE7E0"/>
+</svg>

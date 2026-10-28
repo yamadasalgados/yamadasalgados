@@ -2,7 +2,7 @@ import { auth } from "@/app/lib/firebase";
 
 export type CustomerRewardTransaction = {
   id: string;
-  type: "earn" | "event_earn" | "gift" | "redeem" | "refund" | "adjustment";
+  type: "earn" | "event_earn" | "gift" | "referral_bonus" | "redeem" | "refund" | "adjustment";
   points: number;
   balanceAfter: number;
   orderId: string;

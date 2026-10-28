@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { db } from "@/app/lib/firebase";
 import { useI18n } from "@/app/lib/i18n";
+import ReferralCampaignBanner from "@/app/_components/ReferralCampaignBanner";
 import {
   createPublicOrder,
   getPublicOrderErrorCode,
@@ -209,7 +210,7 @@ type EventCategorySection = {
   productIds: string[];
 };
 
-const MAIN_CLASS = "p-4 pb-40 space-y-6 max-w-3xl mx-auto animate-fade-in sm:pb-28";
+const MAIN_CLASS = "p-4 pb-28 space-y-6 max-w-3xl mx-auto animate-fade-in sm:pb-28";
 
 const normalizeStringArray = (value: any): string[] =>
   Array.isArray(value)
@@ -235,7 +236,7 @@ function cn(...parts: Array<string | false | null | undefined>) {
 
 function pill(active: boolean) {
   return cn(
-    "px-4 py-2 rounded-full text-xs font-black tracking-wide border transition-all active:scale-95",
+    "min-h-11 px-4 py-2 rounded-full text-sm font-bold tracking-normal border transition-all active:scale-95",
     active
       ? "bg-black text-white border-black dark:bg-white dark:text-black dark:border-white shadow-sm"
       : "bg-white text-neutral-500 border-neutral-200 hover:bg-neutral-50 dark:bg-neutral-900 dark:text-neutral-400 dark:border-neutral-800 dark:hover:bg-neutral-800"
@@ -1975,6 +1976,14 @@ const uiLocale =
     }
 
     if (!canSubmit) {
+      if (!customerName.trim()) {
+        showFormError(language === "ja" ? "お名前を入力してください。" : language === "en" ? "Enter your name." : "Informe seu nome.");
+        return;
+      }
+      if (!customerPhone.trim()) {
+        showFormError(language === "ja" ? "電話番号を入力してください。" : language === "en" ? "Enter your phone number." : "Informe seu telefone.");
+        return;
+      }
       showFormError(
         collectsFulfillmentDetails
           ? tr(
@@ -2179,6 +2188,7 @@ const uiLocale =
 
   return (
     <main className={MAIN_CLASS}>
+      <ReferralCampaignBanner sellerId={sellerId} />
       <OpenInBrowserGate url={currentUrl} />
 
       {sentToast && (
@@ -2193,9 +2203,9 @@ const uiLocale =
         className="space-y-4 border-b pb-5"
         style={{ borderColor: `${sellerIdentity.primaryColor}55` }}
       >
-        <div className="flex flex-col gap-5 md:flex-row md:items-start md:justify-between">
-          <div className="min-w-0 space-y-3">
-            <h1 className="text-3xl font-black tracking-tight text-neutral-900 dark:text-white">
+        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+          <div className="min-w-0 space-y-2">
+            <h1 className="text-2xl font-black tracking-tight sm:text-3xl text-neutral-900 dark:text-white">
               {event.title}
             </h1>
 
@@ -2270,17 +2280,17 @@ const uiLocale =
       <section className="space-y-5">
         <div className="flex items-center justify-between border-b border-neutral-100 pb-2 dark:border-neutral-800/60">
           <div>
-            <h2 className="text-sm font-black uppercase tracking-widest text-neutral-400">
-              {tr("event.products.title", "1. Produtos disponíveis")}
+            <h2 className="text-xl font-black text-neutral-900 dark:text-white">
+              {language === "ja" ? "商品を選ぶ" : language === "en" ? "Choose products" : "Escolha seus produtos"}
             </h2>
-            <p className="mt-1 text-[11px] font-bold text-neutral-400">
-              {tr("event.products.subtitle", "Escolha os itens de venda normal. Pedidos acima do estoque ficam pendentes.")}
+            <p className="mt-1 text-sm text-neutral-600 dark:text-neutral-300">
+              {language === "ja" ? "「追加」を押して数量を選んでください。" : language === "en" ? "Tap Add to choose quantities." : "Toque em Adicionar para escolher a quantidade."}
             </p>
           </div>
         </div>
 
         {normalCategorySections.length > 1 && (
-          <div className="flex flex-wrap gap-1.5 overflow-x-auto pb-1 scrollbar-none">
+          <div role="group" aria-label={tr("event.categories.all", "Categorias")} className="flex flex-nowrap gap-2 overflow-x-auto pb-2 scrollbar-none">
             <button
               type="button"
               onClick={() => setActiveCategory("__all__")}
@@ -2410,7 +2420,11 @@ const uiLocale =
       )}
 
       {!checkoutOpen && (
-        <div className="fixed inset-x-0 bottom-[calc(4.75rem+env(safe-area-inset-bottom))] z-[70] px-3 sm:bottom-4 sm:px-4">
+        <div className={cn(
+          "fixed inset-x-0 bottom-[calc(4.75rem+env(safe-area-inset-bottom))] z-[70] px-3 sm:bottom-4 sm:px-4",
+          !customerSession.registered && "!bottom-[max(env(safe-area-inset-bottom),0.5rem)] sm:!bottom-4",
+          (eventClosed || totalItems <= 0) && "hidden",
+        )}>
           <div className="mx-auto max-w-3xl rounded-3xl border border-neutral-200 bg-white/95 p-3 shadow-2xl backdrop-blur dark:border-neutral-800 dark:bg-neutral-950/95">
             <button
               type="button"
@@ -2419,7 +2433,7 @@ const uiLocale =
                 setCheckoutOpen(true);
               }}
               disabled={eventClosed || totalItems <= 0}
-              className="flex w-full items-center justify-between gap-4 rounded-2xl bg-emerald-600 px-5 py-4 text-left text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-45"
+              className="flex min-h-14 w-full items-center justify-between gap-3 rounded-2xl bg-emerald-700 px-4 py-3 text-left text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-45 sm:px-5"
             >
               <span className="flex min-w-0 items-center gap-3">
                 <span className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white/15">
@@ -2431,8 +2445,8 @@ const uiLocale =
                   )}
                 </span>
                 <span className="min-w-0">
-                  <span className="block truncate text-sm font-black uppercase tracking-wider">
-                    {tr("event.order.review_cart", "Revisar e finalizar pedido")}
+                  <span aria-label={tr("event.order.review_cart", "Revisar e finalizar pedido")} className="block truncate text-sm font-black sm:text-base">
+                    {language === "ja" ? "注文を確認する" : language === "en" ? "Review my order" : "Revisar meu pedido"}
                   </span>
                   <span className="mt-0.5 block truncate text-[11px] font-bold text-emerald-100">
                     {totalItems > 0
@@ -2469,7 +2483,7 @@ const uiLocale =
             <div className="flex items-center justify-between gap-4 border-b border-neutral-200 px-5 py-4 dark:border-neutral-800">
               <div>
                 <p className="text-[10px] font-black uppercase tracking-widest text-neutral-400">
-                  {tr("event.order.checkout", "Checkout do evento")}
+                  {language === "ja" ? "ご注文" : language === "en" ? "Your order" : "Seu pedido"}
                 </p>
                 <h2 className="text-lg font-black text-neutral-900 dark:text-white">
                   {event.title}
@@ -2486,34 +2500,87 @@ const uiLocale =
             </div>
 
             <div ref={checkoutScrollRef} className="overflow-y-auto p-5 sm:p-6">
-      <section className="space-y-4 border-t border-neutral-200 dark:border-neutral-800 pt-6">
+              <section className="mb-5 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-900/60 dark:bg-emerald-950/20">
+                <div className="flex items-center justify-between gap-2">
+                  <h3 className="text-base font-black text-emerald-950 dark:text-emerald-100">
+                    {language === "ja" ? "1. ご注文の商品" : language === "en" ? "1. Your selected items" : "1. Produtos escolhidos"}
+                  </h3>
+                  <button
+                    type="button"
+                    onClick={() => { if (!submitting) setCheckoutOpen(false); }}
+                    disabled={submitting}
+                    className="min-h-11 shrink-0 rounded-xl px-2 text-xs font-black text-emerald-800 underline disabled:opacity-30 dark:text-emerald-200"
+                  >
+                    {language === "ja" ? "商品を変更" : language === "en" ? "Edit items" : "Alterar produtos"}
+                  </button>
+                </div>
+                <ul className="mt-2 space-y-2 text-sm text-neutral-800 dark:text-neutral-100">
+                  {orderableIds.filter((productId) => (quantities[productId] || 0) > 0).slice(0, 4).map((productId) => (
+                    <li key={productId} className="flex justify-between gap-2">
+                      <span className="min-w-0 break-words">{quantities[productId]} × {productsData[productId]?.name || productId}</span>
+                      <span className="shrink-0 font-bold">{formatMoneyMinor((productsData[productId]?.priceMinor || 0) * quantities[productId], currency, locale)}</span>
+                    </li>
+                  ))}
+                  {orderableIds.filter((productId) => (quantities[productId] || 0) > 0).length > 4 && (
+                    <li className="text-xs font-semibold text-neutral-600 dark:text-neutral-300">
+                      {language === "ja" ? "ほかの商品も含まれています" : language === "en" ? "Other items are included in the total" : "Outros itens incluídos no total"}
+                    </li>
+                  )}
+                </ul>
+                {(discountMinor > 0 || rewardEvaluation.discountMinor > 0) && (
+                  <div className="mt-3 flex justify-between gap-3 text-xs font-bold text-emerald-800 dark:text-emerald-200">
+                    <span>{language === "ja" ? "割引合計" : language === "en" ? "Discounts" : "Descontos"}</span>
+                    <span>- {formatMoneyMinor(discountMinor + rewardEvaluation.discountMinor, currency, locale)}</span>
+                  </div>
+                )}
+                <div className="mt-3 flex items-center justify-between border-t border-emerald-200 pt-3 text-base font-black text-emerald-950 dark:border-emerald-900 dark:text-emerald-100">
+                  <span>{language === "ja" ? "合計" : language === "en" ? "Total" : "Total"}</span>
+                  <span>{formatMoneyMinor(totalAmountMinor, currency, locale)}</span>
+                </div>
+              </section>
+              <section className="space-y-4 border-t border-neutral-200 pt-5 dark:border-neutral-800">
                       <h2 className="text-sm font-black uppercase tracking-widest text-neutral-400">
                         {tr("event.customer.title", "2. Informe seu nome")}
                       </h2>
               
                       <div className="space-y-3">
-                        <input
-                          value={customerName}
-                          onChange={(e) => setCustomerName(e.target.value)}
-                          placeholder={tr("event.form.customer_name", "Seu nome")}
-                          className="w-full rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-4 py-3 text-sm text-neutral-900 dark:text-white focus:outline-none"
-                        />
-              
-                        <input
-                          value={customerPhone}
-                          onChange={(e) => setCustomerPhone(e.target.value)}
-                          placeholder={tr("event.form.customer_phone", "Telefone / WhatsApp")}
-                          inputMode="tel"
-                          autoComplete="tel"
-                          className="w-full rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-4 py-3 text-sm text-neutral-900 dark:text-white focus:outline-none"
-                        />
-              
-                        <textarea
-                          value={note}
-                          onChange={(e) => setNote(e.target.value)}
-                          placeholder={tr("event.form.note", "Observação")}
-                          className="w-full rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-4 py-3 text-sm text-neutral-900 dark:text-white focus:outline-none min-h-[90px]"
-                        />
+                        <label className="block space-y-2">
+                          <span className="text-sm font-semibold">{tr("event.form.customer_name", "Seu nome")} *</span>
+                          <input
+                            value={customerName}
+                            onChange={(e) => setCustomerName(e.target.value)}
+                            placeholder={tr("event.form.customer_name", "Seu nome")}
+                            autoComplete="name"
+                            required
+                            className="min-h-12 w-full rounded-xl border border-neutral-300 bg-white px-4 py-3 text-base text-neutral-900 focus:border-emerald-600 focus:outline-none dark:border-neutral-700 dark:bg-neutral-900 dark:text-white"
+                          />
+                        </label>
+                        <label className="block space-y-2">
+                          <span className="text-sm font-semibold">{tr("event.form.customer_phone", "Telefone / WhatsApp")} *</span>
+                          <input
+                            value={customerPhone}
+                            onChange={(e) => setCustomerPhone(e.target.value)}
+                            placeholder={tr("event.form.customer_phone", "Telefone / WhatsApp")}
+                            type="tel"
+                            inputMode="tel"
+                            autoComplete="tel"
+                            required
+                            className="min-h-12 w-full rounded-xl border border-neutral-300 bg-white px-4 py-3 text-base text-neutral-900 focus:border-emerald-600 focus:outline-none dark:border-neutral-700 dark:bg-neutral-900 dark:text-white"
+                          />
+                        </label>
+                        <details className="rounded-xl border border-neutral-200 px-4 py-3 dark:border-neutral-800" open={note.trim().length > 0 || undefined}>
+                          <summary className="cursor-pointer text-sm font-semibold text-neutral-600 dark:text-neutral-300">
+                            {language === "ja" ? "備考を追加（任意）" : language === "en" ? "Add a note (optional)" : "Adicionar observação (opcional)"}
+                          </summary>
+                          <label className="mt-3 block space-y-2">
+                            <span className="text-sm font-semibold">{tr("event.form.note", "Observação")}</span>
+                            <textarea
+                              value={note}
+                              onChange={(e) => setNote(e.target.value)}
+                              className="min-h-24 w-full rounded-xl border border-neutral-300 bg-white px-4 py-3 text-base text-neutral-900 focus:border-emerald-600 focus:outline-none dark:border-neutral-700 dark:bg-neutral-900 dark:text-white"
+                            />
+                          </label>
+                        </details>
                       </div>
                     </section>
               
@@ -2816,7 +2883,7 @@ const uiLocale =
                         <button
                           type="button"
                           onClick={handleFinalize}
-                          disabled={!canSubmit}
+                          disabled={submitting}
                           className="w-full bg-green-600 text-white py-4 rounded-2xl font-black text-sm uppercase tracking-wider transition hover:opacity-95 shadow-xl disabled:opacity-30"
                         >
                           {submitting ? tr("event.order.finalizing", "Finalizando...") : tr("event.order.finalize_pwa", "Finalizar pedido")}
@@ -3129,7 +3196,7 @@ function EventProductGrid({
           <div
             key={productId}
             className={cn(
-              "rounded-3xl border bg-white p-4 shadow-sm transition hover:shadow-md dark:bg-neutral-900",
+              "rounded-2xl border bg-white p-4 shadow-sm transition dark:bg-neutral-900",
               madeToOrder
                 ? "border-violet-200 dark:border-violet-900/60"
                 : soldOut
@@ -3145,7 +3212,7 @@ function EventProductGrid({
             <div className="space-y-2">
               <div className="relative flex aspect-[4/3] items-center justify-center overflow-hidden rounded-2xl border border-neutral-100 bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800">
                 {info?.imageUrl ? (
-                  <img src={info.imageUrl} alt={name} className="h-full w-full object-cover" />
+                  <img src={info.imageUrl} alt={name} loading="lazy" className="h-full w-full object-cover" />
                 ) : (
                   <span className="text-[10px] font-black uppercase text-neutral-400">
                     {tr("event.product.no_image", "Sem imagem")}
@@ -3187,9 +3254,9 @@ function EventProductGrid({
               </div>
 
               <div className="space-y-1">
-                <h4 className="truncate text-sm font-black tracking-tight text-neutral-900 dark:text-white">{name}</h4>
+                <h4 className="break-words text-base font-black tracking-tight text-neutral-900 dark:text-white">{name}</h4>
                 <div className="flex flex-wrap items-baseline gap-2">
-                  <p className="text-xs font-black text-neutral-600 dark:text-neutral-400">
+                  <p className="text-lg font-black text-neutral-900 dark:text-neutral-100">
                     {formatMoneyMinor(info?.priceMinor || 0, currency, locale)}
                   </p>
                   {info?.scheduledPriceStatus === "active" &&
@@ -3245,13 +3312,6 @@ function EventProductGrid({
                   <p className="rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-[10px] font-bold text-violet-700 dark:border-violet-900/50 dark:bg-violet-950/20 dark:text-violet-300">
                     {tr("event.product.made_to_order_notice", "Produzido mediante reserva antecipada. O pedido ficará pendente até ficar pronto.")} {eventProductionLeadTimeNotice(language, info?.productionLeadTimeDays || 1)}
                   </p>
-                ) : lastUnits ? (
-                  <p className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-[10px] font-black text-amber-900 dark:border-amber-800 dark:bg-amber-950/20 dark:text-amber-200">
-                    {tr(
-                      "event.product.last_units_notice",
-                      "Últimas {count} unidades — garanta a sua.",
-                    ).replace("{count}", String(stock))}
-                  </p>
                 ) : needsConfirmation ? (
                   <p className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-[10px] font-black leading-relaxed text-amber-900 dark:border-amber-800 dark:bg-amber-950/20 dark:text-amber-200">
                     {tr(
@@ -3259,20 +3319,13 @@ function EventProductGrid({
                       "Disponibilidade sujeita à produção após o pedido.",
                     )} {eventProductionLeadTimeNotice(language, info?.productionLeadTimeDays || 0)}
                   </p>
-                ) : soldOut ? (
-                  <p className="rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-[10px] font-black text-red-800 dark:border-red-900/60 dark:bg-red-950/20 dark:text-red-300">
-                    {tr(
-                      "event.product.sold_out_notice",
-                      "Esgotado — novas vendas estão bloqueadas.",
-                    )}
-                  </p>
                 ) : null}
               </div>
             </div>
 
             <div className="mt-3 flex items-center justify-between gap-2 border-t border-neutral-100 pt-3 dark:border-neutral-800/40">
-              <span className="text-[10px] font-black uppercase text-neutral-400">
-                {tr("event.product.quantity", "Quantidade")}
+              <span className="text-sm font-semibold text-neutral-600 dark:text-neutral-300">
+                {quantity > 0 ? tr("event.product.quantity", "Quantidade") : (language === "ja" ? "数量を選ぶ" : language === "en" ? "Choose quantity" : "Escolha a quantidade")}
               </span>
 
               {isMixedPack && info ? (
@@ -3286,9 +3339,13 @@ function EventProductGrid({
                 </button>
               ) : (
                 <div className="inline-flex items-center gap-2">
-                  <button type="button" onClick={() => onAdjust(productId, -1)} disabled={eventClosed || quantity <= 0} className="flex h-8 w-8 items-center justify-center rounded-full border border-neutral-300 bg-white text-sm font-bold transition hover:bg-neutral-50 disabled:opacity-30 dark:border-neutral-700 dark:bg-neutral-900">-</button>
-                  <span className="min-w-[1.5rem] text-center text-sm font-black text-neutral-900 dark:text-white">{quantity}</span>
-                  <button type="button" onClick={() => onAdjust(productId, 1)} disabled={eventClosed || soldOut || reachedQuantityLimit} className={cn("flex h-8 w-8 items-center justify-center rounded-full border text-sm font-bold transition disabled:opacity-30", madeToOrder ? "border-violet-500 bg-violet-600 text-white hover:bg-violet-700" : "border-neutral-300 bg-white hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900")}>+</button>
+                  {quantity > 0 && (
+                    <>
+                      <button type="button" onClick={() => onAdjust(productId, -1)} disabled={eventClosed} aria-label={language === "ja" ? "数量を減らす" : language === "en" ? "Decrease quantity" : "Diminuir quantidade"} className="flex h-12 w-12 items-center justify-center rounded-xl border border-neutral-300 bg-white text-lg font-bold transition hover:bg-neutral-50 disabled:opacity-30 dark:border-neutral-700 dark:bg-neutral-900">-</button>
+                      <span aria-live="polite" className="min-w-[1.5rem] text-center text-lg font-black text-neutral-900 dark:text-white">{quantity}</span>
+                    </>
+                  )}
+                  <button type="button" onClick={() => onAdjust(productId, 1)} disabled={eventClosed || soldOut || reachedQuantityLimit} aria-label={language === "ja" ? "追加する" : language === "en" ? "Add one" : "Adicionar um"} className={cn("flex h-12 min-w-12 items-center justify-center rounded-xl border px-3 text-lg font-bold transition disabled:opacity-30", madeToOrder ? "border-violet-500 bg-violet-600 text-white hover:bg-violet-700" : "border-emerald-600 bg-emerald-700 text-white hover:bg-emerald-800")}>{quantity === 0 ? (language === "ja" ? "追加" : language === "en" ? "Add" : "Adicionar") : "+"}</button>
                 </div>
               )}
             </div>

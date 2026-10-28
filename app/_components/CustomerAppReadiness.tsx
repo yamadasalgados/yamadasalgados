@@ -13,7 +13,7 @@ type BeforeInstallPromptEvent = Event & {
 type NavigatorWithStandalone = Navigator & { standalone?: boolean };
 
 // Versão nova para que quem dispensou a faixa antiga veja a orientação corrigida no iPhone.
-const DISMISSED_KEY = "yamada:pwa-install-dismissed:v2";
+const DISMISSED_KEY = "order-system:pwa-install-dismissed:v2";
 
 const COPY = {
   pt: {

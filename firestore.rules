@@ -366,8 +366,7 @@ service cloud.firestore {
         );
 
       allow create:
-        if validOwnUserCreate(userId)
-        || isAdmin();
+        if isAdmin();
 
       allow update:
         if validOwnUserUpdate(userId)
@@ -375,6 +374,17 @@ service cloud.firestore {
 
       allow delete:
         if isAdmin();
+    }
+
+    // =========================================================
+    // PARTNER / MERCHANT ACCESS REQUESTS
+    // =========================================================
+
+    // Solicitações públicas entram apenas pela API server-side /api/partners.
+    // O cliente nunca acessa esta coleção diretamente; somente admins podem
+    // consultar ou alterar os registros pelo SDK cliente, se necessário.
+    match /partnerLeads/{leadId} {
+      allow read, create, update, delete: if isAdmin();
     }
 
     // =========================================================
@@ -746,8 +756,7 @@ service cloud.firestore {
         || isSellerPrincipal(sellerId);
 
       allow create:
-        if isAdmin()
-        || validOwnSellerCreate(sellerId);
+        if isAdmin();
 
       allow update:
         if isAdmin()
@@ -919,9 +928,13 @@ service cloud.firestore {
             && sellerIsPubliclyAvailable(sellerId)
           );
 
+        // Campanha de indicação somente pode ser alterada via API autorizada.
         allow create, update, delete:
           if isAdmin()
-          || isSellerOwner(sellerId);
+          || (
+            settingId != "referralCampaign"
+            && isSellerOwner(sellerId)
+          );
       }
 
       /*
@@ -1087,6 +1100,11 @@ service cloud.firestore {
      * acessados exclusivamente pelas APIs autenticadas com Firebase Admin.
      */
     match /customers/{document=**} {
+      allow read, write: if false;
+    }
+
+    // Códigos de indicação ficam inacessíveis ao SDK cliente.
+    match /referralCodes/{code} {
       allow read, write: if false;
     }
 

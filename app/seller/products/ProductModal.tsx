@@ -12,7 +12,7 @@ import {
   addDoc,
   collection,
   doc,
-  getDoc,
+  getDocFromServer,
   serverTimestamp,
   setDoc,
   runTransaction,
@@ -129,6 +129,7 @@ type Snapshot = {
   bundleEnabled: boolean;
   bundleTotalUnits: string;
   bundleOptionProductIds: string[];
+  featuredInStore: boolean;
   storefrontSubgroup: string;
   storefrontSubgroupOrder: string;
   storefrontProductOrder: string;
@@ -219,6 +220,7 @@ export default function ProductModal({
   const [bundleEnabled, setBundleEnabled] = useState(false);
   const [bundleTotalUnits, setBundleTotalUnits] = useState("100");
   const [bundleOptionProductIds, setBundleOptionProductIds] = useState<string[]>([]);
+  const [featuredInStore, setFeaturedInStore] = useState(false);
   const [storefrontSubgroup, setStorefrontSubgroup] = useState("");
   const [storefrontSubgroupOrder, setStorefrontSubgroupOrder] = useState("");
   const [storefrontProductOrder, setStorefrontProductOrder] = useState("");
@@ -408,6 +410,7 @@ export default function ProductModal({
         bundleEnabled,
         bundleTotalUnits,
         bundleOptionProductIds,
+        featuredInStore,
         storefrontSubgroup,
         storefrontSubgroupOrder,
         storefrontProductOrder,
@@ -449,6 +452,7 @@ export default function ProductModal({
       bundleEnabled,
       bundleTotalUnits,
       bundleOptionProductIds,
+      featuredInStore,
       storefrontSubgroup,
       storefrontSubgroupOrder,
       storefrontProductOrder,
@@ -561,6 +565,7 @@ export default function ProductModal({
       bundleEnabled: activeBundle.enabled,
       bundleTotalUnits: String(activeBundle.totalUnits || 100),
       bundleOptionProductIds: activeBundle.optionProductIds,
+      featuredInStore: activeProduct?.featuredInStore === true,
       storefrontSubgroup: activeStorefront.subgroup,
       storefrontSubgroupOrder: activeStorefront.subgroupOrder === null ? "" : String(activeStorefront.subgroupOrder),
       storefrontProductOrder: activeStorefront.productOrder === null ? "" : String(activeStorefront.productOrder),
@@ -601,6 +606,7 @@ export default function ProductModal({
     setBundleEnabled(nextState.bundleEnabled);
     setBundleTotalUnits(nextState.bundleTotalUnits);
     setBundleOptionProductIds(nextState.bundleOptionProductIds);
+    setFeaturedInStore(nextState.featuredInStore);
     setStorefrontSubgroup(nextState.storefrontSubgroup);
     setStorefrontSubgroupOrder(nextState.storefrontSubgroupOrder);
     setStorefrontProductOrder(nextState.storefrontProductOrder);
@@ -1197,6 +1203,7 @@ export default function ProductModal({
           totalUnits: normalizedBundleTotalUnits,
           optionProductIds: productType !== "mixed_pack" && bundleEnabled ? normalizedBundleOptionIds : [],
         },
+        featuredInStore,
         storefront: normalizedStorefront,
         status: productType !== "mixed_pack" && bundleEnabled ? "made_to_order" as const : status,
         imageUrl: nextMainUrl,
@@ -1318,6 +1325,7 @@ export default function ProductModal({
           productionLeadTime: normalizedProductionLeadTime,
           productionLeadTimeDays: normalizedProductionLeadTime.days,
           bundleConfig: payload.bundleConfig,
+          featuredInStore: payload.featuredInStore,
           storefront: payload.storefront,
           status: payload.status,
           imageUrl: nextMainUrl,
@@ -1325,10 +1333,18 @@ export default function ProductModal({
         };
       }
 
-      const persistedSnapshot = await getDoc(persistedReference!);
+      // Confirme os dados diretamente no servidor, nunca somente no estado local.
+      const persistedSnapshot = await getDocFromServer(persistedReference!);
       if (!persistedSnapshot.exists()) {
         throw new Error("PRODUCT_NOT_FOUND_AFTER_SAVE");
       }
+      // A UI so informa sucesso depois de confirmar que o destaque foi gravado.
+      // Isso tambem protege contra futuras regressões nos campos enviados.
+      const persistedFeatured = persistedSnapshot.data().featuredInStore === true;
+      if (persistedFeatured !== featuredInStore) {
+        throw new Error("FEATURED_NOT_PERSISTED");
+      }
+      savedProduct = { ...savedProduct, featuredInStore: persistedFeatured };
       const persistedSchedule = resolveProductScheduledPriceChange(
         persistedSnapshot.data(),
         currency,
@@ -1396,6 +1412,7 @@ export default function ProductModal({
         bundleEnabled: savedProduct.bundleConfig.enabled,
         bundleTotalUnits: String(savedProduct.bundleConfig.totalUnits),
         bundleOptionProductIds: savedProduct.bundleConfig.optionProductIds,
+        featuredInStore: savedProduct.featuredInStore,
         storefrontSubgroup: savedProduct.storefront.subgroup,
         storefrontSubgroupOrder: savedProduct.storefront.subgroupOrder === null ? "" : String(savedProduct.storefront.subgroupOrder),
         storefrontProductOrder: savedProduct.storefront.productOrder === null ? "" : String(savedProduct.storefront.productOrder),
@@ -1437,6 +1454,7 @@ export default function ProductModal({
       setBundleEnabled(savedProduct.bundleConfig.enabled);
       setBundleTotalUnits(String(savedProduct.bundleConfig.totalUnits));
       setBundleOptionProductIds(savedProduct.bundleConfig.optionProductIds);
+      setFeaturedInStore(savedProduct.featuredInStore);
       setStorefrontSubgroup(savedProduct.storefront.subgroup);
       setStorefrontSubgroupOrder(savedProduct.storefront.subgroupOrder === null ? "" : String(savedProduct.storefront.subgroupOrder));
       setStorefrontProductOrder(savedProduct.storefront.productOrder === null ? "" : String(savedProduct.storefront.productOrder));
@@ -1464,6 +1482,14 @@ export default function ProductModal({
           stockQty: `${copy.invalidStockBelowReserved} (${reserved})`,
         }));
         setGeneralError(`${copy.invalidStockBelowReserved} (${reserved})`);
+      } else if (message === "FEATURED_NOT_PERSISTED") {
+        setGeneralError(
+          lang === "ja"
+            ? "注目商品設定をサーバーに保存できませんでした。ページを更新して、もう一度お試しください。"
+            : lang === "en"
+              ? "The featured setting could not be confirmed on the server. Reload the page and try again."
+              : "Não foi possível confirmar o destaque no servidor. Atualize a página e tente novamente.",
+        );
       } else if (message === "SCHEDULE_NOT_PERSISTED") {
         setGeneralError(
           lang === "ja"
@@ -1524,6 +1550,7 @@ export default function ProductModal({
     scheduledPriceNoticeDays,
     scheduledPriceShowInLastChance,
     timeZone,
+    featuredInStore,
     storefrontSubgroup,
     storefrontSubgroupOrder,
     storefrontProductOrder,
@@ -1719,6 +1746,8 @@ export default function ProductModal({
                 }}
                 status={status}
                 setStatus={setStatus}
+                featuredInStore={featuredInStore}
+                setFeaturedInStore={setFeaturedInStore}
                 storefrontSubgroup={storefrontSubgroup}
                 setStorefrontSubgroup={setStorefrontSubgroup}
                 storefrontSubgroupOrder={storefrontSubgroupOrder}

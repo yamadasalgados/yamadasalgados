@@ -5,4 +5,6 @@ export {
   notifySellerStoreOrderCreated,
   notifySellerEventOrderCreated,
   notifyPushTestRequest,
+  notifyMarketingCampaign,
+  notifyWishlistRestock,
 } from "./notifications";

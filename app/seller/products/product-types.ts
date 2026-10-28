@@ -74,6 +74,7 @@ export type ProductDoc = {
   extraImageUrls?: string[];
   bundleConfig: ProductBundleConfig;
   storefront: ProductStorefrontConfig;
+  featuredInStore: boolean;
 };
 
 export type ProductFormField =

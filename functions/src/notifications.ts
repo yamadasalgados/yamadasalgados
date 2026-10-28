@@ -774,3 +774,162 @@ export const notifyPushTestRequest = onDocumentCreated(
     }
   },
 );
+
+
+/** Targeted, opt-in product news. Queue is written only by the seller-authenticated
+ * Next.js API via Firebase Admin; all customer records are server-only.
+ * No broad /customers scan: audience must have purchased the target item/category.
+ */
+export const notifyMarketingCampaign = onDocumentCreated(
+  { document: "sellers/{sellerId}/marketingCampaigns/{campaignId}", region: "asia-northeast1", secrets: [vapidPrivate], timeoutSeconds: 540 },
+  async event => {
+    const snap = event.data;
+    if (!snap) return;
+    const data = snap.data() ?? {};
+    const sellerId = cleanString(event.params.sellerId, 160);
+    const interestKey = cleanString(data.interestKey, 60);
+    if (data.status !== "queued" || !sellerId || sellerId.includes("/") || !/^[a-z0-9 ]{3,60}$/.test(interestKey)) return;
+    // Claim atomically: duplicate function invocations cannot send again.
+    const claimed = await db.runTransaction(async tx => {
+      const current = await tx.get(snap.ref);
+      if (current.data()?.status !== "queued") return false;
+      tx.update(snap.ref, { status: "processing", startedAt: admin.firestore.FieldValue.serverTimestamp() });
+      return true;
+    });
+    if (!claimed) return;
+    let sentCount = 0, skippedCount = 0, failedCount = 0;
+    try {
+      if (!ensurePushConfigured()) throw new Error("VAPID_NOT_CONFIGURED");
+      const sellerSnap = await db.collection("sellers").doc(sellerId).get();
+      if (sellerSnap.data()?.accountStatus !== "active") throw new Error("SELLER_DISABLED");
+      const audience = await db.collection("sellers").doc(sellerId).collection("customerInsights")
+        .where("interestKeys", "array-contains", interestKey).limit(60).get();
+      // Sequential processing limits push fan-out. Rate-limit is enforced by the API.
+      for (const insight of audience.docs) {
+        const uid = insight.id;
+        const customerRef = db.collection("customers").doc(uid);
+        const [customer, preference] = await db.getAll(customerRef, customerRef.collection("marketingPreferences").doc(sellerId));
+        if (customer.data()?.accountStatus !== "active" || preference.data()?.enabled !== true) { skippedCount++; continue; }
+        const subscriptions = await customerRef.collection("pushSubscriptions").limit(5).get();
+        if (subscriptions.empty) { skippedCount++; continue; }
+        // Exactly one attempt per account in a campaign, even if the trigger retries.
+        const receiptRef = snap.ref.collection("receipts").doc(uid);
+        const locked = await db.runTransaction(async tx => {
+          const receipt = await tx.get(receiptRef);
+          if (receipt.exists) return false;
+          tx.create(receiptRef, { customerUid: uid, state: "attempted", createdAt: admin.firestore.FieldValue.serverTimestamp() });
+          return true;
+        });
+        if (!locked) { skippedCount++; continue; }
+        let sent = false;
+        for (const subscription of subscriptions.docs) {
+          const details = subscription.data();
+          if (!isValidPushSubscription(details)) continue;
+          const result = await sendAndClean({
+            subscriptionRef: subscription.ref,
+            endpointMirrorRef: db.collection("customerPushEndpoints").doc(subscription.id),
+            subscriptionData: details,
+            payload: { title: cleanString(data.title, 80), body: cleanString(data.body, 240),
+              url: `/store/${encodeURIComponent(sellerId)}`, icon: "/icon-192x192.png",
+              badge: "/notification-badge.png", tag: `marketing-${event.params.campaignId}`,
+              kind: "customer-marketing", renotify: false },
+          });
+          sent ||= result.ok;
+        }
+        await receiptRef.set({ state: sent ? "sent" : "failed", completedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        if (sent) sentCount++; else failedCount++;
+      }
+      await snap.ref.update({ status: "completed", sentCount, skippedCount, failedCount,
+        completedAt: admin.firestore.FieldValue.serverTimestamp() });
+    } catch (error) {
+      console.error("[marketing-push]", error);
+      await snap.ref.update({ status: "error", errorCode: error instanceof Error ? error.message.slice(0, 80) : "UNKNOWN",
+        sentCount, skippedCount, failedCount, completedAt: admin.firestore.FieldValue.serverTimestamp() });
+    }
+  },
+);
+
+/** Customer-requested restock alerts, separate from promotional marketing consent.
+ * Triggered only when a product transitions from unavailable to available.
+ * An explicit wishlist opt-in and an active device push subscription are required.
+ */
+function isWishlistProductAvailable(product: Record<string, any>): boolean {
+  if (product.active === false || !["active", "made_to_order", "preorder"].includes(String(product.status ?? "active"))) return false;
+  if (product.inventory && typeof product.inventory === "object") {
+    if (product.inventory.tracked === false) return true;
+    if (product.inventory.tracked === true) return Number(product.inventory.quantity) - Number(product.inventory.reserved ?? 0) > 0;
+  }
+  const stock = product.stockQty ?? product.stock;
+  return stock === null || stock === undefined || (Number.isFinite(Number(stock)) && Number(stock) > 0);
+}
+
+export const notifyWishlistRestock = onDocumentUpdated(
+  { document: "sellers/{sellerId}/products/{productId}", region: "asia-northeast1", secrets: [vapidPrivate], timeoutSeconds: 540 },
+  async event => {
+    const before = event.data?.before.data();
+    const after = event.data?.after.data();
+    if (!before || !after || isWishlistProductAvailable(before) || !isWishlistProductAvailable(after)) return;
+    const sellerId = cleanString(event.params.sellerId, 150);
+    const productId = cleanString(event.params.productId, 150);
+    if (!/^[A-Za-z0-9_-]{6,150}$/.test(sellerId) || !/^[A-Za-z0-9_-]{6,150}$/.test(productId)) return;
+    const sellerRef = db.collection("sellers").doc(sellerId);
+    const sellerSnap = await sellerRef.get();
+    if (sellerSnap.data()?.accountStatus !== "active" || !ensurePushConfigured()) return;
+    const productName = cleanString(after.name ?? after.title, 100) || "Seu produto favorito";
+    const alertRef = sellerRef.collection("wishlistAlerts").doc(createHash("sha256").update(event.id).digest("hex"));
+    // Claim once. Retry delivery after crash is deliberately not automatic to avoid duplicate alerts.
+    const claimed = await db.runTransaction(async tx => {
+      const snapshot = await tx.get(alertRef);
+      if (snapshot.exists) return false;
+      tx.create(alertRef, { productId, status: "processing", startedAt: admin.firestore.FieldValue.serverTimestamp() });
+      return true;
+    });
+    if (!claimed) return;
+    let sent = 0, skipped = 0, failed = 0;
+    try {
+      // Small fixed cap per restock event to contain unexpected costs; record truncation.
+      const audience = await sellerRef.collection("wishlistCustomers")
+        .where("productIds", "array-contains", productId).limit(250).get();
+      for (const watcher of audience.docs) {
+        if (watcher.data().notifyWhenAvailable !== true) { skipped++; continue; }
+        const uid = watcher.id;
+        const customerRef = db.collection("customers").doc(uid);
+        const [customer, source, identity] = await db.getAll(customerRef, customerRef.collection("wishlists").doc(sellerId), db.collection("users").doc(uid));
+        if (customer.data()?.accountStatus !== "active" || (identity.exists && ["seller", "admin"].includes(String(identity.data()?.role))) || source.data()?.notifyWhenAvailable !== true ||
+            !Array.isArray(source.data()?.productIds) || !source.data()?.productIds.includes(productId)) { skipped++; continue; }
+        const subs = await customerRef.collection("pushSubscriptions").limit(5).get();
+        if (subs.empty) { skipped++; continue; }
+        const receipt = alertRef.collection("receipts").doc(uid);
+        const locked = await db.runTransaction(async tx => {
+          const existing = await tx.get(receipt);
+          if (existing.exists) return false;
+          tx.create(receipt, { state: "attempted", createdAt: admin.firestore.FieldValue.serverTimestamp() });
+          return true;
+        });
+        if (!locked) { skipped++; continue; }
+        let ok = false;
+        for (const subscription of subs.docs) {
+          const details = subscription.data();
+          if (!isValidPushSubscription(details)) continue;
+          const language = languageOf(details.language);
+          const title = language === "ja" ? "お気に入りの商品が入荷しました" : language === "en" ? "Your favorite is available again" : "Seu favorito voltou!";
+          const body = language === "ja" ? `${productName} が入荷しました。` : language === "en" ? `${productName} is available again.` : `${productName} está disponível novamente.`;
+          const result = await sendAndClean({
+            subscriptionRef: subscription.ref,
+            endpointMirrorRef: db.collection("customerPushEndpoints").doc(subscription.id),
+            subscriptionData: details,
+            payload: { title, body, url: `/store/${encodeURIComponent(sellerId)}`, icon: "/icon-192x192.png",
+              badge: "/notification-badge.png", tag: `wishlist-${event.id}-${uid}`, kind: "wishlist-restock" },
+          });
+          ok ||= result.ok;
+        }
+        await receipt.set({ state: ok ? "sent" : "failed", completedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        if (ok) sent++; else failed++;
+      }
+      await alertRef.update({ status: "completed", sent, skipped, failed, truncated: audience.size === 250, completedAt: admin.firestore.FieldValue.serverTimestamp() });
+    } catch (error) {
+      console.error("[wishlist-restock]", error);
+      await alertRef.update({ status: "error", sent, skipped, failed, completedAt: admin.firestore.FieldValue.serverTimestamp() });
+    }
+  },
+);

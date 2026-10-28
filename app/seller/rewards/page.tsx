@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+
 import {
   Gift,
   History,
@@ -148,6 +150,11 @@ export default function SellerRewardsPage() {
   const sellerSession = useSellerSession();
   const sellerId = sellerSession.sellerId;
 
+  const [referralEnabled, setReferralEnabled] = useState(false);
+  const [referralLimit, setReferralLimit] = useState(10);
+  const [referralEnd, setReferralEnd] = useState(Date.parse("2027-01-01T00:00:00+09:00"));
+  const [referralLoaded, setReferralLoaded] = useState(false);
+  const [savingReferral, setSavingReferral] = useState(false);
   const [identifier, setIdentifier] = useState("");
   const [account, setAccount] = useState<SellerRewardAccount | null>(null);
   const [points, setPoints] = useState("");
@@ -161,6 +168,34 @@ export default function SellerRewardsPage() {
   const pendingGiftRequestRef = useRef<{ fingerprint: string; id: string } | null>(null);
 
   const locale = language === "ja" ? "ja-JP" : language === "en" ? "en-US" : "pt-BR";
+  useEffect(() => {
+    if (!sellerId) return;
+    let active = true;
+    void sellerSession.user.getIdToken().then((token) => fetch(
+      `/api/seller/referral-campaign?sellerId=${encodeURIComponent(sellerId)}`,
+      { headers: { authorization: `Bearer ${token}` }, cache: "no-store" },
+    )).then(async (response) => response.ok ? response.json() : null).then((payload) => {
+      if (active && payload?.ok) { setReferralEnabled(payload.enabled === true); setReferralLimit(payload.maxRewardsPerInviter || 10); setReferralEnd(payload.registrationEndsAtMs || Date.parse("2027-01-01T00:00:00+09:00")); setReferralLoaded(true); }
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, [sellerId, sellerSession.user]);
+
+  const toggleReferral = async () => {
+    if (!sellerId || savingReferral) return;
+    setSavingReferral(true); setError(""); setSuccess("");
+    try {
+      const token = await sellerSession.user.getIdToken();
+      const response = await fetch("/api/seller/referral-campaign", {
+        method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify({ sellerId, enabled: !referralEnabled, maxRewardsPerInviter: referralLimit, registrationEndsAtMs: referralEnd }),
+      });
+      const payload = await response.json();
+      if (!response.ok || !payload.ok) throw new Error(payload.error || "Falha ao atualizar campanha.");
+      setReferralEnabled(payload.enabled === true);
+    } catch (error) { setError(error instanceof Error ? error.message : "Falha ao atualizar campanha."); }
+    finally { setSavingReferral(false); }
+  };
+
   const pointValue = useMemo(
     () => Math.max(0, Math.floor(Number(points) || 0)),
     [points],
@@ -275,6 +310,20 @@ export default function SellerRewardsPage() {
           </button>
         }
       />
+
+      <section className="rounded-3xl border border-violet-200 bg-violet-50 p-5 dark:border-violet-900 dark:bg-violet-950/30 sm:p-6">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="max-w-xl space-y-1">
+            <h2 className="text-lg font-black">{language === "ja" ? "2026年 友達紹介キャンペーン" : language === "en" ? "2026 friend referral campaign" : "Campanha de indicação de amigos — 2026"}</h2>
+            <p className="text-sm text-neutral-600 dark:text-neutral-300">{language === "ja" ? "初回の有料注文の受取後、紹介者と新規登録者に100ポイントずつ。12月31日まで。" : language === "en" ? "100 points each after the first paid order is delivered. Ends December 31." : "100 pontos para cada pessoa após a primeira compra paga e entregue. Até 31/12. Desligada por padrão. Ao desativar, você interrompe novos convites, mas mantém os bônus já prometidos para cadastros válidos."}</p>
+          </div>
+          <button type="button" disabled={!referralLoaded || savingReferral} onClick={() => void toggleReferral()}
+            className={`min-h-12 min-w-32 rounded-xl px-5 py-3 text-sm font-black text-white disabled:opacity-50 ${referralEnabled ? "bg-rose-600" : "bg-violet-700"}`}>
+            {!referralLoaded || savingReferral ? "..." : referralEnabled ? (language === "ja" ? "停止する" : language === "en" ? "Disable" : "Desativar") : (language === "ja" ? "有効にする" : language === "en" ? "Enable" : "Ativar campanha")}
+          </button>
+        </div>
+        <Link href="/seller/settings/referrals" className="mt-4 inline-flex min-h-11 items-center rounded-xl border border-violet-300 px-4 py-2 text-sm font-black text-violet-700 dark:text-violet-200">{language === "ja" ? "期間と紹介上限を設定" : language === "en" ? "Configure dates and limits" : "Configurar prazo e limite de indicações"}</Link>
+      </section>
 
       {error && <FeedbackBanner tone="error" role="alert">{error}</FeedbackBanner>}
       {success && <FeedbackBanner tone="success">{success}</FeedbackBanner>}

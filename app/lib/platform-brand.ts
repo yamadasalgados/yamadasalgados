@@ -10,14 +10,14 @@ function cleanPublicValue(value: string | undefined, maxLength: number): string 
  * definido, como login, administração e instalação global da PWA.
  */
 export const PLATFORM_NAME =
-  cleanPublicValue(process.env.NEXT_PUBLIC_PLATFORM_NAME, 80) || "Order Portal";
+  cleanPublicValue(process.env.NEXT_PUBLIC_PLATFORM_NAME, 80) || "Order System";
 
 export const PLATFORM_SHORT_NAME =
-  cleanPublicValue(process.env.NEXT_PUBLIC_PLATFORM_SHORT_NAME, 30) || "Orders";
+  cleanPublicValue(process.env.NEXT_PUBLIC_PLATFORM_SHORT_NAME, 30) || "Order System";
 
 export const PLATFORM_DESCRIPTION =
   cleanPublicValue(process.env.NEXT_PUBLIC_PLATFORM_DESCRIPTION, 180) ||
-  "Pedidos, eventos e acompanhamento de produção.";
+  "Gestão de lojas, pedidos, eventos e produção.";
 
 export const PLATFORM_LOGO_PATH = "/platform-logo.png";
 export const DEFAULT_PUBLIC_STORE_NAME = "Loja online";

@@ -1,8 +1,20 @@
 {
-  "name": "yamada-fix-02a2-productform-props",
+  "name": "order-system-06e2a-neutral-access",
   "destructive": false,
   "files": [
-    "app/seller/products/ProductModal.tsx",
-    "README.md"
+    "app/page.tsx",
+    "app/login/page.tsx",
+    "app/customer/login/page.tsx",
+    "app/partners/page.tsx",
+    "app/admin/partners/page.tsx",
+    "app/api/partners/route.ts",
+    "app/api/admin/partner-leads/route.ts",
+    "app/_components/RoleNavigation.tsx",
+    "app/lib/platform-brand.ts",
+    "app/lib/ensureUserProfile.ts",
+    "firestore.rules",
+    "public/manifest.webmanifest",
+    "public/manifest.json",
+    "docs/06E2A-IDENTIDADE-NEUTRA-ACESSOS.md"
   ]
 }

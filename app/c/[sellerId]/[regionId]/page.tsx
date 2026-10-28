@@ -320,39 +320,45 @@ export default function ClientRegionPage() {
       />
       <OpenInBrowserGate url={gateUrl} />
 
-      <main className="max-w-2xl mx-auto p-4 md:p-6 space-y-8 animate-fade-in">
-        <header className="text-center md:text-left space-y-4">
-          <div className="space-y-2">
-            <h1 className="text-3xl font-black uppercase tracking-tighter dark:text-white">
+      <main className="mx-auto max-w-2xl space-y-6 px-4 pb-28 pt-5 animate-fade-in md:px-6">
+        <header className="space-y-4 rounded-3xl border border-neutral-200 bg-white p-5 shadow-sm dark:border-neutral-800 dark:bg-neutral-900 sm:p-6">
+          <div className="space-y-1.5">
+            <p className="text-[10px] font-black uppercase tracking-[0.2em] text-orange-600 dark:text-orange-300">
+              {regionId}
+            </p>
+            <h1 className="text-2xl font-black tracking-tight text-neutral-950 dark:text-white sm:text-3xl">
               {tr("clientRegion.title", "Pedidos Abertos")}
             </h1>
 
-            <p className="text-sm font-medium text-neutral-500">
+            <p className="text-xs font-medium text-neutral-500 sm:text-sm">
               {(seller?.storeName || seller?.displayName)
                 ? tr("clientRegion.organizedBy", "Organizado por {name}").replace(
                     "{name}",
-                    (seller.storeName || seller.displayName || "")
+                    seller.storeName || seller.displayName || "",
                   )
                 : tr(
                     "clientRegion.subtitle",
-                    "Escolha um evento abaixo para fazer seu pedido"
+                    "Escolha um evento abaixo para fazer seu pedido",
                   )}
             </p>
           </div>
 
-          <PushSubscribeBanner
-            sellerId={sellerId}
-            regionId={regionId}
-            vapidPublicKey={process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || ""}
-          />
+          <div className="flex flex-wrap gap-2 pt-1">
+            {sellerId && (
+              <Link
+                href={`/store/${encodeURIComponent(sellerId)}`}
+                className="inline-flex min-h-11 items-center justify-center rounded-xl bg-neutral-950 px-4 py-2.5 text-xs font-black text-white transition active:scale-[0.98] dark:bg-white dark:text-neutral-950"
+              >
+                {tr("clientRegion.cta.store", "Abrir Loja Completa")}
+              </Link>
+            )}
 
-          <div className="flex flex-wrap justify-center md:justify-start gap-2">
             {whatsappLink && (
               <a
                 href={whatsappLink}
                 target="_blank"
                 rel="noreferrer"
-                className="px-4 py-2 rounded-xl border dark:border-neutral-800 text-xs font-black hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors uppercase"
+                className="inline-flex min-h-11 items-center justify-center rounded-xl border border-neutral-200 bg-neutral-50 px-4 py-2.5 text-xs font-black uppercase transition hover:bg-neutral-100 active:scale-[0.98] dark:border-neutral-800 dark:bg-neutral-800/60 dark:hover:bg-neutral-800"
               >
                 {tr("clientRegion.cta.whatsapp", "WhatsApp")}
               </a>
@@ -363,7 +369,7 @@ export default function ClientRegionPage() {
                 href={seller.pickupLink}
                 target="_blank"
                 rel="noreferrer"
-                className="px-4 py-2 rounded-xl border dark:border-neutral-800 text-xs font-black hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors uppercase"
+                className="inline-flex min-h-11 items-center justify-center rounded-xl border border-neutral-200 bg-neutral-50 px-4 py-2.5 text-xs font-black uppercase transition hover:bg-neutral-100 active:scale-[0.98] dark:border-neutral-800 dark:bg-neutral-800/60 dark:hover:bg-neutral-800"
               >
                 {tr("clientRegion.cta.pickupLocation", "Local de Retirada")}
               </a>
@@ -371,8 +377,8 @@ export default function ClientRegionPage() {
           </div>
 
           {seller?.pickupNote && (
-            <div className="p-4 rounded-2xl bg-neutral-50 dark:bg-neutral-800/50 border border-neutral-100 dark:border-neutral-800 text-[11px] font-bold text-neutral-600 dark:text-neutral-400">
-              <span className="text-black dark:text-white uppercase mr-2">
+            <div className="rounded-2xl border border-neutral-100 bg-neutral-50 p-3.5 text-xs font-bold text-neutral-600 dark:border-neutral-800 dark:bg-neutral-950/60 dark:text-neutral-300">
+              <span className="mr-2 font-black uppercase text-neutral-950 dark:text-white">
                 {tr("clientRegion.notice", "Aviso")}:
               </span>
               {seller.pickupNote}
@@ -380,26 +386,32 @@ export default function ClientRegionPage() {
           )}
 
           {errMsg ? (
-            <div className="p-4 rounded-2xl border border-red-200 dark:border-red-900/30 bg-red-50 dark:bg-red-900/10 text-[11px] font-bold text-red-700 dark:text-red-400">
+            <div className="rounded-2xl border border-red-200 bg-red-50 p-3.5 text-xs font-bold text-red-700 dark:border-red-900/30 dark:bg-red-900/10 dark:text-red-400">
               {errMsg}
             </div>
           ) : null}
         </header>
 
-        <section className="space-y-4">
+        <PushSubscribeBanner
+          sellerId={sellerId}
+          regionId={regionId}
+          vapidPublicKey={process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || ""}
+        />
+
+        <section className="space-y-3">
           {loading ? (
-            <div className="text-center py-10 text-xs font-black text-neutral-400 uppercase animate-pulse">
+            <div className="py-12 text-center text-xs font-black uppercase text-neutral-400 animate-pulse">
               {tr("clientRegion.loading", "Carregando eventos...")}
             </div>
           ) : seller && !sellerAvailable ? (
-            <div className="text-center p-12 border-2 border-dashed rounded-3xl dark:border-neutral-800 text-xs font-black uppercase text-neutral-400">
+            <div className="rounded-3xl border-2 border-dashed border-neutral-200 p-10 text-center text-xs font-black uppercase text-neutral-400 dark:border-neutral-800">
               {tr(
                 "clientRegion.storeUnavailable",
                 "Esta loja não está recebendo pedidos no momento.",
               )}
             </div>
           ) : events.length === 0 ? (
-            <div className="text-center p-12 border-2 border-dashed rounded-3xl dark:border-neutral-800 text-xs font-black uppercase text-neutral-400">
+            <div className="rounded-3xl border-2 border-dashed border-neutral-200 p-10 text-center text-xs font-black uppercase text-neutral-400 dark:border-neutral-800">
               {tr("clientRegion.empty", "Nenhum pedido ativo no momento.")}
             </div>
           ) : (
@@ -414,36 +426,35 @@ export default function ClientRegionPage() {
                   <Link
                     key={e.id}
                     href={`/event/${sellerId}/${e.id}`}
-                    className="group p-6 rounded-3xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 hover:border-black dark:hover:border-white transition-all flex justify-between items-center shadow-sm"
+                    className="group flex min-h-20 items-center justify-between gap-4 rounded-3xl border border-neutral-200 bg-white p-5 shadow-sm transition-all hover:border-neutral-950 active:scale-[0.99] dark:border-neutral-800 dark:bg-neutral-900 dark:hover:border-white"
                   >
-                    <div>
-                      <h3 className="font-black dark:text-white text-lg group-hover:text-blue-600 transition-colors">
+                    <div className="min-w-0 flex-1">
+                      <h3 className="truncate text-base font-black text-neutral-950 transition-colors group-hover:text-orange-600 dark:text-white sm:text-lg">
                         {title}
                       </h3>
 
-                      <div className="flex items-center gap-3 mt-1">
-                        <span className="text-[10px] font-black uppercase text-green-600 bg-green-50 dark:bg-green-900/30 dark:text-green-400 px-2 py-0.5 rounded-md">
+                      <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                        <span className=" inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-0.5 text-[10px] font-black uppercase text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
+                          <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
                           {tr("clientRegion.badge.open", "Aberto")}
                         </span>
 
                         {!!e.data.createdAt && (
-                          <span className="text-[10px] font-bold text-neutral-400 uppercase">
+                          <span className="text-[11px] font-bold text-neutral-400">
                             {tr("clientRegion.startedOn", "Iniciado em {date}").replace(
                               "{date}",
                               fmtDateShort(
                                 e.data.createdAt,
-                                regional.regionalLocale ??
-                                  "pt-BR",
-                                regional.timeZone ||
-                                  "Asia/Tokyo",
-                              )
+                                regional.regionalLocale ?? "pt-BR",
+                                regional.timeZone || "Asia/Tokyo",
+                              ),
                             )}
                           </span>
                         )}
                       </div>
                     </div>
 
-                    <div className="w-10 h-10 rounded-full bg-neutral-50 dark:bg-neutral-800 flex items-center justify-center group-hover:bg-black group-hover:text-white transition-all">
+                    <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-neutral-100 font-black transition-all group-hover:bg-neutral-950 group-hover:text-white dark:bg-neutral-800 dark:group-hover:bg-white dark:group-hover:text-neutral-950">
                       →
                     </div>
                   </Link>

@@ -7,6 +7,7 @@ import { Suspense, useEffect, useMemo, useState, type FormEvent } from "react";
 
 import BackLink from "@/app/_components/BackLink";
 import CustomerPushNotifications from "@/app/_components/CustomerPushNotifications";
+import CustomerMarketingPreferences from "@/app/_components/CustomerMarketingPreferences";
 import FeedbackBanner from "@/app/_components/FeedbackBanner";
 import PageHeader from "@/app/_components/PageHeader";
 import useCustomerSession from "@/app/hooks/useCustomerSession";
@@ -280,6 +281,8 @@ function CustomerProfileContent() {
             <CustomerPushNotifications session={session} language={language} />
           </div>
         </section>
+
+        <CustomerMarketingPreferences session={session} language={language} />
 
         <section className="rounded-3xl border border-neutral-200 bg-white p-6 shadow-sm dark:border-neutral-800 dark:bg-neutral-900 sm:p-8">
           <h2 className="text-lg font-black">{text.postal}</h2>

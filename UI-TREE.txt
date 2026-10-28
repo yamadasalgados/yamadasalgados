@@ -202,7 +202,7 @@ public
 ├── globe.svg
 ├── icon-192x192.png
 ├── icon-512x512.png
-├── logo-yamada.png
+├── platform-logo.png
 ├── manifest.json
 ├── manifest.webmanifest
 ├── next.svg
