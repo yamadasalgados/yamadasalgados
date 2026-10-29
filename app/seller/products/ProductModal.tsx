@@ -62,6 +62,7 @@ import {
   normalizeCategoryLabel,
   slugify,
   toNum,
+  imageUploadFailureMessage,
   uploadImageFile,
 } from "./product-catalog-utils";
 import type {
@@ -241,6 +242,7 @@ export default function ProductModal({
   const [successMessage, setSuccessMessage] = useState("");
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
 
   const editing = Boolean(product);
   const busy = saving || uploading || categorySaving;
@@ -1052,15 +1054,18 @@ export default function ProductModal({
 
       if (mainFile) {
         setUploading(true);
+        setUploadProgress(0);
         nextMainUrl = await uploadImageFile({
           uid: authUser.uid,
           productIdLike,
           file: mainFile,
+          onProgress: setUploadProgress,
         });
       }
 
       if (extraFiles.length > 0) {
         setUploading(true);
+        setUploadProgress(0);
         const uploadedExtras: string[] = [];
 
         for (const file of extraFiles) {
@@ -1069,6 +1074,7 @@ export default function ProductModal({
               uid: authUser.uid,
               productIdLike,
               file,
+              onProgress: setUploadProgress,
             }),
           );
         }
@@ -1499,7 +1505,7 @@ export default function ProductModal({
               : "O produto foi salvo, mas não foi possível confirmar a data programada. Recarregue a página e salve novamente.",
         );
       } else {
-        setGeneralError(copy.unexpected);
+        setGeneralError(imageUploadFailureMessage(error, lang) || copy.unexpected);
       }
     } finally {
       setUploading(false);
@@ -1561,7 +1567,7 @@ export default function ProductModal({
 
   const title = editing ? copy.editTitle : copy.newTitle;
   const saveLabel = uploading
-    ? copy.uploading
+    ? `${copy.uploading} ${uploadProgress ?? 0}%`
     : saving
       ? copy.saving
       : editing
