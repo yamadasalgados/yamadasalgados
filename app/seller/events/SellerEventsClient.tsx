@@ -183,8 +183,7 @@ export default function SellerEventsPage() {
 
   const handleChangeFilter = (v: string) => {
     const params = new URLSearchParams(search.toString());
-    if (v === "all") params.delete("status");
-    else params.set("status", v);
+    params.set("status", v);
     router.replace(`/seller/events?${params.toString()}`);
   };
 
@@ -281,6 +280,13 @@ export default function SellerEventsPage() {
               </div>
 
               <div className="flex gap-2 mt-5">
+                <Link
+                  href={`/seller/events/new?repeat=${encodeURIComponent(ev.id)}`}
+                  className="inline-flex min-h-11 items-center justify-center rounded-xl border border-emerald-200 bg-emerald-50 px-3 text-xs font-black text-emerald-800 transition hover:bg-emerald-100 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300"
+                  title={lang === "ja" ? "このイベントを再開催" : lang === "en" ? "Repeat this event" : "Repetir este evento"}
+                >
+                  {lang === "ja" ? "再開催" : lang === "en" ? "Repeat" : "Repetir"}
+                </Link>
                 <Link href={`/seller/events/${ev.id}`} className="flex-1 bg-neutral-100 dark:bg-neutral-800 text-neutral-900 dark:text-white py-3 rounded-xl text-xs font-black text-center transition active:scale-[0.99]">
                   {t("events.panel")}
                 </Link>

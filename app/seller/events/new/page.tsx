@@ -44,6 +44,18 @@ type ProductStatus = "active" | "inactive" | "made_to_order" | "hidden";
 type EventProductMode = "normal" | "made_to_order";
 type ProductSelectionMode = "excluded" | EventProductMode;
 
+type RepeatEventTemplate = {
+  id: string;
+  title: string;
+  description: string;
+  regionName: string;
+  allowDelivery: boolean;
+  allowPickup: boolean;
+  productIds: string[];
+  productAvailabilityModes: Record<string, EventProductMode>;
+  offerIds: string[];
+};
+
 type UserDoc = {
   role?: "seller" | "admin";
   sellerId?: string;
@@ -165,16 +177,22 @@ export default function CreateNewEventPage() {
 
   const [ownProducts, setOwnProducts] = useState<ProductDoc[]>([]);
   const [loadingProducts, setLoadingProducts] = useState(false);
+  const [productsLoaded, setProductsLoaded] = useState(false);
   const [selectedOwn, setSelectedOwn] = useState<Record<string, ProductSelectionMode>>({});
   const [ownOffers, setOwnOffers] = useState<OfferDoc[]>([]);
   const [selectedOfferIds, setSelectedOfferIds] = useState<Record<string, boolean>>({});
   const [loadingOffers, setLoadingOffers] = useState(false);
+  const [offersLoaded, setOffersLoaded] = useState(false);
   const [currency, setCurrency] = useState<SupportedCurrency>("JPY");
   const [regionalLocale, setRegionalLocale] = useState<RegionalLocale>("ja-JP");
 
   const [loading, setLoading] = useState(false);
   const [errMsg, setErrMsg] = useState("");
   const [okMsg, setOkMsg] = useState("");
+  const [repeatTemplate, setRepeatTemplate] = useState<RepeatEventTemplate | null>(null);
+  const [repeatLoading, setRepeatLoading] = useState(false);
+  const [repeatApplied, setRepeatApplied] = useState(false);
+  const [repeatNote, setRepeatNote] = useState("");
 
   const sellerId = sellerSession.sellerId;
   const role = profile?.role ?? "seller";
@@ -278,6 +296,7 @@ export default function CreateNewEventPage() {
         if (!alive) return;
 
         setOwnProducts(list);
+        setProductsLoaded(true);
         setLoadingProducts(false);
       },
       (err) => {
@@ -327,6 +346,7 @@ export default function CreateNewEventPage() {
           .map((document) => normalizeOffer(document.id, document.data(), currency))
           .filter((offer): offer is OfferDoc => offer !== null && offerIsCurrentlyActive(offer));
         setOwnOffers(list);
+        setOffersLoaded(true);
         setLoadingOffers(false);
       },
       (error) => {
@@ -336,6 +356,103 @@ export default function CreateNewEventPage() {
       },
     );
   }, [currency, inactive, sellerId]);
+
+  // v6.9A: The historical event is only a source of configuration.
+  // No order or historical item document is copied. A new event is saved
+  // through the existing form only after the seller reviews and confirms it.
+  useEffect(() => {
+    if (!authUser || !sellerId || inactive) return;
+    const sourceId = new URLSearchParams(window.location.search).get("repeat");
+    if (!sourceId) return;
+    if (!/^[a-zA-Z0-9_-]{1,150}$/.test(sourceId)) {
+      setErrMsg(lang === "ja" ? "イベントIDが無効です。" : lang === "en" ? "Invalid event ID." : "ID do evento inválido.");
+      return;
+    }
+
+    let cancelled = false;
+    setRepeatLoading(true);
+    getDoc(doc(db, "sellers", sellerId, "events", sourceId))
+      .then((snapshot) => {
+        if (cancelled) return;
+        if (!snapshot.exists()) throw new Error("REPEAT_SOURCE_NOT_FOUND");
+        const data = snapshot.data();
+        const modes = data.productAvailabilityModes && typeof data.productAvailabilityModes === "object"
+          ? data.productAvailabilityModes as Record<string, unknown>
+          : {};
+        const productAvailabilityModes: Record<string, EventProductMode> = {};
+        for (const [id, mode] of Object.entries(modes)) {
+          productAvailabilityModes[id] = mode === "made_to_order" ? "made_to_order" : "normal";
+        }
+        setRepeatTemplate({
+          id: sourceId,
+          title: String(data.title || data.name || ""),
+          description: String(data.description || ""),
+          regionName: String(data.regionName || data.region || ""),
+          allowDelivery: data.allowDelivery === true,
+          allowPickup: data.allowPickup === true,
+          productIds: normalizeStringArray(data.productIds),
+          productAvailabilityModes,
+          offerIds: normalizeStringArray(data.offerIds),
+        });
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        console.error("[CreateEvent] repeat source:", error);
+        setErrMsg(lang === "ja"
+          ? "以前のイベントを読み込めませんでした。"
+          : lang === "en"
+            ? "Could not load the previous event."
+            : "Não foi possível carregar o evento anterior.");
+      })
+      .finally(() => { if (!cancelled) setRepeatLoading(false); });
+    return () => { cancelled = true; };
+  }, [authUser, inactive, lang, sellerId]);
+
+  // Wait for BOTH catalog subscriptions, then apply exactly once. This avoids
+  // stale product/offer IDs and avoids overwriting later user edits.
+  useEffect(() => {
+    if (!repeatTemplate || !productsLoaded || !offersLoaded || repeatApplied) return;
+    const availableProductIds = new Set(ownProducts.map((product) => product.id));
+    const availableOffers = new Map(selectableOffers.map((offer) => [offer.id, offer]));
+    const selectedProducts: Record<string, ProductSelectionMode> = {};
+    const selectedOffersMap: Record<string, boolean> = {};
+
+    for (const id of repeatTemplate.productIds) {
+      if (!availableProductIds.has(id)) continue;
+      selectedProducts[id] = repeatTemplate.productAvailabilityModes[id] || defaultEventProductMode(productById.get(id));
+    }
+    for (const offerId of repeatTemplate.offerIds) {
+      const offer = availableOffers.get(offerId);
+      if (!offer) continue;
+      selectedOffersMap[offerId] = true;
+      for (const id of offer.eligibleProductIds) {
+        if (!availableProductIds.has(id)) continue;
+        if (!selectedProducts[id]) selectedProducts[id] = defaultEventProductMode(productById.get(id));
+      }
+    }
+
+    setTitle(repeatTemplate.title);
+    setDescription(repeatTemplate.description);
+    setRegionName(repeatTemplate.regionName);
+    setDeliveryChoice(repeatTemplate.allowDelivery
+      ? (repeatTemplate.allowPickup ? "both" : "delivery")
+      : (repeatTemplate.allowPickup ? "pickup" : "none"));
+    setStartDate("");
+    setEndDate("");
+    setSelectedOwn(selectedProducts);
+    setSelectedOfferIds(selectedOffersMap);
+
+    const omittedProducts = repeatTemplate.productIds.filter((id) => !availableProductIds.has(id)).length;
+    const omittedOffers = repeatTemplate.offerIds.filter((id) => !availableOffers.has(id)).length;
+    setRepeatNote(omittedProducts || omittedOffers
+      ? (lang === "ja"
+        ? `現在利用できない商品 ${omittedProducts} 件、オファー ${omittedOffers} 件を除外しました。`
+        : lang === "en"
+          ? `${omittedProducts} unavailable products and ${omittedOffers} unavailable offers were not reused.`
+          : `${omittedProducts} produto(s) indisponível(is) e ${omittedOffers} oferta(s) indisponível(is) não foram reutilizados.`)
+      : "");
+    setRepeatApplied(true);
+  }, [lang, offersLoaded, ownProducts, productById, productsLoaded, repeatApplied, repeatTemplate, selectableOffers]);
 
   const toggleOffer = (offer: OfferDoc) => {
     const selecting = !selectedOfferIds[offer.id];
@@ -454,6 +571,7 @@ export default function CreateNewEventPage() {
       if (startDate) eventPayload.startDate = startDate;
       if (endDate) eventPayload.endDate = endDate;
 
+      if (repeatTemplate && repeatApplied) eventPayload.repeatedFromEventId = repeatTemplate.id;
       const eventRef = await addDoc(collection(db, "sellers", sellerId, "events"), eventPayload);
 
       const batch = writeBatch(db);
@@ -546,6 +664,18 @@ export default function CreateNewEventPage() {
         back={<BackLink href="/seller/events" label={t("events.create.back")} />}
       />
 
+      {(repeatLoading || repeatApplied) && (
+        <div role="status" className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm font-bold text-emerald-900 dark:border-emerald-900/60 dark:bg-emerald-950/20 dark:text-emerald-200">
+          {repeatLoading
+            ? (lang === "ja" ? "以前のイベントを読み込み中..." : lang === "en" ? "Loading previous event..." : "Carregando evento anterior...")
+            : (lang === "ja"
+              ? "以前のイベントを元に新規作成します。日付、商品、オファーを確認してください。以前の注文は引き継がれません。"
+              : lang === "en"
+                ? "Creating a new event from a previous one. Review dates, products and offers. Previous orders will not be copied."
+                : "Novo evento baseado no anterior. Confira as novas datas, produtos e ofertas. Os pedidos antigos não serão copiados.")}
+          {repeatNote && <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">{repeatNote}</p>}
+        </div>
+      )}
       {(errMsg || okMsg) && (
         <FeedbackBanner tone={errMsg ? "error" : "success"} role={errMsg ? "alert" : "status"}>
           {errMsg || okMsg}
