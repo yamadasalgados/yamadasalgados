@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { getAdminDb } from "@/app/lib/firebaseAdmin";
 import { normalizeProductInventory } from "@/app/lib/inventory-schema";
+import { readEventPriceOverrides } from "@/app/lib/event-price-overrides";
 import {
   legacyMajorValueToMinor,
   minorToMajor,
@@ -172,6 +173,7 @@ export async function GET(
       ...publishedIds.map((productId) => catalog.doc(productId)),
     );
     const currency = sellerCurrency(seller, event);
+    const eventPriceOverrides = readEventPriceOverrides(event.eventPriceOverridesMinor);
 
     const products = productSnapshots.flatMap((snapshot) => {
       if (!snapshot.exists) return [];
@@ -207,6 +209,8 @@ export async function GET(
         scheduledPriceChange,
         currency,
       });
+      const eventPriceMinor = eventPriceOverrides[productId];
+      const effectivePriceMinor = eventPriceMinor ?? priceEvaluation.effectivePriceMinor;
       const leadTime = normalizeProductProductionLeadTime(
         raw.productionLeadTime,
         raw.productionLeadTimeDays,
@@ -219,11 +223,13 @@ export async function GET(
           name: cleanString(raw.name, 240) || productId,
           imageUrl: cleanString(raw.imageUrl ?? raw.image, 1800),
           extraImageUrls: cleanStringArray(raw.extraImageUrls, 12),
-          price: minorToMajor(priceEvaluation.effectivePriceMinor, currency),
-          priceMinor: priceEvaluation.effectivePriceMinor,
+          price: minorToMajor(effectivePriceMinor, currency),
+          priceMinor: effectivePriceMinor,
           basePriceMinor,
+          catalogPriceMinor: priceEvaluation.effectivePriceMinor,
+          ...(eventPriceMinor !== undefined ? { eventPriceMinor } : {}),
           scheduledPriceChange: priceEvaluation.scheduledPriceChange,
-          scheduledPriceStatus: priceEvaluation.status,
+          scheduledPriceStatus: eventPriceMinor !== undefined ? "none" : priceEvaluation.status,
           category: cleanString(raw.category, 240) || undefined,
           stockQty: inventory.tracked ? inventory.available : undefined,
           lowStockThreshold: inventory.lowStockThreshold,

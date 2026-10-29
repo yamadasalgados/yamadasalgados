@@ -29,6 +29,11 @@ import {
 } from "@/app/lib/money";
 import { normalizeProductInventory } from "@/app/lib/inventory-schema";
 import {
+  eventPriceInputFromMinor,
+  prepareEventPriceOverrides,
+  readEventPriceOverrides,
+} from "@/app/lib/event-price-overrides";
+import {
   normalizeOffer,
   offerIsCurrentlyActive,
   resolveLocalizedOfferText,
@@ -54,6 +59,7 @@ type RepeatEventTemplate = {
   productIds: string[];
   productAvailabilityModes: Record<string, EventProductMode>;
   offerIds: string[];
+  eventPriceOverridesMinor: Record<string, number>;
 };
 
 type UserDoc = {
@@ -179,6 +185,7 @@ export default function CreateNewEventPage() {
   const [loadingProducts, setLoadingProducts] = useState(false);
   const [productsLoaded, setProductsLoaded] = useState(false);
   const [selectedOwn, setSelectedOwn] = useState<Record<string, ProductSelectionMode>>({});
+  const [eventPriceInputs, setEventPriceInputs] = useState<Record<string, string>>({});
   const [ownOffers, setOwnOffers] = useState<OfferDoc[]>([]);
   const [selectedOfferIds, setSelectedOfferIds] = useState<Record<string, boolean>>({});
   const [loadingOffers, setLoadingOffers] = useState(false);
@@ -393,6 +400,7 @@ export default function CreateNewEventPage() {
           productIds: normalizeStringArray(data.productIds),
           productAvailabilityModes,
           offerIds: normalizeStringArray(data.offerIds),
+          eventPriceOverridesMinor: readEventPriceOverrides(data.eventPriceOverridesMinor),
         });
       })
       .catch((error: unknown) => {
@@ -441,6 +449,12 @@ export default function CreateNewEventPage() {
     setEndDate("");
     setSelectedOwn(selectedProducts);
     setSelectedOfferIds(selectedOffersMap);
+    // A repetição herda somente os preços dos produtos ainda disponíveis.
+    setEventPriceInputs(Object.fromEntries(
+      Object.entries(repeatTemplate.eventPriceOverridesMinor)
+        .filter(([productId]) => Boolean(selectedProducts[productId]))
+        .map(([productId, price]) => [productId, eventPriceInputFromMinor(price, currency)]),
+    ));
 
     const omittedProducts = repeatTemplate.productIds.filter((id) => !availableProductIds.has(id)).length;
     const omittedOffers = repeatTemplate.offerIds.filter((id) => !availableOffers.has(id)).length;
@@ -452,7 +466,7 @@ export default function CreateNewEventPage() {
           : `${omittedProducts} produto(s) indisponível(is) e ${omittedOffers} oferta(s) indisponível(is) não foram reutilizados.`)
       : "");
     setRepeatApplied(true);
-  }, [lang, offersLoaded, ownProducts, productById, productsLoaded, repeatApplied, repeatTemplate, selectableOffers]);
+  }, [currency, lang, offersLoaded, ownProducts, productById, productsLoaded, repeatApplied, repeatTemplate, selectableOffers]);
 
   const toggleOffer = (offer: OfferDoc) => {
     const selecting = !selectedOfferIds[offer.id];
@@ -547,7 +561,9 @@ export default function CreateNewEventPage() {
         ]),
       ) as Record<string, EventProductMode>;
 
+      const eventPriceOverridesMinor = prepareEventPriceOverrides(eventPriceInputs, pickedOwnIds, currency);
       const eventPayload: any = {
+        eventPriceOverridesMinor,
         sellerId,
         regionId,
         regionName: regionTrim,
@@ -1008,6 +1024,35 @@ export default function CreateNewEventPage() {
             </div>
           )}
         </div>
+
+        {pickedCount > 0 && (
+          <section className="rounded-3xl border border-emerald-200 bg-emerald-50/30 p-4 dark:border-emerald-900/50 dark:bg-emerald-950/10">
+            <h3 className="text-sm font-black text-neutral-950 dark:text-white">
+              {lang === "ja" ? "イベント限定価格" : lang === "en" ? "Event-only prices" : "Preços exclusivos do evento"}
+            </h3>
+            <p className="mb-3 text-xs text-neutral-500 dark:text-neutral-400">
+              {lang === "ja" ? "空欄の場合は通常の商品価格が適用されます。" : lang === "en" ? "Leave blank to use the current catalog price." : "Deixe em branco para manter o preço atual da loja."}
+            </p>
+            <div className="space-y-2">
+              {ownProducts.filter((product) => selectedOwn[product.id] && selectedOwn[product.id] !== "excluded").map((product) => (
+                <label key={product.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-white p-3 dark:bg-neutral-900">
+                  <span className="min-w-0 flex-1 text-xs font-bold text-neutral-800 dark:text-neutral-200">
+                    {product.name} <span className="text-neutral-400">({money(product.price)})</span>
+                  </span>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    aria-label={`${product.name} — ${lang === "ja" ? "イベント価格" : lang === "en" ? "Event price" : "Preço do evento"}`}
+                    placeholder={lang === "ja" ? "通常価格" : lang === "en" ? "Catalog price" : "Preço normal"}
+                    value={eventPriceInputs[product.id] ?? ""}
+                    onChange={(event) => setEventPriceInputs((current) => ({ ...current, [product.id]: event.target.value }))}
+                    className="w-32 rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-950 dark:border-neutral-700 dark:bg-neutral-950 dark:text-white"
+                  />
+                </label>
+              ))}
+            </div>
+          </section>
+        )}
 
         <div className="pt-4 border-t border-neutral-200 dark:border-neutral-800 space-y-3">
           {pickedCount <= 0 && (

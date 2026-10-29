@@ -52,6 +52,7 @@ import {
   minorToMajor,
 } from "@/app/lib/money";
 import { normalizeProductInventory } from "@/app/lib/inventory-schema";
+import { readEventPriceOverrides } from "@/app/lib/event-price-overrides";
 import {
   normalizeProductMixedPackConfig,
   normalizeProductType,
@@ -146,6 +147,7 @@ type EventData = {
   deliveryDates: string[];
   deliveryDateLabel: string;
   productIds: string[];
+  eventPriceOverridesMinor: Record<string, number>;
   featuredProductIds?: string[];
   offerIds?: string[];
   productNames?: string[];
@@ -176,6 +178,8 @@ type ProductImageData = {
   price?: number;
   priceMinor: number;
   basePriceMinor: number;
+  catalogPriceMinor?: number;
+  eventPriceMinor?: number;
   scheduledPriceChange: ProductScheduledPriceChange;
   scheduledPriceStatus: ScheduledPriceStatus;
   category?: CategoryName;
@@ -377,6 +381,7 @@ function mapProductSnapToData(
       ),
       priceMinor,
       basePriceMinor,
+      catalogPriceMinor: priceMinor,
       scheduledPriceChange: priceEvaluation.scheduledPriceChange,
       scheduledPriceStatus: priceEvaluation.status,
       category: normalizeCategoryDynamic(
@@ -410,6 +415,7 @@ async function fetchEventPublishedProducts(
   eventId: string,
   productNames: string[] = [],
   currency: SupportedCurrency,
+  eventPriceOverridesMinor: Record<string, number> = {},
 ) {
   const wantedNames = uniq(productNames);
   const result: Record<string, ProductImageData> = {};
@@ -540,6 +546,21 @@ async function fetchEventPublishedProducts(
     }
   });
 
+  // Event prices override catalog/scheduled prices only for selected event items.
+  // Component-only products used by mixed packs keep their catalog price.
+  const overrides = readEventPriceOverrides(eventPriceOverridesMinor);
+  for (const [productId, price] of Object.entries(overrides)) {
+    if (!result[productId] || result[productId].componentOnly || result[productId].status === "inactive") continue;
+    const catalogPriceMinor = result[productId].priceMinor;
+    result[productId] = {
+      ...result[productId],
+      catalogPriceMinor,
+      eventPriceMinor: price,
+      priceMinor: price,
+      price: minorToMajor(price, currency),
+      scheduledPriceStatus: "none",
+    };
+  }
   return result;
 }
 
@@ -629,16 +650,20 @@ const uiLocale =
             currency: event?.currency || "JPY",
             now,
           });
+          const nextPriceMinor = product.eventPriceMinor ?? evaluation.effectivePriceMinor;
+          const nextScheduleStatus = product.eventPriceMinor !== undefined ? "none" : evaluation.status;
           if (
-            evaluation.effectivePriceMinor !== product.priceMinor ||
-            evaluation.status !== product.scheduledPriceStatus
+            nextPriceMinor !== product.priceMinor ||
+            evaluation.effectivePriceMinor !== product.catalogPriceMinor ||
+            nextScheduleStatus !== product.scheduledPriceStatus
           ) changed = true;
           next[productId] = {
             ...product,
-            price: minorToMajor(evaluation.effectivePriceMinor, event?.currency || "JPY"),
-            priceMinor: evaluation.effectivePriceMinor,
+            price: minorToMajor(nextPriceMinor, event?.currency || "JPY"),
+            priceMinor: nextPriceMinor,
+            catalogPriceMinor: evaluation.effectivePriceMinor,
             scheduledPriceChange: evaluation.scheduledPriceChange,
-            scheduledPriceStatus: evaluation.status,
+            scheduledPriceStatus: nextScheduleStatus,
           };
         }
         return changed ? next : current;
@@ -1371,6 +1396,7 @@ const uiLocale =
           deliveryDates,
           deliveryDateLabel,
           productIds: normalizeStringArray(data.productIds),
+          eventPriceOverridesMinor: readEventPriceOverrides(data.eventPriceOverridesMinor),
           featuredProductIds: normalizeStringArray(data.featuredProductIds),
           productNames: normalizeStringArray(data.productNames),
           featuredProductNames: normalizeStringArray(data.featuredProductNames),
@@ -1430,6 +1456,7 @@ const uiLocale =
             id,
             eventProductNames,
             nextEvent.currency,
+            nextEvent.eventPriceOverridesMinor,
           );
           setProductsData(productsMap);
 
@@ -1541,6 +1568,7 @@ const uiLocale =
             deliveryDates,
             deliveryDateLabel,
             productIds: normalizeStringArray(data.productIds),
+            eventPriceOverridesMinor: readEventPriceOverrides(data.eventPriceOverridesMinor),
             featuredProductIds: normalizeStringArray(data.featuredProductIds),
             productNames: normalizeStringArray(data.productNames),
             featuredProductNames: normalizeStringArray(data.featuredProductNames),
@@ -1625,6 +1653,7 @@ const uiLocale =
           id,
           eventProductNames,
           event.currency,
+          event.eventPriceOverridesMinor,
         );
         if (!disposed) setProductsData(nextProducts);
       } catch (refreshError) {
@@ -2020,24 +2049,26 @@ const uiLocale =
         getPublicOrderErrorCode(err);
 
       if (errorCode === "PRICE_CHANGED") {
-        setProductsData((current) => {
-          const next: Record<string, ProductImageData> = {};
-          for (const [productId, product] of Object.entries(current)) {
-            const evaluation = evaluateProductPrice({
-              basePriceMinor: product.basePriceMinor,
-              scheduledPriceChange: product.scheduledPriceChange,
-              currency,
-            });
-            next[productId] = {
-              ...product,
-              price: minorToMajor(evaluation.effectivePriceMinor, currency),
-              priceMinor: evaluation.effectivePriceMinor,
-              scheduledPriceChange: evaluation.scheduledPriceChange,
-              scheduledPriceStatus: evaluation.status,
-            };
-          }
-          return next;
-        });
+        // The seller may have changed the event-only price after the cart was
+        // opened. Refresh the event root and catalog instead of merely
+        // recalculating the old prices held by the customer.
+        try {
+          const latestEvent = await getDoc(doc(db, "sellers", sellerId, "events", id));
+          const latestOverrides = readEventPriceOverrides(
+            latestEvent.exists() ? latestEvent.data().eventPriceOverridesMinor : null,
+          );
+          const refreshed = await fetchEventPublishedProducts(
+            sellerId,
+            id,
+            uniq([...(event?.productNames || []), ...(event?.featuredProductNames || [])]),
+            currency,
+            latestOverrides,
+          );
+          setEvent((current) => current ? { ...current, eventPriceOverridesMinor: latestOverrides } : current);
+          setProductsData(refreshed);
+        } catch (refreshError) {
+          console.warn("[EventClient] Could not refresh event prices after PRICE_CHANGED:", refreshError);
+        }
       }
 
       const message =
@@ -3259,13 +3290,22 @@ function EventProductGrid({
                   <p className="text-lg font-black text-neutral-900 dark:text-neutral-100">
                     {formatMoneyMinor(info?.priceMinor || 0, currency, locale)}
                   </p>
-                  {info?.scheduledPriceStatus === "active" &&
-                    info.basePriceMinor < info.priceMinor && (
-                      <span className="text-[10px] font-bold text-neutral-400 line-through">
-                        {formatMoneyMinor(info.basePriceMinor, currency, locale)}
-                      </span>
-                    )}
+                  {info?.eventPriceMinor !== undefined && (info.catalogPriceMinor ?? info.basePriceMinor) > info.priceMinor ? (
+                    <span className="text-[10px] font-bold text-neutral-400 line-through">
+                      {formatMoneyMinor(info.catalogPriceMinor ?? info.basePriceMinor, currency, locale)}
+                    </span>
+                  ) : info?.eventPriceMinor === undefined && info?.scheduledPriceStatus === "active" &&
+                    info.basePriceMinor < info.priceMinor ? (
+                    <span className="text-[10px] font-bold text-neutral-400 line-through">
+                      {formatMoneyMinor(info.basePriceMinor, currency, locale)}
+                    </span>
+                  ) : null}
                 </div>
+                {info?.eventPriceMinor !== undefined && (
+                  <p className="text-[10px] font-black text-emerald-700 dark:text-emerald-300">
+                    {language === "ja" ? "イベント限定価格" : language === "en" ? "Event-only price" : "Preço exclusivo do evento"}
+                  </p>
+                )}
 
                 {showScheduledPriceCards && info?.scheduledPriceStatus === "upcoming" && schedule?.nextPriceMinor && scheduledEvaluation.shouldShowNotice && (
                   <div className={`rounded-xl border px-3 py-2 text-[10px] font-bold leading-relaxed ${scheduledPresentation.cardClassName}`}>

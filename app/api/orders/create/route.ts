@@ -7,6 +7,7 @@ import { getAdminAuth, getAdminDb } from "@/app/lib/firebaseAdmin";
 import { normalizePrintSettings, profileQueueKey, publicPrintProfile } from "@/app/lib/print-server";
 import { normalizeCustomerAddress } from "@/app/lib/customer-profile";
 import { normalizeProductInventory } from "@/app/lib/inventory-schema";
+import { readEventPriceOverrides } from "@/app/lib/event-price-overrides";
 import { normalizeSellerOrderSettings } from "@/app/lib/order-settings-schema";
 import {
   compareDateKeys,
@@ -615,6 +616,7 @@ function normalizeProductLine(params: {
   defaultLanguage: Language;
   source: OrderSource;
   nowMillis: number;
+  eventPriceMinor?: number;
   allowHidden?: boolean;
 }): ProductLine {
   const {
@@ -627,6 +629,7 @@ function normalizeProductLine(params: {
     defaultLanguage,
     source,
     nowMillis,
+    eventPriceMinor,
     allowHidden = false,
   } = params;
 
@@ -700,7 +703,11 @@ function normalizeProductLine(params: {
     currency,
     now: nowMillis,
   });
-  const priceMinor = priceEvaluation.effectivePriceMinor;
+  // Never trust pricing supplied by the customer: this override comes from
+  // the event document read inside the checkout transaction.
+  const priceMinor = source === "event" && eventPriceMinor !== undefined
+    ? eventPriceMinor
+    : priceEvaluation.effectivePriceMinor;
 
   if (priceMinor <= 0) {
     throw new OrderError(
@@ -763,7 +770,7 @@ function normalizeProductLine(params: {
     quantity,
     priceMinor,
     basePriceMinor,
-    scheduledPriceStatus: priceEvaluation.status,
+    scheduledPriceStatus: source === "event" && eventPriceMinor !== undefined ? "none" : priceEvaluation.status,
     scheduledPriceChange: priceEvaluation.scheduledPriceChange,
     name: resolveLocalizedName(
       commercialRaw,
@@ -1354,6 +1361,9 @@ export async function POST(request: NextRequest) {
         30,
       );
 
+      const eventPriceOverrides = clean.source === "event"
+        ? readEventPriceOverrides(eventData.eventPriceOverridesMinor)
+        : {};
       const lines: ProductLine[] = [];
 
       for (let index = 0; index < orderItemSnapshots.length; index += 1) {
@@ -1380,6 +1390,7 @@ export async function POST(request: NextRequest) {
             defaultLanguage,
             source: clean.source,
             nowMillis,
+            eventPriceMinor: clean.source === "event" ? eventPriceOverrides[productId] : undefined,
           }),
         );
       }

@@ -25,6 +25,11 @@ import {
   formatMoneyMinor,
 } from "@/app/lib/money";
 import { normalizeProductInventory } from "@/app/lib/inventory-schema";
+import {
+  eventPriceInputFromMinor,
+  prepareEventPriceOverrides,
+  readEventPriceOverrides,
+} from "@/app/lib/event-price-overrides";
 import { Gift, Loader2, Printer, Search, Sparkles, UserRound } from "lucide-react";
 import {
   normalizeOffer,
@@ -87,6 +92,8 @@ type EventDoc = {
   deliveryDateLabel?: string;
   productIds?: string[];
   productAvailabilityModes?: Record<string, EventProductMode>;
+  eventPriceOverridesMinor?: Record<string, number>;
+  currency?: SupportedCurrency;
   featuredProductIds?: string[];
   offerIds?: string[];
   whatsapp?: string;
@@ -414,6 +421,7 @@ const [messageSummaries, setMessageSummaries] = useState<Record<string, MessageS
 
   const [productIds, setProductIds] = useState<string[]>([]);
   const [productAvailabilityModes, setProductAvailabilityModes] = useState<Record<string, EventProductMode>>({});
+  const [eventPriceInputs, setEventPriceInputs] = useState<Record<string, string>>({});
   const [featuredProductIds, setFeaturedProductIds] = useState<string[]>([]);
   const [offerIds, setOfferIds] = useState<string[]>([]);
   const [fulfillmentChoice, setFulfillmentChoice] = useState<EventFulfillmentChoice>("both");
@@ -615,6 +623,10 @@ const [messageSummaries, setMessageSummaries] = useState<Record<string, MessageS
 
         setProductIds(loadedProductIds);
         setProductAvailabilityModes(loadedModes);
+        setEventPriceInputs(Object.fromEntries(
+          Object.entries(readEventPriceOverrides(data.eventPriceOverridesMinor))
+            .map(([productId, price]) => [productId, eventPriceInputFromMinor(price, data.currency ?? profile?.currency ?? "JPY")]),
+        ));
         setFeaturedProductIds(Array.isArray(data.featuredProductIds) ? uniqStrings(data.featuredProductIds) : []);
         setOfferIds(Array.isArray(data.offerIds) ? uniqStrings(data.offerIds) : []);
         const presentationSettings: NonNullable<EventDoc["presentationSettings"]> =
@@ -1053,6 +1065,17 @@ return validOrders.filter((o) => o.deliveryDate === filterDate);
       ...productIds,
       ...Array.from(requiredProductIds),
     ]);
+    let eventPriceOverridesMinor: Record<string, number>;
+    try {
+      eventPriceOverridesMinor = prepareEventPriceOverrides(
+        eventPriceInputs,
+        cleanedProductIds,
+        event?.currency ?? profile?.currency ?? "JPY",
+      );
+    } catch (priceError) {
+      setError(priceError instanceof Error ? priceError.message : "Preço do evento inválido.");
+      return;
+    }
     const prodSet = new Set(cleanedProductIds);
     const cleanedAvailabilityModes = Object.fromEntries(
       cleanedProductIds.map((productId) => [
@@ -1154,6 +1177,7 @@ return validOrders.filter((o) => o.deliveryDate === filterDate);
         deliveryDateLabel: newDeliveryDates.join(" • "),
         productIds: cleanedProductIds,
         productAvailabilityModes: cleanedAvailabilityModes,
+        eventPriceOverridesMinor,
         featuredProductIds: fixedFeatured,
         offerIds: cleanedOfferIds,
         presentationSettings: {
@@ -1176,7 +1200,7 @@ return validOrders.filter((o) => o.deliveryDate === filterDate);
     } finally {
       setSaving(false);
     }
-  }, [eventRef, title, region, whatsapp, status, pickupLink, pickupNote, messengerId, fulfillmentChoice, rewardRecipientMode, rewardRecipient, deliveryDatesText, productIds, productAvailabilityModes, productById, requiredProductIds, featuredProductIds, allProducts, allOffers, offerIds, showScheduledPriceCards, showOfferCards, authUser?.uid, sellerUid, t, lang]);
+  }, [eventRef, title, region, whatsapp, status, pickupLink, pickupNote, messengerId, fulfillmentChoice, rewardRecipientMode, rewardRecipient, deliveryDatesText, productIds, productAvailabilityModes, eventPriceInputs, event?.currency, profile?.currency, productById, requiredProductIds, featuredProductIds, allProducts, allOffers, offerIds, showScheduledPriceCards, showOfferCards, authUser?.uid, sellerUid, t, lang]);
 
       const deliveryOrders = useMemo(() => {
   return orders.filter((o) => {
@@ -1946,6 +1970,39 @@ const markOrderMessagesAsRead = useCallback(
               </div>
             )}
           </div>
+
+          {productIds.length > 0 && (
+            <section className="rounded-3xl border border-emerald-200 bg-emerald-50/30 p-4 dark:border-emerald-900/50 dark:bg-emerald-950/10">
+              <h3 className="text-sm font-black text-neutral-900 dark:text-white">
+                {lang === "ja" ? "イベント限定価格" : lang === "en" ? "Event-only prices" : "Preços exclusivos do evento"}
+              </h3>
+              <p className="mb-3 text-xs text-neutral-500 dark:text-neutral-400">
+                {lang === "ja" ? "空欄は通常価格です。価格変更後は保存してください。" : lang === "en" ? "Leave blank for catalog price; save after changing." : "Deixe em branco para usar o preço da loja; salve após alterar."}
+              </p>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {productIds.map((productId) => {
+                  const product = productById.get(productId);
+                  return (
+                    <label key={productId} className="flex items-center justify-between gap-2 rounded-xl bg-white p-3 dark:bg-neutral-900">
+                      <span className="min-w-0 flex-1 truncate text-xs font-bold text-neutral-800 dark:text-neutral-200">
+                        {product?.name || productId} <span className="text-neutral-400">({yen(Number(product?.price || 0))})</span>
+                      </span>
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        aria-label={`${product?.name || productId} — ${lang === "ja" ? "イベント価格" : lang === "en" ? "Event price" : "Preço do evento"}`}
+                        value={eventPriceInputs[productId] ?? ""}
+                        placeholder={lang === "ja" ? "通常" : lang === "en" ? "Regular" : "Normal"}
+                        onChange={(event) => setEventPriceInputs((current) => ({ ...current, [productId]: event.target.value }))}
+                        disabled={saving}
+                        className="w-28 rounded-lg border border-neutral-200 bg-white px-2 py-2 text-sm text-neutral-950 dark:border-neutral-700 dark:bg-neutral-950 dark:text-white"
+                      />
+                    </label>
+                  );
+                })}
+              </div>
+            </section>
+          )}
 
           {productIds.length > 0 && (
             <div className="rounded-3xl border border-neutral-200 bg-white p-6 dark:border-neutral-800 dark:bg-neutral-900">
