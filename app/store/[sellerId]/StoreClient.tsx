@@ -1426,6 +1426,10 @@ export default function StoreClient({
 
   const [products, setProducts] =
     useState<Product[]>([]);
+  // Componentes hidden ficam fora da vitrine; só entram em kits publicados.
+  const [privateKitOptions, setPrivateKitOptions] = useState<Product[]>([]);
+  const [loadingKitOptions, setLoadingKitOptions] = useState(false);
+  const [kitOptionsError, setKitOptionsError] = useState("");
 
   const [offers, setOffers] =
     useState<OfferDoc[]>([]);
@@ -1465,6 +1469,48 @@ export default function StoreClient({
     useState<Record<string, BundleSelection>>({});
   const [configuringBundle, setConfiguringBundle] =
     useState<Product | null>(null);
+
+  useEffect(() => {
+    if (!configuringBundle || !sellerId) return;
+    const controller = new AbortController();
+    const kitId = configuringBundle.id;
+    setLoadingKitOptions(true);
+    setKitOptionsError("");
+    void fetch(
+      `/api/public/sellers/${encodeURIComponent(sellerId)}/bundle-options?kitId=${encodeURIComponent(kitId)}`,
+      { signal: controller.signal, cache: "no-store" },
+    ).then(async (response) => {
+      const result: unknown = await response.json();
+      const body: { ok?: boolean; options?: Array<Record<string, unknown>> } =
+        result && typeof result === "object" ? result as { ok?: boolean; options?: Array<Record<string, unknown>> } : {};
+      if (!response.ok || !body.ok || !Array.isArray(body.options)) throw new Error("KIT_OPTIONS_UNAVAILABLE");
+      if (controller.signal.aborted) return;
+      const resolved = body.options.flatMap((raw) => {
+        const id = typeof raw.id === "string" ? raw.id : "";
+        if (!id || !configuringBundle.bundleConfig.optionProductIds.includes(id)) return [];
+        const product = normalizeProduct(id, raw, language, storeProfile.currency);
+        return product && !product.publiclyVisible ? [product] : [];
+      });
+      setPrivateKitOptions((current) => {
+        const next = new Map(current.map((item) => [item.id, item]));
+        resolved.forEach((item) => next.set(item.id, item));
+        return Array.from(next.values());
+      });
+    }).catch((error) => {
+      if (controller.signal.aborted) return;
+      console.warn("[StoreClient] Falha nas opções ocultas do kit:", error);
+      setKitOptionsError(
+        language === "ja" ? "キットの選択肢を読み込めませんでした。再度お試しください。"
+        : language === "en" ? "Could not load kit options. Please try again."
+        : "Não foi possível carregar opções do kit. Tente novamente.",
+      );
+    }).finally(() => {
+      if (!controller.signal.aborted) setLoadingKitOptions(false);
+    });
+    return () => controller.abort();
+  // O kitId identifica a seleção; não refazer fetch quando produto atualizar no catálogo.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [configuringBundle?.id, sellerId, language, storeProfile.currency]);
 
   const [cartOpen, setCartOpen] =
     useState(false);
@@ -2230,7 +2276,7 @@ const visibleProducts =
   const cartItems =
     useMemo<CartItem[]>(() => {
       const productMap = new Map<string, Product>(
-        products.map((product) => [product.id, product]),
+        [...products, ...privateKitOptions].map((product) => [product.id, product]),
       );
 
       return products.reduce<CartItem[]>((items, product) => {
@@ -2298,7 +2344,7 @@ const visibleProducts =
         items.push(cartItem);
         return items;
       }, []);
-    }, [cart, products, bundleSelections]);
+    }, [cart, products, bundleSelections, privateKitOptions]);
 
   const stockConfirmationItems = useMemo(
     () =>
@@ -4714,9 +4760,18 @@ const visibleProducts =
       {configuringBundle && (
         <BundleConfiguratorDialog
           product={configuringBundle}
-          options={products.filter((product) =>
+          options={[...products, ...privateKitOptions].filter((product) =>
             configuringBundle.bundleConfig.optionProductIds.includes(product.id),
           )}
+          loadingOptions={loadingKitOptions}
+          loadingOptionsLabel={
+            language === "ja"
+              ? "キットの選択肢を読み込み中..."
+              : language === "en"
+                ? "Loading kit options..."
+                : "Carregando opções do kit..."
+          }
+          optionsError={kitOptionsError}
           initialSelection={bundleSelections[configuringBundle.id]}
           text={text}
           onClose={() => setConfiguringBundle(null)}
@@ -5716,6 +5771,9 @@ function StoreProductGrid({
 function BundleConfiguratorDialog({
   product,
   options,
+  loadingOptions,
+  loadingOptionsLabel,
+  optionsError,
   initialSelection,
   text,
   onClose,
@@ -5724,6 +5782,9 @@ function BundleConfiguratorDialog({
 }: {
   product: Product;
   options: Product[];
+  loadingOptions: boolean;
+  loadingOptionsLabel: string;
+  optionsError: string;
   initialSelection?: BundleSelection;
   text: (typeof TEXT)[Language];
   onClose: () => void;
@@ -5854,6 +5915,8 @@ function BundleConfiguratorDialog({
             </div>
           </div>
 
+          {loadingOptions && <p role="status" className="mt-4 text-sm font-bold text-violet-500">{loadingOptionsLabel}</p>}
+          {optionsError && <p role="alert" className="mt-4 text-sm font-bold text-red-500">{optionsError}</p>}
           <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-3">
             {options.map((option) => {
               const quantity = selections[option.id] ?? 0;
@@ -5903,7 +5966,7 @@ function BundleConfiguratorDialog({
           ) : <span className="hidden sm:block" />}
           <button
             type="button"
-            disabled={!ready || options.length < 2}
+            disabled={loadingOptions || Boolean(optionsError) || !ready || options.length < 2}
             onClick={() => onConfirm({ kitQuantity, selections })}
             className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-violet-600 px-5 font-black text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-40 sm:w-auto"
           >
