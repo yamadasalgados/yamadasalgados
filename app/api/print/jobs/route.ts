@@ -228,6 +228,7 @@ function receiptCopyPayload(params: {
         : "";
   return {
     showLogo: params.settings.showLogo,
+    typography: params.settings.typography,
     logoUrl: params.identity.logoUrl,
     showHeaderText: params.settings.showHeaderText,
     headerText: params.identity.receipt.headerText,

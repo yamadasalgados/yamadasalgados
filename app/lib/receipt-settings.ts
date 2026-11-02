@@ -10,7 +10,20 @@ export type ReceiptCheckboxStyle =
   | "circle"
   | "line";
 
+export type ReceiptTypography = {
+  base: number;
+  storeTitle: number;
+  copyTitle: number;
+  sectionTitle: number;
+  orderId: number;
+  small: number;
+  badge: number;
+  itemName: number;
+  note: number;
+};
+
 export type ReceiptCopySettings = {
+  typography: ReceiptTypography;
   showLogo: boolean;
   showHeaderText: boolean;
   showFooterText: boolean;
@@ -23,12 +36,18 @@ export type ReceiptCopySettings = {
 };
 
 export type ReceiptSettings = {
-  schemaVersion: 1;
+  schemaVersion: 2;
   production: ReceiptCopySettings;
   customer: ReceiptCopySettings;
 };
 
+export const DEFAULT_PRINT_TYPOGRAPHY: ReceiptTypography = {
+  base: 10.5, storeTitle: 18, copyTitle: 12, sectionTitle: 10,
+  orderId: 22, small: 8, badge: 7, itemName: 11, note: 10.5,
+};
+
 export const DEFAULT_PRODUCTION_RECEIPT_SETTINGS: ReceiptCopySettings = {
+  typography: { ...DEFAULT_PRINT_TYPOGRAPHY },
   showLogo: true,
   showHeaderText: true,
   showFooterText: false,
@@ -41,6 +60,7 @@ export const DEFAULT_PRODUCTION_RECEIPT_SETTINGS: ReceiptCopySettings = {
 };
 
 export const DEFAULT_CUSTOMER_RECEIPT_SETTINGS: ReceiptCopySettings = {
+  typography: { ...DEFAULT_PRINT_TYPOGRAPHY },
   showLogo: true,
   showHeaderText: true,
   showFooterText: true,
@@ -53,7 +73,7 @@ export const DEFAULT_CUSTOMER_RECEIPT_SETTINGS: ReceiptCopySettings = {
 };
 
 export const DEFAULT_RECEIPT_SETTINGS: ReceiptSettings = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   production: DEFAULT_PRODUCTION_RECEIPT_SETTINGS,
   customer: DEFAULT_CUSTOMER_RECEIPT_SETTINGS,
 };
@@ -83,6 +103,18 @@ function normalizeCheckboxStyle(value: unknown): ReceiptCheckboxStyle {
     : "square";
 }
 
+export function normalizeReceiptTypography(value: unknown): ReceiptTypography {
+  const raw = asRecord(value);
+  const result = { ...DEFAULT_PRINT_TYPOGRAPHY };
+  for (const key of Object.keys(result) as Array<keyof ReceiptTypography>) {
+    const num = Number(raw[key]);
+    if (raw[key] !== undefined && raw[key] !== null && Number.isFinite(num)) {
+      result[key] = Math.min(32, Math.max(6, Math.round(num * 2) / 2));
+    }
+  }
+  return result;
+}
+
 export function normalizeReceiptCopySettings(
   value: unknown,
   defaults: ReceiptCopySettings,
@@ -90,6 +122,7 @@ export function normalizeReceiptCopySettings(
   const raw = asRecord(value);
 
   return {
+    typography: normalizeReceiptTypography(raw.typography),
     showLogo: raw.showLogo !== false,
     showHeaderText: raw.showHeaderText !== false,
     showFooterText: typeof raw.showFooterText === "boolean"
@@ -110,7 +143,7 @@ export function normalizeReceiptSettings(value: unknown): ReceiptSettings {
   const raw = asRecord(value);
 
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     production: normalizeReceiptCopySettings(
       raw.production,
       DEFAULT_PRODUCTION_RECEIPT_SETTINGS,
