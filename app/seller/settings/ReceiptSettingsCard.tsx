@@ -6,6 +6,7 @@ import {
   QrCode,
   ReceiptText,
   Save,
+  ImagePlus,
 } from "lucide-react";
 import {
   useCallback,
@@ -19,12 +20,14 @@ import { useSellerSession } from "@/app/_components/SellerSessionContext";
 import FeedbackBanner from "@/app/_components/FeedbackBanner";
 import {
   DEFAULT_RECEIPT_SETTINGS,
+  type ReceiptTypography,
   receiptCheckboxGlyph,
   type ReceiptCheckboxStyle,
   type ReceiptCopySettings,
   type ReceiptQrDestination,
   type ReceiptSettings,
 } from "@/app/lib/receipt-settings";
+import { uploadSellerBrandAsset, validateSellerBrandAsset } from "@/app/lib/seller-branding-upload";
 
 type Language = "pt" | "en" | "ja";
 type CopyKey = "production" | "customer";
@@ -137,6 +140,8 @@ export default function ReceiptSettingsCard({ lang }: { lang: string }) {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [logoFile, setLogoFile] = useState<File | null>(null);
+  const [logoPreview, setLogoPreview] = useState("");
 
   const callApi = useCallback(async (body?: Record<string, unknown>) => {
     const token = await user.getIdToken(true);
@@ -192,14 +197,22 @@ export default function ReceiptSettingsCard({ lang }: { lang: string }) {
     setMessage("");
     setError("");
     try {
-      setSettings(await callApi({ settings }));
+      let nextSettings = settings;
+      if (logoFile) {
+        validateSellerBrandAsset(logoFile, "print-logo");
+        const uploaded = await uploadSellerBrandAsset({ sellerId, kind: "print-logo", file: logoFile });
+        nextSettings = { ...settings, printLogoUrl: uploaded, logoMode: "custom" };
+      }
+      setSettings(await callApi({ settings: nextSettings }));
+      setLogoFile(null);
+      setLogoPreview("");
       setMessage(copy.saved);
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "RECEIPT_SETTINGS_FAILED");
     } finally {
       setSaving(false);
     }
-  }, [callApi, copy.saved, settings]);
+  }, [callApi, copy.saved, settings, logoFile, sellerId]);
 
   const panels = useMemo<Array<{ key: CopyKey; title: string }>>(
     () => [
@@ -229,6 +242,25 @@ export default function ReceiptSettingsCard({ lang }: { lang: string }) {
             {copy.subtitle}
           </p>
         </div>
+      </div>
+
+      <div className="space-y-3 rounded-2xl border border-neutral-200 p-4 dark:border-neutral-800">
+        <h3 className="flex items-center gap-2 text-sm font-black"><ImagePlus className="h-4 w-4" />{languageKey(lang) === "ja" ? "印刷専用ロゴ" : languageKey(lang) === "en" ? "Print-only logo" : "Logo exclusivo para impressão"}</h3>
+        <p className="text-xs text-neutral-500">{languageKey(lang) === "ja" ? "店舗ロゴと別の画像を印刷できます。" : languageKey(lang) === "en" ? "Use a separate black-and-white logo for thermal receipts." : "Envie uma versão preto e branco, separada do logo da vitrine (PNG/JPG/WebP, até 5 MB)."}</p>
+        <select value={settings.logoMode} onChange={(e) => setSettings((v) => ({ ...v, logoMode: e.target.value as "store" | "custom" }))} className="w-full rounded-xl border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-900">
+          <option value="store">{languageKey(lang) === "ja" ? "店舗のロゴ" : languageKey(lang) === "en" ? "Store logo" : "Usar logo da loja"}</option>
+          <option value="custom">{languageKey(lang) === "ja" ? "印刷専用ロゴ" : languageKey(lang) === "en" ? "Custom print logo" : "Usar logo exclusivo de impressão"}</option>
+        </select>
+        {settings.logoMode === "custom" && <>
+          <input type="file" accept="image/png,image/jpeg,image/webp" className="block w-full text-xs" onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (!file) return;
+            try { validateSellerBrandAsset(file, "print-logo"); setLogoFile(file); setLogoPreview(URL.createObjectURL(file)); setError(""); }
+            catch { setError("Imagem inválida ou maior que 5 MB."); }
+          }} />
+          {(logoPreview || settings.printLogoUrl) && <img src={logoPreview || settings.printLogoUrl} alt="Logo de impressão" className="max-h-28 max-w-52 object-contain grayscale contrast-125" />}
+          <button type="button" onClick={() => { setLogoFile(null); setLogoPreview(""); setSettings((v) => ({ ...v, printLogoUrl: "", logoMode: "store" })); }} className="rounded-xl border px-3 py-2 text-xs font-bold">{languageKey(lang) === "ja" ? "店舗ロゴに戻す" : languageKey(lang) === "en" ? "Restore store logo" : "Voltar ao logo da loja"}</button>
+        </>}
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
@@ -285,6 +317,28 @@ function ReceiptCopyPanel({
         <Toggle checked={value.showLogo} onChange={(checked) => onChange({ showLogo: checked })}>{copy.showLogo}</Toggle>
         <Toggle checked={value.showHeaderText} onChange={(checked) => onChange({ showHeaderText: checked })}>{copy.showHeader}</Toggle>
         <Toggle checked={value.showFooterText} onChange={(checked) => onChange({ showFooterText: checked })}>{copy.showFooter}</Toggle>
+      </div>
+
+      <div className="space-y-3 rounded-2xl border border-neutral-200 bg-white p-4 dark:border-neutral-700 dark:bg-neutral-950">
+        <h4 className="text-sm font-black">{copy.preview} · {copy.production === title ? "Fonte · produção" : "Fonte · cliente"}</h4>
+        <div className="grid grid-cols-2 gap-3">
+          {([ ["base", "Texto geral"], ["storeTitle", "Nome da loja"], ["copyTitle", "Título da via"], ["sectionTitle", "Seções"], ["orderId", "Nº pedido"], ["itemName", "Produtos"], ["note", "Observações"], ["small", "Texto pequeno"], ["badge", "Etiqueta"] ] as Array<[keyof ReceiptTypography, string]>).map(([field, label]) => (
+            <label key={field} className="text-xs font-bold">
+              <span className="mb-1 block text-neutral-500">{label} (px)</span>
+              <input type="number" min="6" max="32" step="0.5" value={value.typography[field]}
+                onChange={(e) => onChange({ typography: { ...value.typography, [field]: Number(e.target.value) } })}
+                className="w-full rounded-lg border border-neutral-300 bg-white px-2 py-2 text-sm text-neutral-900" />
+            </label>
+          ))}
+        </div>
+        <div className="rounded-lg border border-dashed bg-white p-3 text-black" style={{ fontSize: value.typography.base }}>
+          <div className="text-center font-black" style={{ fontSize: value.typography.storeTitle }}>Minha loja</div>
+          <div className="text-center font-bold" style={{ fontSize: value.typography.copyTitle }}>{title}</div>
+          <div className="text-center font-black" style={{ fontSize: value.typography.orderId }}>#AB1234</div>
+          <div className="font-black" style={{ fontSize: value.typography.sectionTitle }}>ITENS</div>
+          <div className="font-bold" style={{ fontSize: value.typography.itemName }}>2x Produto de exemplo</div>
+          <div style={{ fontSize: value.typography.note }}>Observações: sem cebola</div>
+        </div>
       </div>
 
       <div className="space-y-3 rounded-2xl border border-neutral-200 bg-white p-4 dark:border-neutral-700 dark:bg-neutral-950">

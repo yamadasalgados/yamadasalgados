@@ -37,6 +37,8 @@ export type ReceiptCopySettings = {
 
 export type ReceiptSettings = {
   schemaVersion: 2;
+  printLogoUrl: string;
+  logoMode: "store" | "custom";
   production: ReceiptCopySettings;
   customer: ReceiptCopySettings;
 };
@@ -74,6 +76,8 @@ export const DEFAULT_CUSTOMER_RECEIPT_SETTINGS: ReceiptCopySettings = {
 
 export const DEFAULT_RECEIPT_SETTINGS: ReceiptSettings = {
   schemaVersion: 2,
+  printLogoUrl: "",
+  logoMode: "store",
   production: DEFAULT_PRODUCTION_RECEIPT_SETTINGS,
   customer: DEFAULT_CUSTOMER_RECEIPT_SETTINGS,
 };
@@ -142,8 +146,14 @@ export function normalizeReceiptCopySettings(
 export function normalizeReceiptSettings(value: unknown): ReceiptSettings {
   const raw = asRecord(value);
 
+  const candidateUrl = cleanString(raw.printLogoUrl, 1600);
+  const printLogoUrl = isValidHttpUrl(candidateUrl) && candidateUrl.startsWith("https://")
+    ? candidateUrl : "";
+
   return {
     schemaVersion: 2,
+    printLogoUrl,
+    logoMode: raw.logoMode === "custom" ? "custom" : "store",
     production: normalizeReceiptCopySettings(
       raw.production,
       DEFAULT_PRODUCTION_RECEIPT_SETTINGS,
@@ -170,4 +180,20 @@ export function receiptCheckboxGlyph(style: ReceiptCheckboxStyle): string {
   if (style === "circle") return "○";
   if (style === "line") return "____";
   return "□";
+}
+
+/** Accept only Firebase Storage URLs for this seller's thermal-logo folder. */
+export function isSellerPrintLogoUrl(value: string, sellerId: string): boolean {
+  if (!value || !sellerId || sellerId.includes("/")) return false;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" || url.hostname !== "firebasestorage.googleapis.com") return false;
+    const match = url.pathname.match(/^\/v0\/b\/[^/]+\/o\/(.+)$/);
+    if (!match) return false;
+    const objectPath = decodeURIComponent(match[1]);
+    return objectPath.startsWith(`sellers/${sellerId}/branding/print-logo/`) &&
+      objectPath.length > `sellers/${sellerId}/branding/print-logo/`.length;
+  } catch {
+    return false;
+  }
 }

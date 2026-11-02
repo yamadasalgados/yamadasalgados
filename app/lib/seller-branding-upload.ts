@@ -8,11 +8,12 @@ import {
   uploadBytes,
 } from "firebase/storage";
 
-export type SellerBrandAssetKind = "logo" | "banner";
+export type SellerBrandAssetKind = "logo" | "banner" | "print-logo";
 
 const MAX_BYTES: Record<SellerBrandAssetKind, number> = {
   logo: 5 * 1024 * 1024,
   banner: 10 * 1024 * 1024,
+  "print-logo": 5 * 1024 * 1024,
 };
 
 const ALLOWED_IMAGE_TYPES = new Set([
@@ -34,6 +35,9 @@ export function validateSellerBrandAsset(
   file: File,
   kind: SellerBrandAssetKind,
 ): void {
+  if (kind === "print-logo" && !["image/png", "image/jpeg", "image/webp"].includes(String(file.type || "").toLowerCase())) {
+    throw new Error("BRAND_ASSET_MUST_BE_IMAGE");
+  }
   if (!ALLOWED_IMAGE_TYPES.has(String(file.type || "").toLowerCase())) {
     throw new Error("BRAND_ASSET_MUST_BE_IMAGE");
   }

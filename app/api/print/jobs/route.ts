@@ -4,7 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAdminDb } from "@/app/lib/firebaseAdmin";
 import { qrByteLength } from "@/app/lib/qr-code";
 import { DEFAULT_PUBLIC_STORE_NAME, PRINT_SERVICE_NAME } from "@/app/lib/platform-brand";
-import { normalizeReceiptSettings, type ReceiptCopySettings } from "@/app/lib/receipt-settings";
+import { isSellerPrintLogoUrl, normalizeReceiptSettings, type ReceiptCopySettings } from "@/app/lib/receipt-settings";
 import { normalizeSellerIdentity } from "@/app/lib/seller-identity";
 import {
   PrintApiError,
@@ -205,6 +205,7 @@ function qrDestinationUrl(params: {
 function receiptCopyPayload(params: {
   settings: ReceiptCopySettings;
   identity: ReturnType<typeof normalizeSellerIdentity>;
+  logoUrlOverride?: string;
   origin: string;
   sellerId: string;
   source: "store" | "event";
@@ -229,7 +230,7 @@ function receiptCopyPayload(params: {
   return {
     showLogo: params.settings.showLogo,
     typography: params.settings.typography,
-    logoUrl: params.identity.logoUrl,
+    logoUrl: params.logoUrlOverride ?? params.identity.logoUrl,
     showHeaderText: params.settings.showHeaderText,
     headerText: params.identity.receipt.headerText,
     showFooterText: params.settings.showFooterText,
@@ -264,7 +265,18 @@ async function buildClaimPayload(params: {
   ]);
   const sellerData = sellerSnapshot.data() ?? {};
   const identity = normalizeSellerIdentity(sellerData);
-  const receiptSettings = normalizeReceiptSettings(receiptSnapshot.data());
+  const rawReceiptSettings = receiptSnapshot.data() ?? {};
+  const receiptSettings = normalizeReceiptSettings(rawReceiptSettings);
+  // Configuração de logotipo por vendedor. A ausência de logoMode preserva o
+  // comportamento legado da versão publicada. Um modo explícito substitui-o.
+  const selectedThermalLogoUrl: string | undefined =
+    rawReceiptSettings.logoMode === "store"
+      ? identity.logoUrl
+      : rawReceiptSettings.logoMode === "custom"
+        ? (isSellerPrintLogoUrl(receiptSettings.printLogoUrl, sellerId)
+          ? receiptSettings.printLogoUrl
+          : identity.logoUrl)
+        : undefined;
   const storeName = identity.storeName || cleanString(sellerData.displayName, 160) || DEFAULT_PUBLIC_STORE_NAME;
   const copies = printCopies(job.copies);
 
@@ -288,8 +300,8 @@ async function buildClaimPayload(params: {
         message: cleanString(testPayload.message, 500) || PRINT_SERVICE_NAME,
       },
       receipt: {
-        production: receiptCopyPayload({ ...common, settings: receiptSettings.production }),
-        customer: receiptCopyPayload({ ...common, settings: receiptSettings.customer }),
+        production: receiptCopyPayload({ ...common, logoUrlOverride: selectedThermalLogoUrl, settings: receiptSettings.production }),
+        customer: receiptCopyPayload({ ...common, logoUrlOverride: selectedThermalLogoUrl, settings: receiptSettings.customer }),
       },
     };
   }
@@ -367,7 +379,7 @@ async function buildClaimPayload(params: {
         items,
       },
       receipt: {
-        production: receiptCopyPayload({ ...common, settings: productionSettings }),
+        production: receiptCopyPayload({ ...common, logoUrlOverride: selectedThermalLogoUrl, settings: productionSettings }),
       },
     };
   }
@@ -415,8 +427,8 @@ async function buildClaimPayload(params: {
     copies,
     order: normalizedOrder,
     receipt: {
-      production: receiptCopyPayload({ ...common, settings: receiptSettings.production }),
-      customer: receiptCopyPayload({ ...common, settings: receiptSettings.customer }),
+      production: receiptCopyPayload({ ...common, logoUrlOverride: selectedThermalLogoUrl, settings: receiptSettings.production }),
+      customer: receiptCopyPayload({ ...common, logoUrlOverride: selectedThermalLogoUrl, settings: receiptSettings.customer }),
     },
   };
 }

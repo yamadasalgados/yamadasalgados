@@ -11,6 +11,7 @@ import {
 } from "@/app/lib/print-server";
 import {
   isValidHttpUrl,
+  isSellerPrintLogoUrl,
   normalizeReceiptSettings,
   type ReceiptSettings,
 } from "@/app/lib/receipt-settings";
@@ -116,7 +117,12 @@ export async function POST(request: NextRequest) {
     const body = asRecord(await request.json());
     const sellerId = sellerIdFromBody(body);
     const actor = await authorizeSeller(request, sellerId);
-    const settings = normalizeReceiptSettings(body.settings);
+    const rawSettings = asRecord(body.settings);
+    const submittedPrintLogoUrl = cleanString(rawSettings.printLogoUrl, 1600);
+    if (submittedPrintLogoUrl && !isSellerPrintLogoUrl(submittedPrintLogoUrl, sellerId)) {
+      throw new PrintApiError("RECEIPT_PRINT_LOGO_INVALID", "O logotipo de impressão deve pertencer à loja.");
+    }
+    const settings = normalizeReceiptSettings(rawSettings);
     validate(settings);
 
     const now = admin.firestore.Timestamp.now();
